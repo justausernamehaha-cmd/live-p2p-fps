@@ -61,8 +61,12 @@ const R = await p.evaluate(async () => {
     moved: Math.abs(g.player.yaw) > 0.01
   };
 
-  // once settled, ordinary aiming works again
+  // once settled, ordinary aiming works again. Push the last button edge well
+  // into the past first: this test clicks a lot, and movement is deliberately
+  // ignored around clicks.
   g.input.lockedAt = performance.now() - 400;
+  g.input.lastButtonAt = performance.now() - 5000;
+  g.input.lastMoveAt = performance.now() - 200;
   g.player.yaw = 0;
   move(-58, -7);
   await sleep(100);
@@ -70,7 +74,9 @@ const R = await p.evaluate(async () => {
 
   // and a genuinely absurd value is still refused
   g.player.yaw = 0;
-  move(-1200, 0);
+  g.input.lastButtonAt = performance.now() - 5000;
+  g.input.lastMoveAt = performance.now() - 200;
+  move(-1500, 0);
   await sleep(100);
   out.absurdStillDropped = Math.abs(g.player.yaw) < 0.01;
 

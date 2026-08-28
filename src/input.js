@@ -31,7 +31,7 @@ const CLICK_WARP_MS = 50;    // the browser warps the locked cursor on button ed
 const MAX_PX_PER_MS = 40;    // backstop only; a very fast human flick can reach ~30
 const WARP_MIN_PX = 40;      // below this it is indistinguishable from a real nudge,
                              // and harmless anyway - 40px is about five degrees
-const SPIKE_PX = 1200;       // last-resort cap for a single absurd event
+const SPIKE_PX = 1000;       // last-resort cap; 1000px in one event is 60,000 px/s
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
