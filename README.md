@@ -90,12 +90,19 @@ changes size, because accuracy depends on whether you are moving and not on
 anything the reticle animates. The shotgun keeps its pellet pattern regardless,
 because that is what a shotgun is. Headshots do double damage.
 
+A kill pays out a magazine of ammunition for the gun in your hands — 30 rifle
+rounds, 6 shells, 5 marksman rounds — up to what that gun can carry. Killing on
+a full reserve gives nothing.
+
 ## A note on mouse input
 
-Pressing a mouse button physically disturbs the mouse — pressing left while
-holding right rotates the hand leftwards — and pointer acceleration turns a few
-millimetres into tens of reported pixels, which lands as a view jolt. Two things
-guard against it: the lock is requested with `unadjustedMovement`, which turns
+The right mouse button is not read at all — no binding, no pointer-lock request,
+no state. Only the browser's context menu is suppressed, so right-clicking does
+nothing whatsoever.
+
+Pressing a mouse button physically disturbs the mouse, and pointer acceleration
+turns a few millimetres into tens of reported pixels, which lands as a view jolt.
+Two things guard against it: the lock is requested with `unadjustedMovement`, which turns
 OS acceleration off where the browser supports it (F3 shows `raw=true` when it
 was granted), and movement is capped per event — hard around a button press,
 loosely otherwise. Sustained turning still reaches ~380 degrees a second.

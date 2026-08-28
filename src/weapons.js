@@ -92,6 +92,15 @@ export class Loadout {
     return w;
   }
 
+  /** A kill pays out a magazine's worth of ammunition for the gun in hand, up to
+   *  what that gun can carry. Returns how many rounds were actually gained. */
+  awardOnKill() {
+    const w = this.weapon, a = this.ammo;
+    const before = a.reserve;
+    a.reserve = Math.min(w.reserve, a.reserve + w.mag);
+    return a.reserve - before;
+  }
+
   refill() {
     this.state = WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve, reloadEnd: 0 }));
     this.nextShot = 0;

@@ -52,6 +52,7 @@ class Game {
     window.game = this;          // handy in the console; also what the test harness pokes at
     window.__spreadFor = spreadFor;
     window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
+    window.__selfId = getSelfId;
     requestAnimationFrame(t => this._frame(t));
   }
 
@@ -371,6 +372,8 @@ class Game {
       this.player.kills++;
       this.audio.kill();
       this.hud.hitmarker(true);
+      const gained = this.loadout.awardOnKill();
+      if (gained) this.hud.feed(`+${gained} ${escapeHtml(this.loadout.weapon.name.toLowerCase())} ammo`, 'chat');
     } else if (this.remotes.has(m.by)) {
       this.remotes.get(m.by).kills++;
     }

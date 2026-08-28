@@ -163,6 +163,9 @@ export class Input {
   _bindMouse() {
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
+      // The right button is not a game input. Nothing reads it, so nothing here
+      // reacts to it: no pointer lock request, no press window, no state at all.
+      if (e.button === 2) return;
       this.mouseSeen = true;
 
       // Try to capture the mouse, but never let that get in the way of the click
@@ -194,6 +197,7 @@ export class Input {
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
+      if (e.button === 2) return;
       this.lastButtonAt = now();
       if (e.button === 0) this.held.delete('fire');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
@@ -237,6 +241,7 @@ export class Input {
       this.justPressed.add(e.deltaY > 0 ? 'weaponnext' : 'weaponprev');
     }, { passive: true });
 
+    // not input handling: this only stops the browser opening its menu over the game
     addEventListener('contextmenu', e => e.preventDefault());
 
     document.addEventListener('pointerlockchange', () => {
