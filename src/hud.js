@@ -95,8 +95,6 @@ export class Hud {
 
   lockHint(on) { this._set('lockhint', !!on, v => this.el.lockhint.classList.toggle('hidden', !v)); }
 
-  ads(on) { this._set('ads', !!on, v => this.el.crosshair.classList.toggle('ads', v)); }
-
   /** Local-only readout: nobody else can see that you are shielded. */
   protection(text, locked) {
     this._set('prot', text, v => {

@@ -20,7 +20,7 @@ await page.goto(URL);
 await page.waitForFunction(() => window.__paStarted);
 await page.fill('#roominput', 'k-' + Date.now());
 await page.fill('#nameinput', 'k');
-await page.click('#playbtn');
+await page.evaluate(() => document.getElementById('playbtn').click());
 await page.waitForTimeout(1200);
 
 const R = await page.evaluate(async () => {

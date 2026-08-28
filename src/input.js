@@ -184,14 +184,12 @@ export class Input {
       }
       this.lastButtonAt = now();
       if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
-      if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
       this.lastButtonAt = now();
       if (e.button === 0) this.held.delete('fire');
-      if (e.button === 2) this.held.delete('ads');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
 

@@ -161,22 +161,20 @@ export class ViewModel {
     return this.muzzleTip.getWorldPosition(target);
   }
 
-  update(dt, player, reloading, adsT = 0) {
+  update(dt, player, reloading) {
     this.kick *= Math.exp(-13 * dt);
     const targetSwayX = -player.vel.x * 0.004;
     const targetSwayY = player.vel.y * 0.003;
     this.sway.x += (targetSwayX - this.sway.x) * Math.min(1, dt * 8);
     this.sway.y += (targetSwayY - this.sway.y) * Math.min(1, dt * 8);
 
-    // aiming holds the gun perfectly still: sway, bob and kick all fade out
-    const steady = 1 - adsT;
     this.group.position.set(
-      0.25 + this.sway.x * steady,
-      -0.2 + (player.bob * 0.6 + this.sway.y) * steady - this.kick * 0.12 * steady,
-      -0.78 + this.kick * steady
+      0.25 + this.sway.x,
+      -0.2 + player.bob * 0.6 + this.sway.y - this.kick * 0.12,
+      -0.78 + this.kick
     );
     this.reloadT += ((reloading ? 1 : 0) - this.reloadT) * Math.min(1, dt * 7);
-    this.group.rotation.x = -this.kick * 1.4 * steady - this.reloadT * 0.55;
+    this.group.rotation.x = -this.kick * 1.4 - this.reloadT * 0.55;
     this.group.rotation.z = this.reloadT * 0.3;
     this.group.visible = player.alive;
   }

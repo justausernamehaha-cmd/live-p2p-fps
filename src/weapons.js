@@ -2,19 +2,15 @@ export const HEADSHOT_MULT = 2;
 
 // `spread` is the gun's own pattern and is always present — only the shotgun has
 // one, because a shot pattern is what a shotgun is. `hipSpread` is the extra cone
-// that hipfire adds, scaled by how accurate the stance is:
+// that firing adds, scaled by how accurate the stance is:
 //
-//   aiming (right click)  100%  -> no added cone at all, moving or not
-//   standing hipfire       95%  -> 5% of hipSpread
-//   moving hipfire         90%  -> 10% of hipSpread
-export const ACCURACY = { ads: 1, standing: 0.95, moving: 0.90 };
-export const ADS_ZOOM = 1.25;
-export const ADS_TIME = 0.4;      // seconds to raise or lower the sights
+//   standing   95%  -> 5% of hipSpread
+//   moving     90%  -> 10% of hipSpread
+export const ACCURACY = { standing: 0.95, moving: 0.90 };
 
 /** Cone half-angle in radians for the current stance. */
-export function spreadFor(weapon, moving, adsT) {
-  const hipAcc = moving ? ACCURACY.moving : ACCURACY.standing;
-  const acc = hipAcc + (ACCURACY.ads - hipAcc) * adsT;
+export function spreadFor(weapon, moving) {
+  const acc = moving ? ACCURACY.moving : ACCURACY.standing;
   return weapon.spread + weapon.hipSpread * (1 - acc);
 }
 
@@ -28,7 +24,7 @@ export const WEAPONS = [
   {
     id: 1, name: 'Shotgun', auto: false,
     damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42,
-    spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // pattern stays even aimed
+    spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // the one gun with a pattern
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2
   },
   {

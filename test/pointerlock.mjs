@@ -17,7 +17,7 @@ const p = await (await b.newContext({ viewport:{width:1000,height:640} })).newPa
 const errs = []; p.on('pageerror', e => errs.push(e.message));
 await p.goto(process.env.GAME_URL || 'http://127.0.0.1:8080/'); await p.waitForFunction(() => window.__paStarted);
 await p.fill('#roominput','rl-'+Date.now()); await p.fill('#nameinput','rl');
-await p.click('#playbtn'); await p.waitForTimeout(1200);
+await p.evaluate(() => document.getElementById('playbtn').click()); await p.waitForTimeout(1200);
 
 const R = await p.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f=>setTimeout(f,ms));

@@ -16,7 +16,7 @@ const errs = [];
 page.on('pageerror', e => errs.push(e.message));
 await page.goto(URL); await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'move'); await page.fill('#roominput', 'solo-' + Date.now());
-await page.click('#playbtn');
+await page.evaluate(() => document.getElementById('playbtn').click());
 await page.waitForTimeout(2000);
 
 const YAWS = [0, 30, 45, 90, 135, 180, 225, 270, 315];
