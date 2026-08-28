@@ -135,7 +135,12 @@ class Game {
       document.getElementById('stick').classList.remove('on');
     };
     this.input.onAction = a => {
-      if (a === 'pause') { if (this.running && !this.hud.chatOpen) this._pause(); }
+      // Losing the pointer lock normally means Esc, which should show the menu -
+      // but opening the settings panel or the chat box releases it deliberately,
+      // and popping the menu over them is not what anyone asked for.
+      if (a === 'pause') {
+        if (this.running && !this.hud.chatOpen && !this.editing) this._pause();
+      }
       else if (a === 'chat') this._openChat();
       else if (a === 'score') this.scoreVisible = true;
       else if (a === 'scoreoff') this.scoreVisible = false;
@@ -145,6 +150,9 @@ class Game {
     };
 
     this.layout = new Layout();
+    this.layout.isToggle = a => this.input.isToggle(a);
+    this.layout.onMode = (action, toggle) => this.input.setToggleMode(action, toggle);
+    this.layout.showModes();
     document.getElementById('donelayout').addEventListener('click', () => this._endEdit());
 
     // sensitivity lives in the same panel: LAYOUT opens it on a phone, backtick

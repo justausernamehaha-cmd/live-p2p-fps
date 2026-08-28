@@ -108,7 +108,7 @@ export class ViewModel {
   constructor(parent) {
     this.group = new THREE.Group();
     this.group.position.set(0.25, -0.2, -0.78);
-    this.group.scale.setScalar(0.8);
+    this.group.scale.setScalar(0.96);   // 120% of the size it was
     parent.add(this.group);
     this.kick = 0;
     this.reloadT = 0;

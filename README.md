@@ -45,6 +45,12 @@ same one. All three are public infrastructure that only carries the handshake.
 | Settings (sensitivity) | `` ` `` | `LAYOUT`, above the player count |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
 
+Crouch and aim can each be set to **hold** or **toggle** in that settings panel.
+On a keyboard both rows are simply there; on a touch layout the row appears for
+whichever button you select, so you can set it while you are moving the button
+around. The choice is remembered per device and applies to every input for that
+action — the touch button, the key and the mouse alike.
+
 On a phone, **turn the device sideways**. Portrait works, and the camera widens
 its field of view to compensate, but landscape is far better to play in.
 
@@ -152,6 +158,7 @@ node test/stuckkeys.mjs
 node test/pointerlock.mjs
 node test/mouselook.mjs
 node test/mousebuttons.mjs
+node test/holdtoggle.mjs
 ```
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the

@@ -89,6 +89,11 @@ export class Input {
     this.lastButtonAt = -1e9;   // last mouse button edge
     this._prevButtons = 0;
     this._mouseHeld = new Set();
+    this.toggled = new Set();
+    this.toggleMode = new Set();
+    try {
+      for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
+    } catch { /* nothing saved */ }
     this.rawInput = null;       // did the browser grant unaccelerated movement?
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -112,29 +117,30 @@ export class Input {
   // ---------------------------------------------------------------- keyboard
   _bindKeyboard() {
     addEventListener('keydown', e => {
-      if (e.repeat) return;
       if (this.textMode || isTyping(e)) return;
 
-      // With the mouse captured the page is the application, so swallow every
-      // key - not only the ones the game uses. This has to happen before the
-      // early return below, or Ctrl+S, quick-find, F5 and anything else the game
-      // does not bind would still reach the browser mid-fight. Escape is left
-      // alone, because it is how you get the mouse back.
+      // Suppression comes first, before both early returns below. With the mouse
+      // captured the page is the application, so swallow every key - not only
+      // the ones the game uses - or Ctrl+S, quick-find and F5 still reach the
+      // browser mid-fight. Escape is left alone, because it is how you get the
+      // mouse back.
+      //
+      // Crucially this also runs for auto-repeat. Holding Tab repeats, and a
+      // repeat that reaches the browser walks the focus ring through the page,
+      // which is what interrupted the game when the scoreboard was held open.
       if (this.pointerLocked && e.code !== 'Escape') e.preventDefault();
+      else if (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+
+      if (e.repeat) return;            // suppressed above, but only acted on once
 
       const a = KEY_ACTIONS[e.code];
       if (a === undefined && !(e.code in LOOK_KEYS)) return;
-      if (!this.pointerLocked &&
-          (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow'))) e.preventDefault();
 
       if (!this.keyboardSeen) {
         this.keyboardSeen = true;
         this.onKeyboardDetected?.();
       }
-      if (a) {
-        this.held.add(a);
-        this.justPressed.add(a);
-      }
+      if (a) this.press(a);
       if (e.code in LOOK_KEYS) this.held.add('look' + e.code);
       this._recalcKeys();
     });
@@ -147,13 +153,18 @@ export class Input {
     // field in between, which is one click into the chat box away.
     addEventListener('keyup', e => {
       const a = KEY_ACTIONS[e.code];
-      if (a) this.held.delete(a);
+      if (a) this.release(a);
       if (e.code in LOOK_KEYS) this.held.delete('look' + e.code);
       this._recalcKeys();
     });
 
     // any way of leaving the page must not leave keys stuck down either
-    const release = () => { this.held.clear(); this._mouseHeld.clear(); this._recalcKeys(); };
+    const release = () => {
+      this.held.clear();
+      this._mouseHeld.clear();
+      for (const a of this.toggled) this.held.add(a);   // a toggle is a state, not a key
+      this._recalcKeys();
+    };
     addEventListener('blur', release);
     addEventListener('visibilitychange', () => { if (document.hidden) release(); });
     this.releaseAll = release;
@@ -390,6 +401,43 @@ export class Input {
     this.canvas.addEventListener('pointercancel', end);
   }
 
+  /** A press. In hold mode the action stays on while the input is down; in
+   *  toggle mode a press flips it and the release is ignored. */
+  press(action) {
+    if (this.toggleMode.has(action)) {
+      if (this.toggled.has(action)) {
+        this.toggled.delete(action);
+        this.held.delete(action);
+      } else {
+        this.toggled.add(action);
+        this.held.add(action);
+        this.justPressed.add(action);
+      }
+      return;
+    }
+    this.held.add(action);
+    this.justPressed.add(action);
+  }
+
+  release(action) {
+    if (this.toggleMode.has(action)) return;   // a toggle only responds to presses
+    this.held.delete(action);
+  }
+
+  /** Switching an action to hold mode drops whatever the toggle was holding. */
+  setToggleMode(action, on) {
+    if (on) this.toggleMode.add(action);
+    else {
+      this.toggleMode.delete(action);
+      if (this.toggled.delete(action)) this.held.delete(action);
+    }
+    try {
+      localStorage.setItem('pa.modes', JSON.stringify([...this.toggleMode]));
+    } catch { /* private mode */ }
+  }
+
+  isToggle(action) { return this.toggleMode.has(action); }
+
   /** Mirror the mouse's button mask into the action set. Only actions the mouse
    *  itself put there are taken away again, so a touch player holding FIRE is
    *  never disarmed by a stray mouse event on a hybrid device. */
@@ -399,11 +447,10 @@ export class Input {
       const had = this._mouseHeld.has(action);
       if (down && !had) {
         this._mouseHeld.add(action);
-        this.held.add(action);
-        this.justPressed.add(action);
+        this.press(action);
       } else if (!down && had) {
         this._mouseHeld.delete(action);
-        this.held.delete(action);
+        this.release(action);
       }
     }
   }
@@ -442,8 +489,7 @@ export class Input {
         e.stopPropagation();
         el.classList.add('held');
         if (UI_ONLY.has(name)) { this.onAction?.(name); return; }
-        this.held.add(name);
-        this.justPressed.add(name);
+        this.press(name);
         if (aimable && e.pointerType === 'touch') this.lookStart(e);
       });
 
@@ -457,7 +503,7 @@ export class Input {
         e.stopPropagation();
         el.classList.remove('held');
         if (name === 'score') this.onAction?.('scoreoff');
-        if (!UI_ONLY.has(name)) this.held.delete(name);
+        if (!UI_ONLY.has(name)) this.release(name);
         this.lookEnd(e);
       };
       el.addEventListener('pointerup', up);

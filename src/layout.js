@@ -31,6 +31,15 @@ export class Layout {
 
     document.getElementById('resetlayout').addEventListener('click', () => this.reset());
 
+    // hold-or-toggle, for the two actions where it makes sense to hold
+    this.modeButtons = [...document.querySelectorAll('.modes button')];
+    for (const el of this.modeButtons) {
+      el.addEventListener('click', () => {
+        this.onMode?.(el.dataset.action, el.dataset.mode === 'toggle');
+        this.showModes();
+      });
+    }
+
     for (const el of this.buttons) this._bindDrag(el);
     this.apply();
     addEventListener('resize', () => this.apply());
@@ -107,9 +116,22 @@ export class Layout {
     el.addEventListener('pointercancel', end, true);
   }
 
+  /** Paint the mode rows from whatever the input layer currently thinks. */
+  showModes() {
+    for (const el of this.modeButtons) {
+      const on = this.isToggle?.(el.dataset.action) ?? false;
+      el.classList.toggle('on', (el.dataset.mode === 'toggle') === on);
+    }
+  }
+
   select(name) {
     this.selected = name;
     document.body.classList.add('has-selection');
+    // the row for this button, if it is one of the two that can be toggled
+    for (const row of document.querySelectorAll('.moderow')) {
+      row.classList.toggle('active', row.dataset.action === name);
+    }
+    this.showModes();
     for (const el of this.buttons) el.classList.toggle('selected', el.dataset.btn === name);
     const d = this._entry(name);
     this.slider.disabled = false;
@@ -120,12 +142,14 @@ export class Layout {
 
   enter() {
     this.editing = true;
+    this.showModes();
     document.body.classList.add('editing');
     this.panel.classList.remove('hidden');
     this.slider.disabled = true;
     this.sizeval.textContent = '--';
     this.selected = null;
     document.body.classList.remove('has-selection');
+    for (const row of document.querySelectorAll('.moderow')) row.classList.remove('active');
     for (const el of this.buttons) el.classList.remove('selected');
   }
 

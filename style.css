@@ -201,6 +201,16 @@ body.editing #fsbtn{display:none}
 /* the size control is meaningless until there is something selected to resize */
 #sizerow{display:none}
 body.has-selection #sizerow{display:flex}
+
+/* Hold-or-toggle applies to an action, so on a keyboard both rows are simply
+   there; on a touch layout the row appears for whichever button you select. */
+.moderow{display:none;align-items:center;gap:10px}
+body:not(.touch-ui) .moderow{display:flex}
+body.touch-ui.has-selection .moderow.active{display:flex}
+.modes{display:flex;gap:6px;margin-left:auto}
+.modes button{padding:5px 10px;border-radius:6px;border:1px solid var(--line);
+  background:transparent;color:var(--dim);font-size:10px;letter-spacing:.1em;font-weight:700}
+.modes button.on{background:var(--accent);border-color:var(--accent);color:#14100c}
 .esize{flex-wrap:wrap}
 .esize input[type=range]{flex:1 1 100%;order:3}
 #editpanel.hidden{display:none}
