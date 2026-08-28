@@ -27,11 +27,23 @@ const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
 // 10. Speed separates them cleanly where magnitude cannot: the warp is small
 // when you click near the middle and large when you click at the edge, so any
 // fixed pixel threshold either lets it through or eats real aiming.
-const CLICK_WARP_MS = 50;    // the browser warps the locked cursor on button edges
-const MAX_PX_PER_MS = 40;    // backstop only; a very fast human flick can reach ~30
-const WARP_MIN_PX = 40;      // below this it is indistinguishable from a real nudge,
-                             // and harmless anyway - 40px is about five degrees
-const SPIKE_PX = 1000;       // last-resort cap; 1000px in one event is 60,000 px/s
+// A hard ceiling on how far one event may turn the view. This replaces every
+// heuristic that tried to work out whether a large movement was "real": those
+// all needed to guess the cause, and guessing was wrong three times running.
+//
+// It cannot be wrong. Mouse movement arrives at 60-125Hz, so 50px per event
+// still allows turning at ~380 degrees a second at default sensitivity, and the
+// ceiling scales with the sensitivity setting because the clamp is applied to
+// pixels before that multiplier. But a single spike of any origin - a
+// pointer-lock settle, an OS acceleration curve amplifying the nudge your hand
+// gives the mouse as you click, a synthetic warp - can no longer move the view
+// more than about six degrees.
+const MAX_PX_PER_EVENT = 50;
+// Both the reported numbers and the captured stream put the spike on the click
+// itself. Three frames of blackout on a button edge removes it outright and
+// costs nothing: you are pressing a button, not aiming, and holding the trigger
+// only touches the edges, never the hold.
+const CLICK_BLACKOUT_MS = 50;
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -65,8 +77,10 @@ export class Input {
     this.lockedAt = 0;         // when the pointer lock last engaged
     this.lockChanges = 0;      // how often it has engaged, shown by F3
     this.dropped = 0;          // movement events discarded as spikes
+    this.clamped = 0;          // movement events cut down to the per-event ceiling
+    this.lastClamp = [0, 0];
     this.lastMoveAt = 0;
-    this.lastButtonAt = -1e9;   // last mouse button edge, for the click-warp window
+    this.lastButtonAt = -1e9;   // last mouse button edge
     this.lastDrop = [0, 0, 0];
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -191,27 +205,18 @@ export class Input {
         // flick, and there can be more than one of them, so the whole settling
         // window is ignored rather than a single event.
         if (now() - this.lockedAt < SETTLE_MS) { this.dropped++; return; }
+        if (now() - this.lastButtonAt < CLICK_BLACKOUT_MS) { this.dropped++; return; }
 
-        // The warp fires on mouse button edges: the browser recentres the locked
-        // cursor and reports the trip as movement, sized by how far from the
-        // middle of the window you happened to be. That is why it is small when
-        // you click near the centre and huge at the edge, and why no pixel
-        // threshold can catch it. Ignoring the few milliseconds either side of a
-        // click does, and costs nothing: nobody aims during the press itself.
-        if (now() - this.lastButtonAt < CLICK_WARP_MS) { this.dropped++; return; }
-
-        const t = now();
-        const gap = Math.max(0.5, t - (this.lastMoveAt || t));
-        this.lastMoveAt = t;
-        const dist = Math.hypot(e.movementX, e.movementY);
-        if ((dist > WARP_MIN_PX && dist / gap > MAX_PX_PER_MS) || dist > SPIKE_PX) {
-          this.dropped++;
-          this.lastDrop = [e.movementX, e.movementY, +(dist / gap).toFixed(0)];
-          return;
+        // Clamped, not discarded: real movement in the same event is kept, it
+        // just cannot arrive all at once.
+        const mx = clamp(e.movementX, -MAX_PX_PER_EVENT, MAX_PX_PER_EVENT);
+        const my = clamp(e.movementY, -MAX_PX_PER_EVENT, MAX_PX_PER_EVENT);
+        if (mx !== e.movementX || my !== e.movementY) {
+          this.clamped++;
+          this.lastClamp = [e.movementX, e.movementY];
         }
-
-        this.lookDX += e.movementX * MOUSE_SENS * this.sensitivity;
-        this.lookDY += e.movementY * MOUSE_SENS * this.sensitivity;
+        this.lookDX += mx * MOUSE_SENS * this.sensitivity;
+        this.lookDY += my * MOUSE_SENS * this.sensitivity;
       } else if (this._mouseDrag && this._mouseDrag.id === e.pointerId) {
         this.lookDX += (e.clientX - this._mouseDrag.x) * MOUSE_SENS * 1.6 * this.sensitivity;
         this.lookDY += (e.clientY - this._mouseDrag.y) * MOUSE_SENS * 1.6 * this.sensitivity;

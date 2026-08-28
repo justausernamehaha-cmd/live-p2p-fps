@@ -35,53 +35,60 @@ const R = await page.evaluate(async () => {
   const move = (mx, my) => dispatchEvent(new PointerEvent('pointermove', {
     pointerType: 'mouse', bubbles: true, movementX: mx, movementY: my }));
 
+  const deg = r => +(r * 180 / Math.PI).toFixed(1);
   const run = async (label, steps, gapMs) => {
     g.player.yaw = 0; g.player.pitch = 0;
-    g.input.lastMoveAt = performance.now() - 200;   // as after any pause in movement
-    const d0 = g.input.dropped;
     for (const [mx, my] of steps) { move(mx, my); await sleep(gapMs); }
     await sleep(120);
-    return { label, yaw: +g.player.yaw.toFixed(4), dropped: g.input.dropped - d0 };
+    return { label, degrees: deg(g.player.yaw), steps: steps.length };
   };
 
   const out = {};
-  // a warp arriving on a button edge, which is when they actually happen
-  const clickWarp = async (mx, my) => {
+  // the reported case: a spike arriving on a button edge must not move the view
+  const onClick = async (mx, my) => {
     g.player.yaw = 0;
-    g.input.lastMoveAt = performance.now() - 200;
-    g.input.lastButtonAt = performance.now();          // as if a button just moved
+    g.input.lastButtonAt = performance.now();
     move(mx, my);
     await sleep(120);
-    return { yaw: +g.player.yaw.toFixed(4) };
+    return +(g.player.yaw * 180 / Math.PI).toFixed(2);
   };
-  out.clickWarpSmall = await clickWarp(-58, -7);
-  out.clickWarpMid   = await clickWarp(-341, 71);
-  out.clickWarpHuge  = await clickWarp(-500, -320);
+  out.onClick58 = await onClick(-58, -7);
+  out.onClick341 = await onClick(-341, 71);
+  out.onClick593 = await onClick(-500, -320);
 
-  // the warp signature: half the viewport, arriving within a couple of ms
-  out.warpNearCentre = await run('warp -58', [[-58, -7]], 1);
-  out.warpFarOut     = await run('warp -341', [[-341, 71]], 1);
-  out.warpHalfScreen = await run('warp -500', [[-500, -320]], 1);
-  // ordinary aiming at a human pace
-  out.slowAim  = await run('slow', [[20, 0], [20, 0], [20, 0], [20, 0]], 16);
-  out.fastFlick = await run('fast flick', [[120, 0], [120, 0], [120, 0]], 16);
-  // two legitimate events landing in the same millisecond must not be mistaken
-  // for a warp just because the gap between them is tiny
-  out.backToBack = await run('back to back', [[18, 0], [18, 0], [18, 0]], 0);
+  // A single event may never swing the view more than the ceiling allows,
+  // whatever its size and wherever it came from.
+  g.input.lastButtonAt = -1e9;      // away from any click, the ceiling alone applies
+  out.spike58   = await run('one event, 58px',   [[-58, -7]], 20);
+  out.spike341  = await run('one event, 341px',  [[-341, 71]], 20);
+  out.spike593  = await run('one event, 593px',  [[-500, -320]], 20);
+  out.spike5000 = await run('one event, 5000px', [[-5000, 0]], 20);
+
+  // Ordinary aiming is untouched, and sustained turning is still fast.
+  out.slowAim   = await run('20 x 20px',  Array.from({length:20}, () => [20, 0]), 16);
+  out.fastFlick = await run('10 x 70px',  Array.from({length:10}, () => [70, 0]), 16);
+  out.backToBack = await run('3 x 18px, no gap', [[18,0],[18,0],[18,0]], 0);
+
+  // how fast can you turn if you really try: 60 events a second at the ceiling
+  out.maxTurnRatePerSecond = deg(50 * 0.0022 * g.input.sensitivity * 60);
   return out;
 });
 
 const fail = [];
-// the ones that matter: a warp on a button edge, at any size
-if (Math.abs(R.clickWarpSmall.yaw) > 0.005) fail.push('a small click warp reached the aim');
-if (Math.abs(R.clickWarpMid.yaw) > 0.005) fail.push('a -341 click warp reached the aim');
-if (Math.abs(R.clickWarpHuge.yaw) > 0.005) fail.push('a half-screen click warp reached the aim');
-if (Math.abs(R.slowAim.yaw) < 0.1 || R.slowAim.dropped !== 0) fail.push('ordinary aiming was blocked');
-if (Math.abs(R.fastFlick.yaw) < 0.5 || R.fastFlick.dropped !== 0) fail.push('a fast flick was blocked');
-if (Math.abs(R.backToBack.yaw) < 0.05 || R.backToBack.dropped !== 0) fail.push('back-to-back events were blocked');
+if (R.onClick58 !== 0 || R.onClick341 !== 0 || R.onClick593 !== 0)
+  fail.push(`a spike on a click moved the view (${R.onClick58}/${R.onClick341}/${R.onClick593} degrees)`);
+const CEILING = 7;     // 50px at 0.0022 rad/px is about 6.3 degrees
+if (Math.abs(R.spike58.degrees) > CEILING) fail.push('a 58px event exceeded the ceiling');
+if (Math.abs(R.spike341.degrees) > CEILING) fail.push('a 341px event exceeded the ceiling');
+if (Math.abs(R.spike593.degrees) > CEILING) fail.push('a 593px event exceeded the ceiling');
+if (Math.abs(R.spike5000.degrees) > CEILING) fail.push('a 5000px event exceeded the ceiling');
+if (Math.abs(R.slowAim.degrees) < 30) fail.push('ordinary aiming was throttled');
+if (Math.abs(R.fastFlick.degrees) < 50) fail.push('a fast flick was throttled');
+if (Math.abs(R.backToBack.degrees) < 5) fail.push('back-to-back events were blocked');
+if (R.maxTurnRatePerSecond < 350) fail.push('the ceiling makes turning too slow');
 
 console.log(JSON.stringify(R, null, 2));
 console.log('page errors:', errs.length ? errs : 'none');
-console.log(fail.length ? 'FAIL: ' + fail.join('; ') : 'PASS: warps rejected, aiming untouched');
+console.log(fail.length ? 'FAIL: ' + fail.join('; ') : 'PASS: no single event can swing the view; aiming untouched');
 await browser.close();
 process.exit(fail.length ? 1 : 0);

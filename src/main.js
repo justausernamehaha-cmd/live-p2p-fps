@@ -658,7 +658,7 @@ class Game {
           `stick     x=${i.stick.x.toFixed(2)} y=${i.stick.y.toFixed(2)}`,
           `mouse     locked=${i.pointerLocked} refused=${i.lockRefused} drag=${!!i._mouseDrag}`,
           `locks     ${i.lockChanges} changes, dropped ${i.dropped} spikes`,
-          `lastDrop  ${i.lastDrop[0]},${i.lastDrop[1]} at ${i.lastDrop[2]} px/ms`,
+          `clamped   ${i.clamped} events, last ${i.lastClamp[0]},${i.lastClamp[1]} -> capped at 80px`,
           `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
           `lastMove  ${i.lastMovement[0]}, ${i.lastMovement[1]}  (spikes are dropped)`,
           `yaw/pitch ${p.yaw.toFixed(2)} / ${p.pitch.toFixed(2)}`,

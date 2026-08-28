@@ -72,13 +72,16 @@ const R = await p.evaluate(async () => {
   await sleep(100);
   out.afterSettling = { yaw: +g.player.yaw.toFixed(4), aims: Math.abs(g.player.yaw) > 0.05 };
 
-  // and a genuinely absurd value is still refused
+  // an absurd value is clamped rather than discarded: real movement inside the
+  // same event is kept, it just cannot all arrive at once
   g.player.yaw = 0;
-  g.input.lastButtonAt = performance.now() - 5000;
   g.input.lastMoveAt = performance.now() - 200;
   move(-1500, 0);
   await sleep(100);
-  out.absurdStillDropped = Math.abs(g.player.yaw) < 0.01;
+  out.absurdClamped = {
+    degrees: +(g.player.yaw * 180 / Math.PI).toFixed(1),
+    withinCeiling: Math.abs(g.player.yaw * 180 / Math.PI) <= 7
+  };
 
   c.requestPointerLock = realReq;
   Object.defineProperty(document, 'pointerLockElement', { configurable:true, get: () => null });
@@ -93,7 +96,7 @@ if (!R.staleFlag.flagResynced) fail.push('the cached flag was not resynced from 
 if (R.whileLocked.requestsMade !== 0) fail.push('re-locked while already locked');
 if (R.settlingIgnored.moved) fail.push('a settling move turned the view');
 if (!R.afterSettling.aims) fail.push('ordinary aiming stopped working after settling');
-if (!R.absurdStillDropped) fail.push('an absurd movement value was applied');
+if (!R.absurdClamped.withinCeiling) fail.push(`an absurd movement value turned the view ${R.absurdClamped.degrees} degrees`);
 console.log(fail.length ? 'FAIL: ' + fail.join('; ') : 'PASS: no spurious re-locks, no settling spikes');
 await b.close();
 process.exit(fail.length ? 1 : 0);
