@@ -39,11 +39,16 @@ const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
 // gives the mouse as you click, a synthetic warp - can no longer move the view
 // more than about six degrees.
 const MAX_PX_PER_EVENT = 50;
-// Both the reported numbers and the captured stream put the spike on the click
-// itself. Three frames of blackout on a button edge removes it outright and
-// costs nothing: you are pressing a button, not aiming, and holding the trigger
-// only touches the edges, never the hold.
-const CLICK_BLACKOUT_MS = 50;
+// Pressing a button physically nudges the mouse - noticeably so when the left
+// button is pressed while the right is held, which rotates the hand leftwards -
+// and pointer acceleration turns a few millimetres into tens of reported pixels.
+// The nudge lasts as long as the press, not three frames.
+//
+// Movement in that window is throttled rather than dropped: deliberately
+// tracking a target while shooting still works, it just cannot lurch. A 58px
+// jolt becomes about one degree instead of seven.
+const CLICK_SETTLE_MS = 120;
+const CLICK_MAX_PX = 8;
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -81,6 +86,7 @@ export class Input {
     this.lastClamp = [0, 0];
     this.lastMoveAt = 0;
     this.lastButtonAt = -1e9;   // last mouse button edge
+    this.rawInput = null;       // did the browser grant unaccelerated movement?
     this.lastDrop = [0, 0, 0];
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -203,12 +209,15 @@ export class Input {
         // flick, and there can be more than one of them, so the whole settling
         // window is ignored rather than a single event.
         if (now() - this.lockedAt < SETTLE_MS) { this.dropped++; return; }
-        if (now() - this.lastButtonAt < CLICK_BLACKOUT_MS) { this.dropped++; return; }
 
         // Clamped, not discarded: real movement in the same event is kept, it
-        // just cannot arrive all at once.
-        const mx = clamp(e.movementX, -MAX_PX_PER_EVENT, MAX_PX_PER_EVENT);
-        const my = clamp(e.movementY, -MAX_PX_PER_EVENT, MAX_PX_PER_EVENT);
+        // just cannot arrive all at once. The ceiling tightens sharply around a
+        // button press, where the mouse is being disturbed by your hand.
+        const ceiling = now() - this.lastButtonAt < CLICK_SETTLE_MS
+          ? CLICK_MAX_PX
+          : MAX_PX_PER_EVENT;
+        const mx = clamp(e.movementX, -ceiling, ceiling);
+        const my = clamp(e.movementY, -ceiling, ceiling);
         if (mx !== e.movementX || my !== e.movementY) {
           this.clamped++;
           this.lastClamp = [e.movementX, e.movementY];
@@ -273,10 +282,13 @@ export class Input {
     try {
       p = this.canvas.requestPointerLock({ unadjustedMovement: true });
     } catch {
+      this.rawInput = false;
       p = this.canvas.requestPointerLock();
     }
-    if (p && p.catch) {
-      p.catch(() => {
+    if (p && p.then) {
+      p.then(() => { this.rawInput = true; }).catch(() => {
+        // the browser will not give raw input, so OS acceleration stays in play
+        this.rawInput = false;
         const plain = this.canvas.requestPointerLock();
         if (plain && plain.catch) plain.catch(() => { this.lockFailedAt = now(); });
       });

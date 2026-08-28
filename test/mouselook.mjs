@@ -55,6 +55,20 @@ const R = await page.evaluate(async () => {
   out.onClick58 = await onClick(-58, -7);
   out.onClick341 = await onClick(-341, 71);
   out.onClick593 = await onClick(-500, -320);
+  // the reported gesture: right held, left pressed, hand rotates left. The nudge
+  // arrives across the whole press, not in the first three frames.
+  const duringPress = async (ms, mx) => {
+    g.player.yaw = 0;
+    g.input.lastButtonAt = performance.now();
+    await sleep(ms);
+    move(mx, 0);
+    await sleep(120);
+    return +(g.player.yaw * 180 / Math.PI).toFixed(2);
+  };
+  out.nudge30msIn = await duringPress(30, -58);
+  out.nudge90msIn = await duringPress(90, -58);
+  out.nudgeBigMidPress = await duringPress(60, -341);
+  out.afterPressEnds = await duringPress(200, -58);
 
   // A single event may never swing the view more than the ceiling allows,
   // whatever its size and wherever it came from.
@@ -75,8 +89,13 @@ const R = await page.evaluate(async () => {
 });
 
 const fail = [];
-if (R.onClick58 !== 0 || R.onClick341 !== 0 || R.onClick593 !== 0)
+const NUDGE = 1.1;   // 8px at 0.0022 rad/px is about one degree
+if (Math.abs(R.onClick58) > NUDGE || Math.abs(R.onClick341) > NUDGE || Math.abs(R.onClick593) > NUDGE)
   fail.push(`a spike on a click moved the view (${R.onClick58}/${R.onClick341}/${R.onClick593} degrees)`);
+if (Math.abs(R.nudge30msIn) > NUDGE) fail.push(`a nudge 30ms into a press moved ${R.nudge30msIn} degrees`);
+if (Math.abs(R.nudge90msIn) > NUDGE) fail.push(`a nudge 90ms into a press moved ${R.nudge90msIn} degrees`);
+if (Math.abs(R.nudgeBigMidPress) > NUDGE) fail.push(`a 341px nudge mid-press moved ${R.nudgeBigMidPress} degrees`);
+if (Math.abs(R.afterPressEnds) < 3) fail.push('aiming did not resume after the press window');
 const CEILING = 7;     // 50px at 0.0022 rad/px is about 6.3 degrees
 if (Math.abs(R.spike58.degrees) > CEILING) fail.push('a 58px event exceeded the ceiling');
 if (Math.abs(R.spike341.degrees) > CEILING) fail.push('a 341px event exceeded the ceiling');

@@ -90,6 +90,16 @@ changes size, because accuracy depends on whether you are moving and not on
 anything the reticle animates. The shotgun keeps its pellet pattern regardless,
 because that is what a shotgun is. Headshots do double damage.
 
+## A note on mouse input
+
+Pressing a mouse button physically disturbs the mouse — pressing left while
+holding right rotates the hand leftwards — and pointer acceleration turns a few
+millimetres into tens of reported pixels, which lands as a view jolt. Two things
+guard against it: the lock is requested with `unadjustedMovement`, which turns
+OS acceleration off where the browser supports it (F3 shows `raw=true` when it
+was granted), and movement is capped per event — hard around a button press,
+loosely otherwise. Sustained turning still reaches ~380 degrees a second.
+
 ## How the networking works
 
 Full mesh, no authority. Each peer simulates its own player and broadcasts

@@ -642,7 +642,7 @@ class Game {
           `held      ${[...i.held].sort().join(' ') || '-'}`,
           `keyLook   x=${i.keyLook.x} y=${i.keyLook.y}   <- non-zero here spins the view`,
           `stick     x=${i.stick.x.toFixed(2)} y=${i.stick.y.toFixed(2)}`,
-          `mouse     locked=${i.pointerLocked} refused=${i.lockRefused} drag=${!!i._mouseDrag}`,
+          `mouse     locked=${i.pointerLocked} raw=${i.rawInput} drag=${!!i._mouseDrag}`,
           `locks     ${i.lockChanges} changes, dropped ${i.dropped} spikes`,
           `clamped   ${i.clamped} events, last ${i.lastClamp[0]},${i.lastClamp[1]} -> capped at 80px`,
           `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
