@@ -76,6 +76,23 @@ Driven in headless Chromium, two peers at once, over the real public relays:
 Frame rate was 25 fps under a software rasteriser, which is the renderer's
 floor, not the game's.
 
+## Running the tests
+
+The game itself needs nothing installed. The tests drive it in a real browser:
+
+```sh
+npm install && npx playwright install chromium
+./serve.sh 8080 &
+node test/movement.mjs
+```
+
+`test/movement.mjs` checks that W/A/S/D actually move you in the direction the
+camera is looking, at nine different yaws. It exists because the movement basis
+was once mirrored in z: W and S inverted when facing along z, A and D inverted
+when facing along x, and everything felt swapped at the diagonals. The test that
+missed it measured only distance travelled, which is happily satisfied by a
+player walking backwards.
+
 ## Layout
 
 ```

@@ -89,10 +89,15 @@ export class Player {
     const sprinting = input.down('sprint') && !this.crouching && wish.y > 0.1;
     const maxSpeed = this.crouching ? CROUCH_SPEED : sprinting ? SPRINT : WALK;
 
-    // world-space wish direction from yaw
+    // World-space wish direction. This basis MUST match the camera, which looks
+    // along Ry(yaw) * (0,0,-1):
+    //   forward = (-sin yaw, -cos yaw)
+    //   right   = ( cos yaw, -sin yaw)
+    // Getting the z sign wrong here mirrors the controls: W/S invert when facing
+    // along z, A/D invert when facing along x, and both feel swapped in between.
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     const wx = wish.x * cos - wish.y * sin;
-    const wz = wish.x * sin + wish.y * cos;
+    const wz = -(wish.x * sin + wish.y * cos);
 
     const accel = this.onGround ? ACCEL : AIR_ACCEL;
     this.vel.x += wx * accel * dt;
