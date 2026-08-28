@@ -159,7 +159,13 @@ node test/pointerlock.mjs
 node test/mouselook.mjs
 node test/mousebuttons.mjs
 node test/holdtoggle.mjs
+node test/map.mjs
 ```
+
+`test/map.mjs` scans the whole arena floor and asserts that every place you can
+stand lets you stand *up*. That is the fault hand-checking missed the first
+time: a rooftop with walkable ground underneath and 0.7m of headroom traps a
+1.8m player. It re-checks 3600 points, so changing the map's size costs nothing.
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
 camera is looking, at nine different yaws. `test/mechanics.mjs` measures the

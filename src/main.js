@@ -69,9 +69,11 @@ class Game {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1b2433);
-    this.scene.fog = new THREE.Fog(0x1b2433, 60, 150);
+    // the arena is 120 across and 170 corner to corner, so the fog has to start
+    // beyond any sightline that matters or it hides players you should be able to see
+    this.scene.fog = new THREE.Fog(0x1b2433, 150, 380);
 
-    this.camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.05, 400);
+    this.camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.05, 700);
     this.scene.add(this.camera);
 
     this.scene.add(new THREE.HemisphereLight(0xc8ddf5, 0x38414f, 1.9));

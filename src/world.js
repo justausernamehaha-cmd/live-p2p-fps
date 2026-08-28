@@ -4,7 +4,12 @@ import * as THREE from 'three';
 // hitscan trivial and identical on every peer (the layout is hard-coded, so
 // there is nothing to synchronise).
 
-const ARENA = 60;      // floor is ARENA x ARENA, centred on the origin
+// Everything is laid out at S times the original distances. Heights and
+// player-scale props (crates, stair rises, wall thickness) deliberately do not
+// scale: a 4m crate would be unclimbable and a 1m step unwalkable. So the map
+// gets twice as big to cross without any of it becoming twice as tall.
+const S = 2;
+const ARENA = 60 * S;  // floor is ARENA x ARENA, centred on the origin
 const WALL_H = 9;
 const STEP = 0.5;      // stair rise — must stay <= Player.stepHeight
 
@@ -62,47 +67,59 @@ export class World {
     this.add(H, 0, 0, 1, WALL_H, ARENA, PALETTE.wall);
 
     // ---- centre: raised platform with a stair on each side ----
-    this.add(0, 0, 0, 14, 2.5, 14, PALETTE.plate);
+    this.add(0, 0, 0, 14 * S, 2.5, 14 * S, PALETTE.plate);
     this.add(0, 2.5, 0, 3, 3.4, 3, PALETTE.accent);          // sightline breaker
-    this.stairs(7, 0, 6, 2.5, 'x', 1, PALETTE.block);
-    this.stairs(-7, 0, 6, 2.5, 'x', -1, PALETTE.block);
-    this.stairs(0, 7, 6, 2.5, 'z', 1, PALETTE.block);
-    this.stairs(0, -7, 6, 2.5, 'z', -1, PALETTE.block);
+    this.stairs(7 * S, 0, 6 * S, 2.5, 'x', 1, PALETTE.block);
+    this.stairs(-7 * S, 0, 6 * S, 2.5, 'x', -1, PALETTE.block);
+    this.stairs(0, 7 * S, 6 * S, 2.5, 'z', 1, PALETTE.block);
+    this.stairs(0, -7 * S, 6 * S, 2.5, 'z', -1, PALETTE.block);
 
     // ---- four corner bunkers, open on the inward diagonal ----
-    // The perch occupies x,z in [21,26] (mirrored per corner); the stair flight
+    // The perch occupies x,z in [42,52] (mirrored per corner); the stair flight
     // and the crate are deliberately kept out of that footprint so nobody ever
-    // ends up walking into a 0.7m gap under the roof.
+    // ends up walking into a low gap under the roof.
     for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-      const cx = sx * 20, cz = sz * 20;
-      this.add(cx, 0, cz - sz * 5, 12, 3.2, 1, PALETTE.block);          // inner wall
-      this.add(cx - sx * 5, 0, cz, 1, 3.2, 12, PALETTE.block);          // inner wall
-      this.add(cx + sx * 3.5, 3.0, cz + sz * 3.5, 5, 0.4, 5, PALETTE.plate);  // perch
-      this.stairs(cx - sx * 1, cz + sz * 5, 3, 3.0, 'z', -sz, PALETTE.block); // up to it
-      this.add(cx + sx * 1, 0, cz - sz * 3, 2, 2, 2, PALETTE.accent2);  // crate inside
+      const cx = sx * 20 * S, cz = sz * 20 * S;
+      this.add(cx, 0, cz - sz * 5 * S, 12 * S, 3.2, 1, PALETTE.block);   // inner wall
+      this.add(cx - sx * 5 * S, 0, cz, 1, 3.2, 12 * S, PALETTE.block);   // inner wall
+      this.add(cx + sx * 3.5 * S, 3.0, cz + sz * 3.5 * S, 5 * S, 0.4, 5 * S, PALETTE.plate);
+      this.stairs(cx - sx * 1 * S, cz + sz * 5 * S, 3, 3.0, 'z', -sz, PALETTE.block);
+      this.add(cx + sx * 1 * S, 0, cz - sz * 3 * S, 2, 2, 2, PALETTE.accent2);
     }
 
-    // ---- mid-field cover ----
+    // ---- mid-field cover: positions and lengths scale, height does not ----
     const covers = [
       [0, 22, 12, 2.4, 1], [0, -22, 12, 2.4, 1],
       [22, 0, 1, 2.4, 12], [-22, 0, 1, 2.4, 12],
       [12, 12, 6, 1.6, 1], [-12, -12, 6, 1.6, 1],
       [12, -12, 1, 1.6, 6], [-12, 12, 1, 1.6, 6]
     ];
-    for (const [x, z, w, h, d] of covers) this.add(x, 0, z, w, h, d, PALETTE.wall);
+    for (const [x, z, w, h, d] of covers) {
+      this.add(x * S, 0, z * S, w > 1 ? w * S : w, h, d > 1 ? d * S : d, PALETTE.wall);
+    }
 
-    // ---- scattered crates (stacked in places, all climbable via jump) ----
+    // ---- extra cover, because twice the floor needs more than twice the gaps
+    // filled: long walls out in the quarters that were empty at the old size ----
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      this.add(sx * 30, 0, sz * 14, 1, 2.4, 14, PALETTE.wall);
+      this.add(sx * 14, 0, sz * 30, 14, 2.4, 1, PALETTE.wall);
+      this.add(sx * 34, 0, sz * 34, 2, 2, 2, PALETTE.block);
+      this.add(sx * 36, 0, sz * 32, 2, 2, 2, PALETTE.block);
+      this.add(sx * 35, 2, sz * 33, 2, 2, 2, PALETTE.block);
+    }
+
+    // ---- scattered crates: repositioned, but still crate-sized ----
     const crates = [
       [8, 18], [10, 20], [8.6, 19.2, 2], [-8, -18], [-10, -20], [-8.6, -19.2, 2],
       [18, -8], [20, -10], [-18, 8], [-20, 10],
       [16, 16], [-16, -16], [27, 27], [-27, -27], [27, -27], [-27, 27]
     ];
-    for (const [x, z, y = 0] of crates) this.add(x, y, z, 2, 2, 2, PALETTE.block);
+    for (const [x, z, y = 0] of crates) this.add(x * S, y, z * S, 2, 2, 2, PALETTE.block);
 
     // ---- spawn points, spread around the ring ----
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
-      this.spawns.push({ x: Math.cos(a) * 24, y: 0.05, z: Math.sin(a) * 24 });
+      this.spawns.push({ x: Math.cos(a) * 24 * S, y: 0.05, z: Math.sin(a) * 24 * S });
     }
   }
 

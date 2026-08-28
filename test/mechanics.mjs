@@ -86,7 +86,7 @@ const R = await page.evaluate(async () => {
   };
 
   // ---- stairs are climbed as a ramp, not a staircase of jolts ----
-  park(13, 0.3, 0, Math.PI / 2);
+  park(26, 0.3, 0, Math.PI / 2);
   await sleep(300);
   let prevEye = g.player.eyeY, maxJolt = 0, startY = g.player.pos.y;
   const sampler = setInterval(() => {
@@ -196,14 +196,15 @@ const R = await page.evaluate(async () => {
     await sleep(100);
   }
 
-  // running up the centre staircase at speed
+  // running up the centre staircase at speed. The bottom step is at x 18.5 and
+  // the platform edge at 14, so the run has to start close enough to arrive.
   {
-    park(13, 0.3, 0, Math.PI / 2);
+    park(21, 0.3, 0, Math.PI / 2);
     await sleep(300);
     g.player.vel = { x: -12, y: 0, z: 0 };
     const before = 12;
     keys('fwd');
-    await sleep(700);
+    await sleep(900);
     const after = speed();
     keys();
     out.momentum.upStairs = {
@@ -241,7 +242,7 @@ const R = await page.evaluate(async () => {
 
   // ...but bumping into anything drops a hop chain back to running speed
   {
-    park(0, 0.3, -26, 0);
+    park(0, 0.3, -42, 0);
     await sleep(300);
     g.player.vel = { x: 0, y: 0, z: -14 };
     keys('fwd');
@@ -253,7 +254,7 @@ const R = await page.evaluate(async () => {
 
   // a glancing bump while carrying speed sideways: also back to normal
   {
-    park(0, 0.3, -26, 0);
+    park(0, 0.3, -42, 0);
     await sleep(300);
     g.player.vel = { x: 9, y: 0, z: -11 };   // mostly along the wall, partly into it
     keys('fwd');
