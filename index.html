@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Peer Arena</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎯</text></svg>">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+    "trystero": "https://cdn.jsdelivr.net/npm/trystero@0.25.3/nostr/+esm",
+    "trystero-torrent": "https://cdn.jsdelivr.net/npm/trystero@0.25.3/torrent/+esm",
+    "trystero-mqtt": "https://cdn.jsdelivr.net/npm/trystero@0.25.3/mqtt/+esm"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- ============ in-game HUD ============ -->
+<div id="hud" class="hidden">
+  <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div id="hitmarker"></div>
+  <div id="damage"></div>
+
+  <div id="topleft">
+    <div id="netstat"><span id="peercount">0</span> players · <span id="ping">--</span> ms · <span id="roomtag"></span></div>
+    <div id="killfeed"></div>
+  </div>
+
+  <div id="botleft">
+    <div id="healthbar"><div id="healthfill"></div><span id="healthnum">100</span></div>
+  </div>
+
+  <div id="botright">
+    <div id="weaponname">Rifle</div>
+    <div id="ammo"><span id="mag">30</span><span class="sep">/</span><span id="reserve">90</span></div>
+    <div id="reloading" class="hidden">RELOADING</div>
+  </div>
+
+  <div id="respawn" class="hidden">
+    <div class="big">YOU DIED</div>
+    <div class="sub">respawning in <span id="respawnnum">3</span></div>
+  </div>
+
+  <div id="scoreboard" class="hidden">
+    <h2>Scoreboard</h2>
+    <table><thead><tr><th>Player</th><th>K</th><th>D</th><th>Ping</th></tr></thead><tbody id="scorebody"></tbody></table>
+  </div>
+
+  <form id="chatform" class="hidden"><input id="chatinput" maxlength="120" autocomplete="off" placeholder="say something…"></form>
+</div>
+
+<!-- ============ touch controls ============ -->
+<div id="touch" class="hidden">
+  <div id="stick"><div id="stickbase"></div><div id="stickknob"></div></div>
+  <div id="tbuttons">
+    <div class="tbtn wide" data-btn="fire">FIRE</div>
+    <div class="tbtn" data-btn="jump">JUMP</div>
+    <div class="tbtn" data-btn="reload">RELOAD</div>
+    <div class="tbtn" data-btn="crouch">CROUCH</div>
+  </div>
+  <div id="tside">
+    <div class="tbtn small" data-btn="weapon">WEAPON</div>
+    <div class="tbtn small" data-btn="chat">CHAT</div>
+    <div class="tbtn small" data-btn="score">SCORE</div>
+    <div class="tbtn small" data-btn="menu">MENU</div>
+  </div>
+</div>
+
+<!-- ============ menu / pause ============ -->
+<div id="menu">
+  <div class="panel">
+    <h1>PEER<span>ARENA</span></h1>
+    <p class="tag">serverless deathmatch · pc &amp; mobile · peer-to-peer</p>
+
+    <label>Callsign
+      <input id="nameinput" maxlength="14" placeholder="player">
+    </label>
+    <label>Room code
+      <div class="row">
+        <input id="roominput" maxlength="24" placeholder="lobby-code">
+        <button id="randomroom" type="button" title="random room">⟳</button>
+      </div>
+    </label>
+
+    <button id="playbtn" class="primary">CONNECT</button>
+    <button id="sharebtn" class="ghost hidden">COPY INVITE LINK</button>
+
+    <div id="status"></div>
+
+    <details class="help">
+      <summary>Controls</summary>
+      <div class="cols">
+        <div>
+          <b>Keyboard / mouse</b>
+          <ul>
+            <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</li>
+            <li><kbd>Space</kbd> jump · <kbd>Shift</kbd> sprint · <kbd>C</kbd> crouch</li>
+            <li>Mouse look · <kbd>Click</kbd> fire · <kbd>R</kbd> reload</li>
+            <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / wheel weapons · <kbd>Q</kbd> last</li>
+            <li><kbd>Tab</kbd> scores · <kbd>T</kbd> chat · <kbd>Esc</kbd> menu</li>
+          </ul>
+        </div>
+        <div>
+          <b>Touch</b>
+          <ul>
+            <li>Left of screen: drag to move</li>
+            <li>Right of screen: drag to look</li>
+            <li>On-screen buttons for fire / jump / reload</li>
+            <li>Pair a keyboard and it works alongside touch —
+                keys move, thumb aims.</li>
+          </ul>
+        </div>
+      </div>
+    </details>
+
+    <p class="fine">No game server: players connect directly over WebRTC.
+      Public Nostr relays are used once, only to introduce peers.</p>
+  </div>
+</div>
+
+<div id="loading">loading…</div>
+
+<script>
+// The game is loaded as ES modules straight from a CDN; if any of that fails the
+// page would otherwise just sit there black. Say so instead.
+(function () {
+  var shown = false;
+  function fail(msg) {
+    if (shown || window.__paStarted) { console.error(msg); return; }
+    shown = true;
+    var el = document.getElementById('loading');
+    el.classList.remove('hidden');
+    el.style.cssText += ';white-space:pre-wrap;padding:28px;text-align:center;color:#ff4d5e;letter-spacing:0;line-height:1.6;font-size:14px';
+    el.textContent = msg;
+  }
+  addEventListener('error', function (e) {
+    fail('Failed to start:\n\n' + (e.message || e.error) +
+         (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+  });
+  addEventListener('unhandledrejection', function (e) {
+    fail('Failed to start:\n\n' + ((e.reason && e.reason.message) || e.reason));
+  });
+  setTimeout(function () {
+    if (!window.__paStarted) {
+      fail('Still loading after 8s.\n\nthree.js and trystero come from jsDelivr — check the\nnetwork connection, or open the console for details.\n\nAlso make sure this page is served over http://,\nnot opened as a file:// path.');
+    }
+  }, 8000);
+})();
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
