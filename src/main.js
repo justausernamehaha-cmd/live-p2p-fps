@@ -127,6 +127,7 @@ class Game {
 
   _initInput() {
     this.input = new Input(this.canvas);
+    document.body.classList.toggle('has-touch', this.input.hasTouch);
     this.input.onKeyboardDetected = () => {
       // a physical keyboard showed up (common on tablets and phones with a
       // Bluetooth keyboard): retire the thumbstick, keep the touch look pad

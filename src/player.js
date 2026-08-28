@@ -62,6 +62,7 @@ export class Player {
     this.deaths = 0;
     this.spawnSeq = 0;        // bumped on every spawn so peers can drop stale interpolation
     this.stepSmooth = 0;      // visual lag behind an instant step up, so stairs are a ramp
+    this.bumped = false;      // hit something horizontally this frame
     this.bobPhase = 0;
     this.bob = 0;
     this.recoil = 0;             // extra pitch, decays
@@ -236,6 +237,18 @@ export class Player {
 
     this._move(dt);
 
+    // Hitting something ends a hop chain: whatever you had built collapses back
+    // to the speed you can run at. Landings and stairs do not trigger this —
+    // only a horizontal surface that actually stopped you.
+    if (this.bumped) {
+      this.bumped = false;
+      const sp = Math.hypot(this.vel.x, this.vel.z);
+      if (sp > maxSpeed && sp > 1e-4) {
+        this.vel.x *= maxSpeed / sp;
+        this.vel.z *= maxSpeed / sp;
+      }
+    }
+
     // view bob, purely cosmetic
     const groundSpeed = Math.hypot(this.vel.x, this.vel.z);
     if (this.onGround && groundSpeed > 0.5) {
@@ -308,11 +321,17 @@ export class Player {
       }
     }
 
-    // Anything still genuinely blocked loses its speed along that axis — running
-    // into a wall costs you the run. A glancing slide keeps the other component,
-    // which is what lets you scrape a corner without stopping.
-    if (Math.abs(dx) > 1e-6 && Math.abs(this.pos.x - start.x) < Math.abs(dx) * 0.25) this.vel.x = 0;
-    if (Math.abs(dz) > 1e-6 && Math.abs(this.pos.z - start.z) < Math.abs(dz) * 0.25) this.vel.z = 0;
+    // Anything still genuinely blocked loses its speed along that axis, and flags
+    // the frame as a bump. Stairs do not count: the step-up moves you, so the
+    // axis is not blocked.
+    if (Math.abs(dx) > 1e-6 && Math.abs(this.pos.x - start.x) < Math.abs(dx) * 0.25) {
+      this.vel.x = 0;
+      this.bumped = true;
+    }
+    if (Math.abs(dz) > 1e-6 && Math.abs(this.pos.z - start.z) < Math.abs(dz) * 0.25) {
+      this.vel.z = 0;
+      this.bumped = true;
+    }
 
     // vertical
     this.onGround = false;

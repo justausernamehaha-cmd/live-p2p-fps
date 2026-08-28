@@ -239,14 +239,31 @@ const R = await page.evaluate(async () => {
     await sleep(100);
   }
 
-  // ...but running head-on into a wall must still cost you the run
+  // ...but bumping into anything drops a hop chain back to running speed
   {
     park(0, 0.3, -26, 0);
     await sleep(300);
     g.player.vel = { x: 0, y: 0, z: -14 };
     keys('fwd');
     await sleep(700);
-    out.momentum.wallBump = { speedAfter: +speed().toFixed(2), stopped: speed() < 7 };
+    out.momentum.wallHeadOn = { speedAfter: +speed().toFixed(2), stopped: speed() < 7 };
+    keys();
+    await sleep(200);
+  }
+
+  // a glancing bump while carrying speed sideways: also back to normal
+  {
+    park(0, 0.3, -26, 0);
+    await sleep(300);
+    g.player.vel = { x: 9, y: 0, z: -11 };   // mostly along the wall, partly into it
+    keys('fwd');
+    await sleep(600);
+    const after = speed();
+    out.momentum.glancingBump = {
+      before: 14.2,
+      after: +after.toFixed(2),
+      backToNormal: after <= 6.4
+    };
     keys();
     await sleep(200);
   }

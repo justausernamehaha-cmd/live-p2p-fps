@@ -166,14 +166,17 @@ kbd{background:#0b1119;border:1px solid var(--line);border-bottom-width:2px;bord
 
 
 /* ---------------- fullscreen ---------------- */
-#fsbtn{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));
+/* Touch devices only: a desktop browser already has F11 and its own chrome, and
+   the button just sits in the corner taking up room. */
+#fsbtn{display:none}
+body.has-touch #fsbtn{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));
   right:calc(12px + env(safe-area-inset-right,0px));z-index:26;
   width:36px;height:36px;display:grid;place-items:center;cursor:pointer;
   background:#0b111999;border:1px solid var(--line);border-radius:9px;
   color:var(--dim);font-size:17px;line-height:1;backdrop-filter:blur(3px);
   -webkit-user-select:none;user-select:none}
-#fsbtn:hover{color:var(--text);border-color:var(--accent2)}
-#fsbtn:active{transform:scale(.94)}
+body.has-touch #fsbtn:hover{color:var(--text);border-color:var(--accent2)}
+body.has-touch #fsbtn:active{transform:scale(.94)}
 
 /* the pill row and the killfeed step down to clear the two corner buttons */
 body.touch-ui #tside{top:calc(56px + env(safe-area-inset-top,0px))}

@@ -40,7 +40,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Scores | hold `Tab` | `SCORE` |
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
-| Fullscreen | button, top right | button, top right |
+| Fullscreen | F11 | button, top right |
 | Settings (sensitivity) | `` ` `` | `LAYOUT`, above the player count |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
 
@@ -70,8 +70,8 @@ gets you exactly walking speed and no more.
 Momentum is yours once you have it. A heavy landing keeps it, running up stairs
 keeps it, and flipping from `A` to `D` in mid-air redirects it rather than
 scrubbing it off — air control can only ever turn or add to your speed, never
-brake. Running head-on into a wall still costs you the run, which is the one way
-to lose it.
+brake. Bumping into something is the one way to lose it: any surface that actually
+stops you, head-on or glancing, collapses a hop chain back to running speed.
 
 Sprint latches: tap `Shift` once and you keep sprinting until you release
 forward. Crouching takes 0.3 s each way so it cannot be flickered, and stairs are
