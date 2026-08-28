@@ -130,6 +130,7 @@ npm install && npx playwright install chromium
 node test/movement.mjs
 node test/mechanics.mjs
 node test/stuckkeys.mjs
+node test/pointerlock.mjs
 ```
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the

@@ -21,6 +21,7 @@ const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
 const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
 const SPIKE_PX = 400;        // no real flick moves this far in one event
+const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -51,7 +52,9 @@ export class Input {
     // rejects a re-lock for a moment after every Esc, and a permanent flag meant
     // one press of Esc dropped the session into drag-to-look for good.
     this.lockFailedAt = 0;
-    this.freshLock = false;
+    this.lockedAt = 0;         // when the pointer lock last engaged
+    this.lockChanges = 0;      // how often it has engaged, shown by F3
+    this.dropped = 0;          // movement events discarded as spikes
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
@@ -132,7 +135,15 @@ export class Input {
       // Try to capture the mouse, but never let that get in the way of the click
       // itself. Swallowing the acquiring click is a nicety; not being able to
       // shoot is not, and the two were tangled together.
-      if (!this.pointerLocked && !this.lockRefused) {
+      // Ask the DOM, not the cached flag. If that flag ever goes stale — a
+      // pointerlockchange missed while the tab was hidden, a lock taken by
+      // something else — the cache says "not locked", every click re-requests a
+      // lock the browser already holds, and every re-lock emits a settling move
+      // worth tens of degrees. That is a spike per click, not just on the first.
+      const reallyLocked = document.pointerLockElement === this.canvas;
+      if (reallyLocked !== this.pointerLocked) this.pointerLocked = reallyLocked;
+
+      if (!reallyLocked && !this.lockRefused) {
         if (this.canvas.requestPointerLock) {
           const p = this.canvas.requestPointerLock();
           if (p && p.catch) p.catch(() => { this.lockFailedAt = now(); });
@@ -161,13 +172,15 @@ export class Input {
       if (this.pointerLocked) {
         this.lastMovement = [e.movementX, e.movementY];   // shown by the F3 overlay
 
-        // The first event after a lock engages carries the whole jump from
-        // wherever the cursor was sitting to the locked origin. It is not a
-        // flick, it is bookkeeping, and acting on it snaps the view a long way
-        // in a direction that stays the same for as long as you keep clicking
-        // in the same spot. Drop it outright.
-        if (this.freshLock) { this.freshLock = false; return; }
-        if (Math.abs(e.movementX) > SPIKE_PX || Math.abs(e.movementY) > SPIKE_PX) return;
+        // Events right after a lock engages carry the jump from wherever the
+        // cursor was sitting to the locked origin. That is bookkeeping, not a
+        // flick, and there can be more than one of them, so the whole settling
+        // window is ignored rather than a single event.
+        if (now() - this.lockedAt < SETTLE_MS) { this.dropped++; return; }
+        if (Math.abs(e.movementX) > SPIKE_PX || Math.abs(e.movementY) > SPIKE_PX) {
+          this.dropped++;
+          return;
+        }
 
         this.lookDX += e.movementX * MOUSE_SENS * this.sensitivity;
         this.lookDY += e.movementY * MOUSE_SENS * this.sensitivity;
@@ -188,10 +201,11 @@ export class Input {
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
+      this.lockChanges++;
       if (this.pointerLocked) {
         this.lockFailedAt = 0;     // it worked, so stop treating it as refused
         this._mouseDrag = null;
-        this.freshLock = true;     // ignore the settling event that follows
+        this.lockedAt = now();     // ignore the settling moves that follow
         this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
