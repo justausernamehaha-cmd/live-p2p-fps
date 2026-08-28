@@ -89,16 +89,24 @@ export class Input {
       this._recalcKeys();
     });
 
+    // NEVER filter keyup. A release can only ever stop something, and discarding
+    // one leaves the key held forever: an arrow key stuck this way spins the view
+    // at a constant rate with nothing to stop it, because keyLook is applied
+    // every frame rather than consumed like a mouse delta. The old isTyping()
+    // guard here dropped exactly that release whenever focus had moved to a text
+    // field in between, which is one click into the chat box away.
     addEventListener('keyup', e => {
-      if (isTyping(e)) return;
       const a = KEY_ACTIONS[e.code];
       if (a) this.held.delete(a);
       if (e.code in LOOK_KEYS) this.held.delete('look' + e.code);
       this._recalcKeys();
     });
 
-    // a lost focus must not leave keys stuck down
-    addEventListener('blur', () => { this.held.clear(); this._recalcKeys(); });
+    // any way of leaving the page must not leave keys stuck down either
+    const release = () => { this.held.clear(); this._recalcKeys(); };
+    addEventListener('blur', release);
+    addEventListener('visibilitychange', () => { if (document.hidden) release(); });
+    this.releaseAll = release;
   }
 
   _recalcKeys() {
@@ -129,8 +137,8 @@ export class Input {
           this.lockFailedAt = now();
         }
       }
-      if (!this.pointerLocked && !this._mouseDrag) {
-        // no capture (yet, or at all): drag to aim, like the touch look pad
+      if (!this.pointerLocked && this.lockRefused && !this._mouseDrag) {
+        // genuinely no capture available: drag to aim, like the touch look pad
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
@@ -148,6 +156,9 @@ export class Input {
     addEventListener('pointermove', e => {
       if (e.pointerType === 'touch') return;
       if (this.pointerLocked) {
+        // the first event after a lock engages can carry the whole distance from
+        // wherever the cursor happened to be; that is a spike, not a flick
+        if (Math.abs(e.movementX) > 600 || Math.abs(e.movementY) > 600) return;
         this.lookDX += e.movementX * MOUSE_SENS * this.sensitivity;
         this.lookDY += e.movementY * MOUSE_SENS * this.sensitivity;
       } else if (this._mouseDrag && this._mouseDrag.id === e.pointerId) {
@@ -170,9 +181,9 @@ export class Input {
       if (this.pointerLocked) {
         this.lockFailedAt = 0;     // it worked, so stop treating it as refused
         this._mouseDrag = null;
+        try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
-        this.held.delete('fire');
-        this.held.delete('ads');   // do not leave the sights stuck up
+        this.releaseAll();         // nothing may survive losing the mouse
         this.onAction?.('pause');
       }
     });

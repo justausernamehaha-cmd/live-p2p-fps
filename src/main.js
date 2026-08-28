@@ -158,6 +158,12 @@ class Game {
       showSens();
     });
 
+    // F3 shows exactly what the input layer thinks is happening, so a report of
+    // "it did something strange" can be answered with numbers
+    addEventListener('keydown', e => {
+      if (e.code === 'F3') { e.preventDefault(); this.showDebug = !this.showDebug; }
+    });
+
     addEventListener('keydown', e => {
       if (e.code !== 'Backquote' || isTyping(e) || this.hud.chatOpen) return;
       e.preventDefault();
@@ -636,6 +642,26 @@ class Game {
   }
 
   _hudTick(dt, input) {
+    if (this.showDebug) {
+      const i = this.input, p = this.player;
+      this._dbgT = (this._dbgT || 0) + dt;
+      if (this._dbgT > 0.15) {
+        this._dbgT = 0;
+        this.hud.debug([
+          `held      ${[...i.held].sort().join(' ') || '-'}`,
+          `keyLook   x=${i.keyLook.x} y=${i.keyLook.y}   <- non-zero here spins the view`,
+          `stick     x=${i.stick.x.toFixed(2)} y=${i.stick.y.toFixed(2)}`,
+          `mouse     locked=${i.pointerLocked} refused=${i.lockRefused} drag=${!!i._mouseDrag}`,
+          `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
+          `yaw/pitch ${p.yaw.toFixed(2)} / ${p.pitch.toFixed(2)}`,
+          `vel       ${Math.hypot(p.vel.x, p.vel.z).toFixed(2)} m/s  ground=${p.onGround}`,
+          `fps       ${Math.round(1 / Math.max(dt, 0.001))}`
+        ].join('\n'));
+      }
+    } else {
+      this.hud.debug('');
+    }
+
     // a mouse user with no pointer capture aims by dragging, which is worth
     // saying out loud rather than leaving them to wonder
     this.hud.lockHint(this.input.needsMouseCapture && !this.menuOpen && !this.editing && !this.hud.chatOpen);

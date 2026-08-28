@@ -40,6 +40,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Scores | hold `Tab` | `SCORE` |
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
+| Input debug overlay | `F3` | — |
 | Fullscreen | F11 | button, top right |
 | Settings (sensitivity) | `` ` `` | `LAYOUT`, above the player count |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
@@ -128,6 +129,7 @@ npm install && npx playwright install chromium
 ./serve.sh 8080 &
 node test/movement.mjs
 node test/mechanics.mjs
+node test/stuckkeys.mjs
 ```
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
