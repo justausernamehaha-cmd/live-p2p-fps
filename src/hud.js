@@ -11,7 +11,7 @@ export class Hud {
       scoreboard: $('scoreboard'), scorebody: $('scorebody'),
       peercount: $('peercount'), ping: $('ping'), roomtag: $('roomtag'),
       chatform: $('chatform'), chatinput: $('chatinput'), status: $('status'),
-      protection: $('protection')
+      protection: $('protection'), lockhint: $('lockhint')
     };
     this._cache = {};
     this._hitTimer = 0;
@@ -87,6 +87,8 @@ export class Hud {
       if (this._dmgTimer <= 0) this.el.damage.classList.remove('on');
     }
   }
+
+  lockHint(on) { this._set('lockhint', !!on, v => this.el.lockhint.classList.toggle('hidden', !v)); }
 
   ads(on) { this._set('ads', !!on, v => this.el.crosshair.classList.toggle('ads', v)); }
 

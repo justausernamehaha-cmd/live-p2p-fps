@@ -1,4 +1,4 @@
-import { clamp } from './util.js';
+import { clamp, now } from './util.js';
 
 // One input layer for every device. Keyboard, mouse, and touch all write into
 // the same state, and they are additive: a phone with a Bluetooth keyboard
@@ -19,6 +19,7 @@ const MOUSE_SENS = 0.0022;   // radians per pixel
 const TOUCH_SENS = 0.0042;
 const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
+const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -45,7 +46,10 @@ export class Input {
     this.keyLook = { x: 0, y: 0 };
     this.pointerLocked = false;
     this.mouseSeen = false;
-    this.lockFailed = false;   // set when the browser refuses pointer lock
+    // When the browser last refused pointer lock. A timestamp, not a flag: Chrome
+    // rejects a re-lock for a moment after every Esc, and a permanent flag meant
+    // one press of Esc dropped the session into drag-to-look for good.
+    this.lockFailedAt = 0;
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     this.keyboardSeen = false;
@@ -114,28 +118,23 @@ export class Input {
       if (e.pointerType === 'touch') return;
       this.mouseSeen = true;
 
-      // The click that grabs the mouse must not also be a shot — but it used to
-      // be dropped entirely, which meant right-clicking to aim silently grabbed
-      // the pointer and started turning the view instead of raising the sights.
-      // Only the trigger is suppressed now; everything else goes through.
-      let acquiring = false;
-      if (!this.pointerLocked && !this.lockFailed) {
+      // Try to capture the mouse, but never let that get in the way of the click
+      // itself. Swallowing the acquiring click is a nicety; not being able to
+      // shoot is not, and the two were tangled together.
+      if (!this.pointerLocked && !this.lockRefused) {
         if (this.canvas.requestPointerLock) {
-          // Chrome rejects the promise when the document isn't focused, and
-          // iPadOS has no pointer lock at all — both land here.
           const p = this.canvas.requestPointerLock();
-          if (p && p.catch) p.catch(() => { this.lockFailed = true; });
-          acquiring = true;
+          if (p && p.catch) p.catch(() => { this.lockFailedAt = now(); });
         } else {
-          this.lockFailed = true;
+          this.lockFailedAt = now();
         }
       }
-      if (this.lockFailed && !this._mouseDrag) {
-        // no pointer lock: drag to aim, the way the touch look pad works
+      if (!this.pointerLocked && !this._mouseDrag) {
+        // no capture (yet, or at all): drag to aim, like the touch look pad
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
-        try { this.canvas.setPointerCapture(e.pointerId); } catch {}
+        try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
-      if (e.button === 0 && !acquiring) { this.held.add('fire'); this.justPressed.add('fire'); }
+      if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
       if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
@@ -168,7 +167,10 @@ export class Input {
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
-      if (!this.pointerLocked) {
+      if (this.pointerLocked) {
+        this.lockFailedAt = 0;     // it worked, so stop treating it as refused
+        this._mouseDrag = null;
+      } else {
         this.held.delete('fire');
         this.held.delete('ads');   // do not leave the sights stuck up
         this.onAction?.('pause');
@@ -176,13 +178,23 @@ export class Input {
     });
   }
 
+  /** A refusal is only worth respecting for a moment; after that, try again. */
+  get lockRefused() {
+    return this.lockFailedAt > 0 && now() - this.lockFailedAt < LOCK_RETRY_MS;
+  }
+
+  /** True when a mouse user is playing without the pointer captured. */
+  get needsMouseCapture() {
+    return this.mouseSeen && !this.pointerLocked;
+  }
+
   /** Only ever locks when a real mouse is in play — a touch device that has a
    *  keyboard attached still needs its screen for aiming. */
   requestLock() {
     if (this.hasTouch && !this.mouseSeen) return;
-    if (this.lockFailed || !this.canvas.requestPointerLock) return;
+    if (this.lockRefused || !this.canvas.requestPointerLock) return;
     const p = this.canvas.requestPointerLock();
-    if (p && p.catch) p.catch(() => { this.lockFailed = true; });
+    if (p && p.catch) p.catch(() => { this.lockFailedAt = now(); });
   }
 
   // ------------------------------------------------------------------- touch

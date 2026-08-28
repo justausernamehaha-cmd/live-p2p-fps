@@ -223,6 +223,9 @@ body:not(.touch-ui) .touchonly{display:none}
 .erow button.primary{width:auto;margin:0;border:0;background:var(--accent);color:#14100c}
 
 /* ---------------- shield / fire-lock readout ---------------- */
+#lockhint{position:absolute;left:50%;top:57%;transform:translateX(-50%);
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  background:#0009;padding:6px 12px;border-radius:5px;text-shadow:0 1px 2px #000}
 #protection{position:absolute;left:50%;top:62%;transform:translateX(-50%);
   text-align:center;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--accent2);text-shadow:0 2px 6px #000;white-space:pre-line;line-height:1.7}

@@ -636,6 +636,10 @@ class Game {
   }
 
   _hudTick(dt, input) {
+    // a mouse user with no pointer capture aims by dragging, which is worth
+    // saying out loud rather than leaving them to wonder
+    this.hud.lockHint(this.input.needsMouseCapture && !this.menuOpen && !this.editing && !this.hud.chatOpen);
+
     // shield and fire lock are only ever shown to the player they apply to
     const t = now();
     const shieldLeft = this.editing ? Infinity : (this.shieldUntil - t) / 1000;
