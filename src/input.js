@@ -88,6 +88,7 @@ export class Input {
     this.lastMoveAt = 0;
     this.lastButtonAt = -1e9;   // last mouse button edge
     this._prevButtons = 0;
+    this._mouseHeld = new Set();
     this.rawInput = null;       // did the browser grant unaccelerated movement?
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -152,7 +153,7 @@ export class Input {
     });
 
     // any way of leaving the page must not leave keys stuck down either
-    const release = () => { this.held.clear(); this._recalcKeys(); };
+    const release = () => { this.held.clear(); this._mouseHeld.clear(); this._recalcKeys(); };
     addEventListener('blur', release);
     addEventListener('visibilitychange', () => { if (document.hidden) release(); });
     this.releaseAll = release;
@@ -198,14 +199,10 @@ export class Input {
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
-      if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
-      if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
-      if (e.button === 0) this.held.delete('fire');
-      if (e.button === 2) this.held.delete('ads');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
 
@@ -215,7 +212,17 @@ export class Input {
     // that was still shifting the view, because the settle window never opened.
     // mousedown/mouseup are listened for as well, since the middle button in
     // particular does not always produce a pointer event.
-    const edge = () => { this.lastButtonAt = now(); };
+    const edge = e => {
+      this.lastButtonAt = now();
+      // Read which buttons are down from the event's own mask rather than from
+      // which button this particular event was about. A second button pressed
+      // while another is held may never reach the canvas, so deriving the state
+      // from `buttons` is the only way to see it - that is why firing while
+      // holding right click did nothing.
+      if (e && typeof e.buttons === 'number' && e.pointerType !== 'touch') {
+        this._syncMouseButtons(e.buttons);
+      }
+    };
     for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'auxclick']) {
       addEventListener(type, edge, true);
     }
@@ -228,6 +235,7 @@ export class Input {
       if (e.buttons !== this._prevButtons) {
         this._prevButtons = e.buttons;
         this.lastButtonAt = now();
+        this._syncMouseButtons(e.buttons);   // a press we never saw arrive
       }
 
       if (this.pointerLocked) {
@@ -283,6 +291,7 @@ export class Input {
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
         try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
+        this._mouseHeld.clear();
         this.releaseAll();         // nothing may survive losing the mouse
         this.onAction?.('pause');
       }
@@ -379,6 +388,24 @@ export class Input {
     };
     this.canvas.addEventListener('pointerup', end);
     this.canvas.addEventListener('pointercancel', end);
+  }
+
+  /** Mirror the mouse's button mask into the action set. Only actions the mouse
+   *  itself put there are taken away again, so a touch player holding FIRE is
+   *  never disarmed by a stray mouse event on a hybrid device. */
+  _syncMouseButtons(buttons) {
+    for (const [bit, action] of [[1, 'fire'], [2, 'ads']]) {
+      const down = (buttons & bit) !== 0;
+      const had = this._mouseHeld.has(action);
+      if (down && !had) {
+        this._mouseHeld.add(action);
+        this.held.add(action);
+        this.justPressed.add(action);
+      } else if (!down && had) {
+        this._mouseHeld.delete(action);
+        this.held.delete(action);
+      }
+    }
   }
 
   /** Touch aiming, usable from the canvas or from on top of a button. A finger

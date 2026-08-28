@@ -151,6 +151,7 @@ node test/mechanics.mjs
 node test/stuckkeys.mjs
 node test/pointerlock.mjs
 node test/mouselook.mjs
+node test/mousebuttons.mjs
 ```
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
