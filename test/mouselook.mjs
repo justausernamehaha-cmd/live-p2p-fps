@@ -93,12 +93,48 @@ const R = await page.evaluate(async () => {
   const whileRightHeld = async (delayMs, mx, buttons) => {
     g.player.yaw = 0;
     g.input.lastButtonAt = performance.now() - 5000;   // no recent edge at all
+    g.input._prevButtons = buttons;                    // and no button transition
     await sleep(delayMs);
     dispatchEvent(new PointerEvent('pointermove', {
       pointerType: 'mouse', bubbles: true, movementX: mx, movementY: 0, buttons }));
     await sleep(120);
     return +(g.player.yaw * 180 / Math.PI).toFixed(2);
   };
+  // the actual reported gesture: one button held, a SECOND one pressed. The
+  // second press may never reach the canvas, and pointermove may report no
+  // buttons at all, so the settle window has to open from a global edge or from
+  // the buttons mask changing.
+  const secondButton = async (firstButtons, secondButton, secondButtons, mx) => {
+    const c = document.getElementById('game');
+    g.player.yaw = 0;
+    g.input.lastButtonAt = -1e9;
+    g.input._prevButtons = 0;
+    // first button goes down and settles
+    dispatchEvent(new PointerEvent('pointerdown', { pointerId:1, pointerType:'mouse',
+      button:0, buttons:firstButtons, bubbles:true }));
+    await sleep(300);
+    // second button, delivered to the document rather than the canvas
+    document.dispatchEvent(new MouseEvent('mousedown', { button:secondButton, buttons:secondButtons, bubbles:true }));
+    await sleep(10);
+    move(mx, 0);
+    await sleep(120);
+    return +(g.player.yaw * 180 / Math.PI).toFixed(2);
+  };
+  out.leftHeld_middlePressed = await secondButton(1, 1, 5, -341);
+  out.leftHeld_rightPressed  = await secondButton(1, 2, 3, -341);
+  out.rightHeld_leftPressed  = await secondButton(2, 0, 3, -341);
+
+  // and a buttons-mask change seen only on a move must also count as an edge
+  {
+    g.player.yaw = 0;
+    g.input.lastButtonAt = -1e9;
+    g.input._prevButtons = 1;
+    dispatchEvent(new PointerEvent('pointermove', { pointerType:'mouse', bubbles:true,
+      movementX:-341, movementY:0, buttons:5 }));
+    await sleep(120);
+    out.buttonsMaskChange = +(g.player.yaw * 180 / Math.PI).toFixed(2);
+  }
+
   out.rightHeld_moveLater   = await whileRightHeld(300, -341, 2);   // right only
   out.rightHeld_andLeft     = await whileRightHeld(300, -341, 3);   // right + left
   out.rightHeld_smallDrift  = await whileRightHeld(300, -58, 2);
@@ -132,6 +168,10 @@ if (R.nudge50msIn !== 0) fail.push(`a nudge 50ms into a press moved ${R.nudge50m
 if (Math.abs(R.nudge100msIn) > NUDGE) fail.push(`a nudge 100ms into a press moved ${R.nudge100msIn} degrees`);
 if (Math.abs(R.nudge140msIn) > NUDGE) fail.push(`a nudge 140ms into a press moved ${R.nudge140msIn} degrees`);
 if (R.rightPress10ms !== 0) fail.push(`a nudge after a RIGHT press moved ${R.rightPress10ms} degrees`);
+if (R.leftHeld_middlePressed !== 0) fail.push(`left held + middle pressed moved ${R.leftHeld_middlePressed} degrees`);
+if (R.leftHeld_rightPressed !== 0) fail.push(`left held + right pressed moved ${R.leftHeld_rightPressed} degrees`);
+if (R.rightHeld_leftPressed !== 0) fail.push(`right held + left pressed moved ${R.rightHeld_leftPressed} degrees`);
+if (R.buttonsMaskChange !== 0) fail.push(`a buttons-mask change moved ${R.buttonsMaskChange} degrees`);
 if (R.rightHeld_moveLater !== 0) fail.push(`movement while right was held moved ${R.rightHeld_moveLater} degrees`);
 if (R.rightHeld_andLeft !== 0) fail.push(`right+left held moved ${R.rightHeld_andLeft} degrees`);
 if (R.rightHeld_smallDrift !== 0) fail.push(`a small drift while right was held moved ${R.rightHeld_smallDrift} degrees`);

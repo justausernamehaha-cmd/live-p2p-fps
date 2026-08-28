@@ -110,9 +110,11 @@ Pressing a mouse button physically disturbs the mouse, and pointer acceleration
 turns a few millimetres into tens of reported pixels, which lands as a view jolt.
 Two things guard against it: the lock is requested with `unadjustedMovement`, which turns
 OS acceleration off where the browser supports it (F3 shows `raw=true` when it
-was granted), and movement is capped per event: dropped entirely for the first 80ms of a
-press, throttled to about a degree until 170ms, and capped at roughly six
-degrees otherwise. Sustained turning still reaches ~380 degrees a second.
+was granted), and movement is capped per event: dropped entirely for the first 80ms after any
+button edge, throttled to about a degree until 170ms, and capped at roughly six
+degrees otherwise. Button edges are watched globally and for every button,
+because a second button pressed while another is held may not be delivered to
+the canvas at all — that gesture was the one still shifting the view. Sustained turning still reaches ~380 degrees a second.
 
 ## How the networking works
 

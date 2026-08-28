@@ -87,6 +87,7 @@ export class Input {
     this.lastClamp = [0, 0];
     this.lastMoveAt = 0;
     this.lastButtonAt = -1e9;   // last mouse button edge
+    this._prevButtons = 0;
     this.rawInput = null;       // did the browser grant unaccelerated movement?
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -172,11 +173,9 @@ export class Input {
   _bindMouse() {
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
-      // Any button being pressed shakes the mouse, so the settle window opens for
-      // all of them. That is not a binding: the right button still requests no
-      // pointer lock, sets no held state and triggers no action. It is only
-      // noted so the jolt it causes can be ignored.
-      this.lastButtonAt = now();
+      // The right button gets no binding: no pointer lock request, no held
+      // state, no action. Its effect on the settle window is handled by the
+      // global edge listeners above, along with every other button.
       if (e.button === 2) return;
       this.mouseSeen = true;
 
@@ -208,14 +207,32 @@ export class Input {
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
-      this.lastButtonAt = now();
       if (e.button === 2) return;
       if (e.button === 0) this.held.delete('fire');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
 
+    // Every button edge, on any target, for any button. The canvas listener only
+    // sees what is delivered to the canvas, and a second button pressed while
+    // another is held may not reach it at all - which is precisely the gesture
+    // that was still shifting the view, because the settle window never opened.
+    // mousedown/mouseup are listened for as well, since the middle button in
+    // particular does not always produce a pointer event.
+    const edge = () => { this.lastButtonAt = now(); };
+    for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'auxclick']) {
+      addEventListener(type, edge, true);
+    }
+
     addEventListener('pointermove', e => {
       if (e.pointerType === 'touch') return;
+
+      // A change in which buttons are down is an edge too, and it is the only
+      // signal available when the press itself is not delivered here.
+      if (e.buttons !== this._prevButtons) {
+        this._prevButtons = e.buttons;
+        this.lastButtonAt = now();
+      }
+
       if (this.pointerLocked) {
         this.lastMovement = [e.movementX, e.movementY];   // shown by the F3 overlay
 
