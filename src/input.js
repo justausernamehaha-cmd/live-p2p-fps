@@ -20,8 +20,18 @@ const TOUCH_SENS = 0.0042;
 const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
 const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
-const SPIKE_PX = 400;        // no real flick moves this far in one event
 const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
+// A locked pointer gets warped back to the centre of the screen by the browser,
+// and the warp is reported as movement equal to the distance from the cursor to
+// that centre. Measured, those arrive at 44-1500 px/ms; a human flick is under
+// 10. Speed separates them cleanly where magnitude cannot: the warp is small
+// when you click near the middle and large when you click at the edge, so any
+// fixed pixel threshold either lets it through or eats real aiming.
+const CLICK_WARP_MS = 50;    // the browser warps the locked cursor on button edges
+const MAX_PX_PER_MS = 40;    // backstop only; a very fast human flick can reach ~30
+const WARP_MIN_PX = 40;      // below this it is indistinguishable from a real nudge,
+                             // and harmless anyway - 40px is about five degrees
+const SPIKE_PX = 1200;       // last-resort cap for a single absurd event
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -55,6 +65,9 @@ export class Input {
     this.lockedAt = 0;         // when the pointer lock last engaged
     this.lockChanges = 0;      // how often it has engaged, shown by F3
     this.dropped = 0;          // movement events discarded as spikes
+    this.lastMoveAt = 0;
+    this.lastButtonAt = -1e9;   // last mouse button edge, for the click-warp window
+    this.lastDrop = [0, 0, 0];
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
@@ -145,8 +158,7 @@ export class Input {
 
       if (!reallyLocked && !this.lockRefused) {
         if (this.canvas.requestPointerLock) {
-          const p = this.canvas.requestPointerLock();
-          if (p && p.catch) p.catch(() => { this.lockFailedAt = now(); });
+          this._lock();
         } else {
           this.lockFailedAt = now();
         }
@@ -156,12 +168,14 @@ export class Input {
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
+      this.lastButtonAt = now();
       if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
       if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
+      this.lastButtonAt = now();
       if (e.button === 0) this.held.delete('fire');
       if (e.button === 2) this.held.delete('ads');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
@@ -177,8 +191,22 @@ export class Input {
         // flick, and there can be more than one of them, so the whole settling
         // window is ignored rather than a single event.
         if (now() - this.lockedAt < SETTLE_MS) { this.dropped++; return; }
-        if (Math.abs(e.movementX) > SPIKE_PX || Math.abs(e.movementY) > SPIKE_PX) {
+
+        // The warp fires on mouse button edges: the browser recentres the locked
+        // cursor and reports the trip as movement, sized by how far from the
+        // middle of the window you happened to be. That is why it is small when
+        // you click near the centre and huge at the edge, and why no pixel
+        // threshold can catch it. Ignoring the few milliseconds either side of a
+        // click does, and costs nothing: nobody aims during the press itself.
+        if (now() - this.lastButtonAt < CLICK_WARP_MS) { this.dropped++; return; }
+
+        const t = now();
+        const gap = Math.max(0.5, t - (this.lastMoveAt || t));
+        this.lastMoveAt = t;
+        const dist = Math.hypot(e.movementX, e.movementY);
+        if ((dist > WARP_MIN_PX && dist / gap > MAX_PX_PER_MS) || dist > SPIKE_PX) {
           this.dropped++;
+          this.lastDrop = [e.movementX, e.movementY, +(dist / gap).toFixed(0)];
           return;
         }
 
@@ -230,8 +258,26 @@ export class Input {
   requestLock() {
     if (this.hasTouch && !this.mouseSeen) return;
     if (this.lockRefused || !this.canvas.requestPointerLock) return;
-    const p = this.canvas.requestPointerLock();
-    if (p && p.catch) p.catch(() => { this.lockFailedAt = now(); });
+    this._lock();
+  }
+
+  /** Raw pointer input where the browser offers it: unadjustedMovement turns off
+   *  OS acceleration and, more importantly here, the recentring warps that get
+   *  reported as enormous movement deltas. Not every browser accepts the option,
+   *  so a rejection retries the plain form before giving up. */
+  _lock() {
+    let p;
+    try {
+      p = this.canvas.requestPointerLock({ unadjustedMovement: true });
+    } catch {
+      p = this.canvas.requestPointerLock();
+    }
+    if (p && p.catch) {
+      p.catch(() => {
+        const plain = this.canvas.requestPointerLock();
+        if (plain && plain.catch) plain.catch(() => { this.lockFailedAt = now(); });
+      });
+    }
   }
 
   // ------------------------------------------------------------------- touch
