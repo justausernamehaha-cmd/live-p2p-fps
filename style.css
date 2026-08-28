@@ -179,7 +179,7 @@ kbd{background:#0b1119;border:1px solid var(--line);border-bottom-width:2px;bord
 body.touch-ui #tside{top:calc(56px + env(safe-area-inset-top,0px))}
 body.touch-ui #topleft{top:calc(102px + env(safe-area-inset-top,0px))}
 #editbtn{position:absolute;left:calc(12px + env(safe-area-inset-left,0px));
-  top:calc(10px + env(safe-area-inset-top,0px));pointer-events:auto}
+  top:calc(64px + env(safe-area-inset-top,0px));pointer-events:auto}
 
 /* ---------------- layout editor ---------------- */
 body.editing #hud{opacity:.25}
@@ -187,17 +187,19 @@ body.editing .tbtn{outline:2px dashed #ffffff66;outline-offset:3px;transition:ou
 body.editing .tbtn.selected{outline:2px solid var(--accent);background:#ff8a3d33}
 body.editing #editbtn{display:none}
 body.editing #fsbtn{display:none}
-/* pills start under the top panel, so nudge the un-customised ones clear of it
-   (anything already dragged has an inline position and is unaffected) */
-body.editing #tside{top:132px}
 
-/* Docked to the top, not the bottom: the action buttons live in the lower half
-   of the screen and a bottom panel would sit right on top of the things you are
-   trying to drag. */
-#editpanel{position:fixed;left:0;right:0;top:0;z-index:24;
-  background:#0b111fee;border-bottom:1px solid var(--line);backdrop-filter:blur(4px);
-  padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;
-  display:flex;flex-direction:column;gap:8px}
+/* Docked to the left edge, clear of the action buttons on the right and of the
+   readouts along the bottom, so nothing has to be shoved aside while editing. */
+#editpanel{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:24;
+  width:min(76vw,264px);
+  background:#0b111ff2;border:1px solid var(--line);border-left:0;
+  border-radius:0 12px 12px 0;backdrop-filter:blur(4px);
+  padding:14px;display:flex;flex-direction:column;gap:12px}
+/* the size control is meaningless until there is something selected to resize */
+#sizerow{display:none}
+body.has-selection #sizerow{display:flex}
+.esize{flex-wrap:wrap}
+.esize input[type=range]{flex:1 1 100%;order:3}
 #editpanel.hidden{display:none}
 .ehead{display:flex;flex-direction:column;gap:2px}
 .ehead b{font-size:13px;letter-spacing:.12em;text-transform:uppercase}
@@ -207,8 +209,12 @@ body.editing #tside{top:132px}
 .esize input[type=range]{flex:1;margin:0;accent-color:var(--accent);background:none;padding:0}
 .esize input:disabled{opacity:.35}
 #sizeval{width:44px;text-align:right;color:var(--text);font-size:13px;letter-spacing:0}
-.erow{display:flex;align-items:center;gap:10px}
-#editshield{flex:1;font-size:11px;color:var(--accent2);letter-spacing:.04em}
+.erow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.erow button{flex:1}
+#editshield{flex:1 1 100%;font-size:11px;color:var(--accent2);letter-spacing:.04em;
+  order:-1;margin-bottom:2px}
+/* button rearranging only means anything when there are buttons */
+body:not(.touch-ui) .touchonly{display:none}
 .erow button{padding:10px 16px;border-radius:8px;border:1px solid var(--line);
   background:transparent;color:var(--dim);font-size:12px;letter-spacing:.12em;font-weight:700}
 .erow button.primary{width:auto;margin:0;border:0;background:var(--accent);color:#14100c}

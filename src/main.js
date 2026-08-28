@@ -145,6 +145,25 @@ class Game {
     this.layout = new Layout();
     document.getElementById('donelayout').addEventListener('click', () => this._endEdit());
 
+    // sensitivity lives in the same panel: LAYOUT opens it on a phone, backtick
+    // opens it on a keyboard
+    const sens = document.getElementById('sensslider');
+    const sensVal = document.getElementById('sensval');
+    const showSens = () => { sensVal.textContent = (this.input.sensitivity).toFixed(2) + '\u00d7'; };
+    sens.value = Math.round(this.input.sensitivity * 100);
+    showSens();
+    sens.addEventListener('input', () => {
+      this.input.setSensitivity(Number(sens.value) / 100);
+      showSens();
+    });
+
+    addEventListener('keydown', e => {
+      if (e.code !== 'Backquote' || isTyping(e) || this.hud.chatOpen) return;
+      e.preventDefault();
+      if (this.editing) this._endEdit();
+      else this._startEdit();
+    });
+
     const fsbtn = document.getElementById('fsbtn');
     fsbtn.addEventListener('click', () => this._toggleFullscreen());
     document.addEventListener('fullscreenchange', () => {
@@ -373,10 +392,15 @@ class Game {
 
   // ---------------------------------------------------------- layout editing
   _startEdit() {
-    if (this.editing || this.menuOpen) return;
+    if (this.editing || this.menuOpen || !this.running) return;
     this.editing = true;
     this.input.editMode = true;
     this.input.held.clear();
+    const touch = document.body.classList.contains('touch-ui');
+    document.getElementById('edittitle').textContent = touch ? 'Layout & settings' : 'Settings';
+    document.getElementById('edithint').textContent = touch
+      ? 'drag a button to move it \u00b7 tap one, then resize it \u00b7 ` also opens this'
+      : 'press ` again, or DONE, to close';
     this.layout.enter();
     document.exitPointerLock?.();
   }
@@ -390,6 +414,7 @@ class Game {
     // linger either: three seconds to get to cover, five before the gun works
     this.shieldUntil = now() + EDIT_SHIELD_TAIL;
     this.fireLockUntil = now() + EDIT_FIRE_LOCK;
+    this._relock();
   }
 
   get shielded() { return this.editing || now() < this.shieldUntil; }

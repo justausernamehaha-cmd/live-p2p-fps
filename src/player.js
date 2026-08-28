@@ -33,7 +33,9 @@ export const AIR = {
   accel: 55,                    // how hard the strafe pulls
   cap: 1.2                      // m/s of "wished" speed the air grants
 };
-const GROUND_FRICTION = 5;      // bleeds off over-speed; a fast re-jump keeps most of it
+const GROUND_FRICTION = 5;      // stopping friction, only when you stop asking to move
+const GROUND_DRAG = 0.35;       // the slow bleed on carried speed while still running
+const GROUND_STEER = 9;         // how fast carried momentum can be turned, magnitude kept
 const SPEED_CAP = 22;           // sanity limit, well above anything reachable by hand
 const MAX_STEP_DIST = 0.3;      // sub-step the movement so fast players cannot tunnel
 const STEP_SMOOTH_RATE = 5;     // m/s the view catches up after a step, i.e. a linear climb
@@ -158,13 +160,30 @@ export class Player {
         // direct control: you go exactly where you press, at once
         this.vel.x = wx * maxSpeed;
         this.vel.z = wz * maxSpeed;
+      } else if (wishLen > 0.02 && !wantJump) {
+        // Carrying more than a walk — off a hop chain, a heavy landing, a run
+        // down some stairs. Touching the ground must not confiscate that, so the
+        // magnitude is kept and only the direction is steered, bleeding at
+        // GROUND_DRAG rather than stopping friction.
+        //
+        // A frame that ends in a jump skips this branch entirely: steering the
+        // velocity toward the keys would undo the alignment a strafe jumper just
+        // built, which is exactly what a hop chain is made of.
+        const k = Math.min(1, GROUND_STEER * dt);
+        const nx = this.vel.x + (wx * speed - this.vel.x) * k;
+        const nz = this.vel.z + (wz * speed - this.vel.z) * k;
+        const m = Math.hypot(nx, nz) || 1;
+        this.vel.x = (nx / m) * speed;
+        this.vel.z = (nz / m) * speed;
+        const drop = Math.max(0, 1 - GROUND_DRAG * dt);
+        this.vel.x *= drop;
+        this.vel.z *= drop;
       } else if (!wantJump) {
-        // landed and stayed down: bleed the extra speed off
+        // you stopped asking to move, so stop
         const drop = Math.max(0, 1 - GROUND_FRICTION * dt);
         this.vel.x *= drop;
         this.vel.z *= drop;
       }
-      // over-speed and taking off again: every bit of it is kept
     } else if (Math.abs(wish.x) > 0.02) {
       // Air control, and the whole of bunny hopping.
       //
@@ -185,8 +204,19 @@ export class Player {
       const add = wishSpeed - current;
       if (add > 0) {
         const accel = Math.min(AIR.accel * wishSpeed * dt, add);
+        const beforeMag = Math.hypot(this.vel.x, this.vel.z);
         this.vel.x += nx * accel;
         this.vel.z += nz * accel;
+
+        // Air control redirects, it never brakes. Straight Quake would let the
+        // budget go negative and scrub speed when you flip from A to D against
+        // your own momentum; here the magnitude is restored, so swapping strafe
+        // keys turns the momentum instead of throwing it away.
+        const afterMag = Math.hypot(this.vel.x, this.vel.z);
+        if (afterMag < beforeMag && afterMag > 1e-4) {
+          this.vel.x *= beforeMag / afterMag;
+          this.vel.z *= beforeMag / afterMag;
+        }
       }
     }
 
@@ -255,9 +285,11 @@ export class Player {
     const blockedZ = this._axis('z', dz, boxes);
     const flat = { ...this.pos };
 
-    // if something got in the way, retry the same move one step higher so
-    // stairs, kerbs and crate edges are walked over instead of into
-    if ((blockedX || blockedZ) && this.onGround) {
+    // If something got in the way, retry the same move one step higher so stairs,
+    // kerbs and crate edges are walked over instead of into. Not gated on being
+    // grounded: a player mid-hop clips steps constantly, and refusing to step
+    // there is what used to stop a run dead at the bottom of a staircase.
+    if ((blockedX || blockedZ) && (this.onGround || this.vel.y <= 0)) {
       this.pos = { ...start, y: start.y + STEP_HEIGHT };
       if (this._overlaps(boxes)) {
         this.pos = flat;
@@ -275,6 +307,12 @@ export class Player {
         }
       }
     }
+
+    // Anything still genuinely blocked loses its speed along that axis — running
+    // into a wall costs you the run. A glancing slide keeps the other component,
+    // which is what lets you scrape a corner without stopping.
+    if (Math.abs(dx) > 1e-6 && Math.abs(this.pos.x - start.x) < Math.abs(dx) * 0.25) this.vel.x = 0;
+    if (Math.abs(dz) > 1e-6 && Math.abs(this.pos.z - start.z) < Math.abs(dz) * 0.25) this.vel.z = 0;
 
     // vertical
     this.onGround = false;

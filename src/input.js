@@ -20,10 +20,17 @@ const TOUCH_SENS = 0.0042;
 const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
 
+// Sliders, checkboxes and buttons are <input> too, and a focused slider must not
+// swallow the whole keyboard — that is what stopped ` from closing the settings
+// panel once the sensitivity slider had been touched.
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'tel', 'email', 'password', 'number', '']);
+
 /** true while the keystroke belongs to a text field (menu inputs, chat box) */
 export function isTyping(e) {
   const t = e.target;
-  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+  if (!t) return false;
+  if (t.isContentEditable || t.tagName === 'TEXTAREA') return true;
+  return t.tagName === 'INPUT' && TEXT_INPUT_TYPES.has((t.type || '').toLowerCase());
 }
 
 export class Input {
@@ -106,22 +113,29 @@ export class Input {
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
       this.mouseSeen = true;
+
+      // The click that grabs the mouse must not also be a shot — but it used to
+      // be dropped entirely, which meant right-clicking to aim silently grabbed
+      // the pointer and started turning the view instead of raising the sights.
+      // Only the trigger is suppressed now; everything else goes through.
+      let acquiring = false;
       if (!this.pointerLocked && !this.lockFailed) {
         if (this.canvas.requestPointerLock) {
           // Chrome rejects the promise when the document isn't focused, and
           // iPadOS has no pointer lock at all — both land here.
           const p = this.canvas.requestPointerLock();
           if (p && p.catch) p.catch(() => { this.lockFailed = true; });
-          return;                       // this click only grabs the mouse
+          acquiring = true;
+        } else {
+          this.lockFailed = true;
         }
-        this.lockFailed = true;
       }
       if (this.lockFailed && !this._mouseDrag) {
         // no pointer lock: drag to aim, the way the touch look pad works
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch {}
       }
-      if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
+      if (e.button === 0 && !acquiring) { this.held.add('fire'); this.justPressed.add('fire'); }
       if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
@@ -154,7 +168,11 @@ export class Input {
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
-      if (!this.pointerLocked) { this.held.delete('fire'); this.onAction?.('pause'); }
+      if (!this.pointerLocked) {
+        this.held.delete('fire');
+        this.held.delete('ads');   // do not leave the sights stuck up
+        this.onAction?.('pause');
+      }
     });
   }
 
@@ -298,6 +316,12 @@ export class Input {
   }
 
   endFrame() { this.justPressed.clear(); }
+
+  /** One multiplier for both the mouse and the touch look pad. */
+  setSensitivity(v) {
+    this.sensitivity = clamp(v, 0.2, 3);
+    try { localStorage.setItem('pa.sens', String(this.sensitivity)); } catch { /* private mode */ }
+  }
 
   setTextMode(on) {
     this.textMode = on;

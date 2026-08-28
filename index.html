@@ -84,12 +84,16 @@
 <!-- ============ touch layout editor ============ -->
 <div id="editpanel" class="hidden">
   <div class="ehead">
-    <b>Editing layout</b>
-    <span>drag a button to move it &middot; tap one, then use the slider to resize</span>
+    <b id="edittitle">Settings</b>
+    <span id="edithint">drag a button to move it &middot; tap one, then use the slider to resize</span>
   </div>
-  <label class="esize">Size
+  <label class="esize touchonly" id="sizerow">Button size
     <input type="range" id="sizeslider" min="55" max="200" step="5" value="100" disabled>
     <span id="sizeval">--</span>
+  </label>
+  <label class="esize" id="sensrow">Sensitivity
+    <input type="range" id="sensslider" min="20" max="300" step="5" value="100">
+    <span id="sensval">1.00&times;</span>
   </label>
   <div class="erow">
     <span id="editshield">shielded while editing</span>

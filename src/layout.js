@@ -109,6 +109,7 @@ export class Layout {
 
   select(name) {
     this.selected = name;
+    document.body.classList.add('has-selection');
     for (const el of this.buttons) el.classList.toggle('selected', el.dataset.btn === name);
     const d = this._entry(name);
     this.slider.disabled = false;
@@ -124,6 +125,7 @@ export class Layout {
     this.slider.disabled = true;
     this.sizeval.textContent = '--';
     this.selected = null;
+    document.body.classList.remove('has-selection');
     for (const el of this.buttons) el.classList.remove('selected');
   }
 
@@ -131,6 +133,7 @@ export class Layout {
     this.editing = false;
     this._drag = null;
     document.body.classList.remove('editing');
+    document.body.classList.remove('has-selection');
     this.panel.classList.add('hidden');
     for (const el of this.buttons) el.classList.remove('selected');
     this._save();
@@ -139,6 +142,7 @@ export class Layout {
   reset() {
     this.data = {};
     this.selected = null;
+    document.body.classList.remove('has-selection');
     this.slider.disabled = true;
     this.sizeval.textContent = '--';
     for (const el of this.buttons) el.classList.remove('selected');

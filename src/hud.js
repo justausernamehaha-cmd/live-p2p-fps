@@ -130,15 +130,33 @@ export class Hud {
     this.el.chatform.classList.remove('hidden');
     this.el.chatinput.value = '';
     this.el.chatinput.focus();
+
+    // Tapping anywhere off the box leaves message mode — on a phone there is no
+    // Escape key to reach for. Armed a tick late so the very tap that opened the
+    // chat does not immediately close it again.
+    setTimeout(() => {
+      if (!this.chatOpen || this._outsideTap) return;
+      this._outsideTap = e => {
+        if (this.el.chatform.contains(e.target)) return;
+        this.closeChat();
+        this._onChatClose?.();
+      };
+      addEventListener('pointerdown', this._outsideTap, true);
+    }, 0);
   }
 
   closeChat() {
     this.chatOpen = false;
     this.el.chatform.classList.add('hidden');
     this.el.chatinput.blur();
+    if (this._outsideTap) {
+      removeEventListener('pointerdown', this._outsideTap, true);
+      this._outsideTap = null;
+    }
   }
 
   bindChat(onSubmit, onClose) {
+    this._onChatClose = onClose;
     this.el.chatform.addEventListener('submit', e => {
       e.preventDefault();
       const text = this.el.chatinput.value.trim();

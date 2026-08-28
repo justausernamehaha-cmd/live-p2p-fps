@@ -41,7 +41,8 @@ same one. All three are public infrastructure that only carries the handshake.
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
 | Fullscreen | button, top right | button, top right |
-| Rearrange the buttons | — | `LAYOUT`, top left |
+| Settings (sensitivity) | `` ` `` | `LAYOUT`, above the player count |
+| Rearrange the buttons | — | `LAYOUT`, above the player count |
 
 On a phone, **turn the device sideways**. Portrait works, and the camera widens
 its field of view to compensate, but landscape is far better to play in.
@@ -65,6 +66,12 @@ view the same way, and every frame pays out. Chained jumps keep what you built �
 a frame that ends in a jump pays no ground friction — so a good run climbs from
 6.2 m/s walking to somewhere north of 13, while holding `W` and hammering jump
 gets you exactly walking speed and no more.
+
+Momentum is yours once you have it. A heavy landing keeps it, running up stairs
+keeps it, and flipping from `A` to `D` in mid-air redirects it rather than
+scrubbing it off — air control can only ever turn or add to your speed, never
+brake. Running head-on into a wall still costs you the run, which is the one way
+to lose it.
 
 Sprint latches: tap `Shift` once and you keep sprinting until you release
 forward. Crouching takes 0.3 s each way so it cannot be flickered, and stairs are

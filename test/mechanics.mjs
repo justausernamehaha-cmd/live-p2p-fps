@@ -45,7 +45,11 @@ const R = await page.evaluate(async () => {
   out.stopSpeedAfter80ms = +speed().toFixed(2);
 
   // ---- sprint latches until forward is released ----
-  park(0, 0.3, -20);
+  // on a bare floor: at 9 m/s the arena's cover walls are only a third of a
+  // second away, and running into one legitimately costs all your speed
+  const sprintBoxes = g.world.boxes;
+  g.world.boxes = sprintBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+  park(0, 0.3, 0);
   await sleep(300);
   keys('fwd', 'sprint');
   await sleep(120);
@@ -59,6 +63,8 @@ const R = await page.evaluate(async () => {
   await sleep(200);
   out.sprintEndedAfterForwardReleased = !g.player.sprintLatch;
   keys();
+  g.world.boxes = sprintBoxes;
+  await sleep(100);
 
   // ---- crouch is a 0.3s animation, not a snap ----
   park(0, 0.3, -20);
@@ -166,6 +172,84 @@ const R = await page.evaluate(async () => {
     movingHip: +window.__spreadFor(rifle, true, 0).toFixed(5),
     aimedMoving: +window.__spreadFor(rifle, true, 1).toFixed(5)
   };
+
+  // ---- momentum must survive landings, stairs and strafe swaps ----
+  out.momentum = {};
+
+  // a heavy landing at speed, still holding forward
+  {
+    const real = g.world.boxes;
+    g.world.boxes = real.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+    park(0, 8, 0, 0);
+    g.player.vel = { x: 0, y: 0, z: -14 };
+    keys('fwd');
+    for (let i = 0; i < 60 && !g.player.onGround; i++) await sleep(50);
+    const onImpact = speed();
+    await sleep(600);
+    out.momentum.heavyLanding = {
+      atImpact: +onImpact.toFixed(2),
+      after600msOnGround: +speed().toFixed(2),
+      kept: speed() > onImpact * 0.75
+    };
+    keys();
+    g.world.boxes = real;
+    await sleep(100);
+  }
+
+  // running up the centre staircase at speed
+  {
+    park(13, 0.3, 0, Math.PI / 2);
+    await sleep(300);
+    g.player.vel = { x: -12, y: 0, z: 0 };
+    const before = 12;
+    keys('fwd');
+    await sleep(700);
+    const after = speed();
+    keys();
+    out.momentum.upStairs = {
+      before,
+      after: +after.toFixed(2),
+      climbedTo: +g.player.pos.y.toFixed(2),
+      kept: after > before * 0.7 && g.player.pos.y > 2
+    };
+    await sleep(200);
+  }
+
+  // swapping strafe keys mid-air, against your own momentum
+  {
+    const real = g.world.boxes;
+    g.world.boxes = real.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+    park(0, 6, 0, 0);
+    g.player.vel = { x: 0, y: 2, z: -12 };
+    const start = speed();
+    keys('right');
+    await sleep(300);
+    const mid = speed();
+    keys('left');                       // flip against the momentum
+    let low = Infinity;
+    for (let i = 0; i < 30; i++) { await sleep(16); low = Math.min(low, speed()); }
+    keys();
+    out.momentum.strafeSwapInAir = {
+      start: +start.toFixed(2),
+      beforeSwap: +mid.toFixed(2),
+      lowestAfterSwap: +low.toFixed(2),
+      kept: low >= mid * 0.98
+    };
+    g.world.boxes = real;
+    await sleep(100);
+  }
+
+  // ...but running head-on into a wall must still cost you the run
+  {
+    park(0, 0.3, -26, 0);
+    await sleep(300);
+    g.player.vel = { x: 0, y: 0, z: -14 };
+    keys('fwd');
+    await sleep(700);
+    out.momentum.wallBump = { speedAfter: +speed().toFixed(2), stopped: speed() < 7 };
+    keys();
+    await sleep(200);
+  }
 
   // ---- speed cap and no tunnelling through a thin wall ----
   park(0, 0.3, -18, 0);
