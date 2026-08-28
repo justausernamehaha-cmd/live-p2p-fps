@@ -469,9 +469,12 @@ class Game {
     const moving = Math.hypot(p.vel.x, p.vel.z) > 1.5 || !p.onGround;
     const spread = spreadFor(w, moving, this.adsT);
 
-    // muzzle position for the tracer: roughly where the viewmodel barrel ends
-    const right = new THREE.Vector3().crossVectors(base, new THREE.Vector3(0, 1, 0)).normalize();
-    const muzzle = eye.clone().addScaledVector(right, 0.22).addScaledVector(base, 0.6).setY(eye.y - 0.15);
+    // the tracer leaves the barrel tip of the gun actually on screen: read its
+    // position out of the viewmodel scene (which is camera space) and put it
+    // into the world with the camera's own transform
+    this.camera.updateMatrixWorld(true);
+    const muzzle = this.viewmodel.muzzleOffset(new THREE.Vector3())
+      .applyMatrix4(this.camera.matrixWorld);
 
     const damageByPeer = new Map();
     let endPoint = null;
@@ -590,6 +593,11 @@ class Game {
 
     p.update(dt, input);
     if (this.loadout.update(t)) this.audio.reload();
+
+    // camera and viewmodel first: the shot is traced from where they actually
+    // are this frame, not from where they were on the last one
+    this._camera(dt);
+    this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
     this._fire(t, input);
 
     // respawn
@@ -603,9 +611,6 @@ class Game {
         this.hud.setHealth(100);
       }
     }
-
-    this._camera(dt);
-    this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
 
     // outgoing state
     if (this.net && t - this.lastStateSent > 1 / STATE_HZ) {
@@ -653,6 +658,7 @@ class Game {
           `stick     x=${i.stick.x.toFixed(2)} y=${i.stick.y.toFixed(2)}`,
           `mouse     locked=${i.pointerLocked} refused=${i.lockRefused} drag=${!!i._mouseDrag}`,
           `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
+          `lastMove  ${i.lastMovement[0]}, ${i.lastMovement[1]}  (spikes are dropped)`,
           `yaw/pitch ${p.yaw.toFixed(2)} / ${p.pitch.toFixed(2)}`,
           `vel       ${Math.hypot(p.vel.x, p.vel.z).toFixed(2)} m/s  ground=${p.onGround}`,
           `fps       ${Math.round(1 / Math.max(dt, 0.001))}`

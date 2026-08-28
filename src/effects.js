@@ -125,6 +125,14 @@ export class ViewModel {
     };
     this.body = mk(0.09, 0.11, 0.5, 0x2f3644, 0, 0, -0.1);
     this.barrel = mk(0.05, 0.05, 0.42, 0x1d2230, 0, 0.02, -0.42);
+
+    // An empty parented to the barrel, sitting on its front face. Because it is
+    // a child it inherits every per-weapon scale and the whole sway/kick/ADS
+    // transform, so a tracer drawn from here leaves the actual muzzle rather
+    // than from a constant guessed near it.
+    this.muzzleTip = new THREE.Object3D();
+    this.muzzleTip.position.set(0, 0, -0.21);      // half the 0.42 barrel length
+    this.barrel.add(this.muzzleTip);
     this.grip = mk(0.07, 0.16, 0.09, 0x232936, 0, -0.12, 0.05);
     this.stock = mk(0.07, 0.09, 0.2, 0x232936, 0, -0.03, 0.2);
     this.accent = mk(0.06, 0.03, 0.14, 0xd9743b, 0, 0.07, -0.12);
@@ -144,6 +152,14 @@ export class ViewModel {
   }
 
   fire(scale = 1) { this.kick = Math.min(0.16, this.kick + 0.055 * scale); }
+
+  /** Muzzle position in camera space. The viewmodel scene's camera sits at the
+   *  origin looking down -Z, so a world position in that scene is already
+   *  relative to the player's eye. */
+  muzzleOffset(target) {
+    this.group.updateMatrixWorld(true);
+    return this.muzzleTip.getWorldPosition(target);
+  }
 
   update(dt, player, reloading, adsT = 0) {
     this.kick *= Math.exp(-13 * dt);

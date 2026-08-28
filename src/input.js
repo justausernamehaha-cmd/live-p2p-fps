@@ -20,6 +20,7 @@ const TOUCH_SENS = 0.0042;
 const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
 const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
+const SPIKE_PX = 400;        // no real flick moves this far in one event
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
 // swallow the whole keyboard — that is what stopped ` from closing the settings
@@ -50,6 +51,8 @@ export class Input {
     // rejects a re-lock for a moment after every Esc, and a permanent flag meant
     // one press of Esc dropped the session into drag-to-look for good.
     this.lockFailedAt = 0;
+    this.freshLock = false;
+    this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     this.keyboardSeen = false;
@@ -156,9 +159,16 @@ export class Input {
     addEventListener('pointermove', e => {
       if (e.pointerType === 'touch') return;
       if (this.pointerLocked) {
-        // the first event after a lock engages can carry the whole distance from
-        // wherever the cursor happened to be; that is a spike, not a flick
-        if (Math.abs(e.movementX) > 600 || Math.abs(e.movementY) > 600) return;
+        this.lastMovement = [e.movementX, e.movementY];   // shown by the F3 overlay
+
+        // The first event after a lock engages carries the whole jump from
+        // wherever the cursor was sitting to the locked origin. It is not a
+        // flick, it is bookkeeping, and acting on it snaps the view a long way
+        // in a direction that stays the same for as long as you keep clicking
+        // in the same spot. Drop it outright.
+        if (this.freshLock) { this.freshLock = false; return; }
+        if (Math.abs(e.movementX) > SPIKE_PX || Math.abs(e.movementY) > SPIKE_PX) return;
+
         this.lookDX += e.movementX * MOUSE_SENS * this.sensitivity;
         this.lookDY += e.movementY * MOUSE_SENS * this.sensitivity;
       } else if (this._mouseDrag && this._mouseDrag.id === e.pointerId) {
@@ -181,6 +191,8 @@ export class Input {
       if (this.pointerLocked) {
         this.lockFailedAt = 0;     // it worked, so stop treating it as refused
         this._mouseDrag = null;
+        this.freshLock = true;     // ignore the settling event that follows
+        this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
         this.releaseAll();         // nothing may survive losing the mouse
