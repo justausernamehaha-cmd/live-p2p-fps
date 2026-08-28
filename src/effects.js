@@ -4,7 +4,7 @@ const TRACERS = 48;
 const IMPACTS = 32;
 
 export class Effects {
-  constructor(scene, camera) {
+  constructor(scene, camera, vmScene) {
     this.scene = scene;
     this.camera = camera;
     this.tracers = [];
@@ -36,10 +36,14 @@ export class Effects {
       this.impacts.push({ mesh: m, life: 0 });
     }
 
-    // muzzle flash lives on the camera so it lines up with the viewmodel
+    // the world flash lights the level; the second one lives in the viewmodel
+    // scene, which is rendered separately and cannot see the first
     this.flash = new THREE.PointLight(0xffc070, 0, 12);
     this.flash.position.set(0.28, -0.22, -0.9);
     camera.add(this.flash);
+    this.vmFlash = new THREE.PointLight(0xffc070, 0, 4);
+    this.vmFlash.position.set(0.3, -0.1, -1.1);
+    vmScene.add(this.vmFlash);
     this.flashLife = 0;
   }
 
@@ -67,6 +71,7 @@ export class Effects {
 
   muzzle(scale = 1) {
     this.flash.intensity = 9 * scale;
+    this.vmFlash.intensity = 3.5 * scale;
     this.flashLife = 0.05;
     this.shake = Math.min(0.35, this.shake + 0.05 * scale);
   }
@@ -88,19 +93,23 @@ export class Effects {
     }
     if (this.flashLife > 0) {
       this.flashLife -= dt;
-      if (this.flashLife <= 0) this.flash.intensity = 0;
+      if (this.flashLife <= 0) { this.flash.intensity = 0; this.vmFlash.intensity = 0; }
     }
     this.shake *= Math.exp(-11 * dt);
   }
 }
 
-/** Chunky low-poly gun held in view; purely cosmetic. */
+/** Chunky low-poly gun held in view; purely cosmetic.
+ *  Added to a dedicated scene rather than to the camera: main.js renders that
+ *  scene in a second pass with the depth buffer cleared, so the gun always draws
+ *  on top and stays whole even with the muzzle buried in a wall. Its transform is
+ *  camera-relative, which is exactly what a camera sitting at the origin gives. */
 export class ViewModel {
-  constructor(camera) {
+  constructor(parent) {
     this.group = new THREE.Group();
     this.group.position.set(0.25, -0.2, -0.78);
     this.group.scale.setScalar(0.8);
-    camera.add(this.group);
+    parent.add(this.group);
     this.kick = 0;
     this.reloadT = 0;
     this.sway = { x: 0, y: 0 };
@@ -136,20 +145,22 @@ export class ViewModel {
 
   fire(scale = 1) { this.kick = Math.min(0.16, this.kick + 0.055 * scale); }
 
-  update(dt, player, reloading) {
+  update(dt, player, reloading, adsT = 0) {
     this.kick *= Math.exp(-13 * dt);
     const targetSwayX = -player.vel.x * 0.004;
     const targetSwayY = player.vel.y * 0.003;
     this.sway.x += (targetSwayX - this.sway.x) * Math.min(1, dt * 8);
     this.sway.y += (targetSwayY - this.sway.y) * Math.min(1, dt * 8);
 
+    // aiming holds the gun perfectly still: sway, bob and kick all fade out
+    const steady = 1 - adsT;
     this.group.position.set(
-      0.25 + this.sway.x,
-      -0.2 + player.bob * 0.6 + this.sway.y - this.kick * 0.12,
-      -0.78 + this.kick
+      0.25 + this.sway.x * steady,
+      -0.2 + (player.bob * 0.6 + this.sway.y) * steady - this.kick * 0.12 * steady,
+      -0.78 + this.kick * steady
     );
     this.reloadT += ((reloading ? 1 : 0) - this.reloadT) * Math.min(1, dt * 7);
-    this.group.rotation.x = -this.kick * 1.4 - this.reloadT * 0.55;
+    this.group.rotation.x = -this.kick * 1.4 * steady - this.reloadT * 0.55;
     this.group.rotation.z = this.reloadT * 0.3;
     this.group.visible = player.alive;
   }

@@ -1,22 +1,40 @@
 export const HEADSHOT_MULT = 2;
 
+// `spread` is the gun's own pattern and is always present — only the shotgun has
+// one, because a shot pattern is what a shotgun is. `hipSpread` is the extra cone
+// that hipfire adds, scaled by how accurate the stance is:
+//
+//   aiming (right click)  100%  -> no added cone at all, moving or not
+//   standing hipfire       95%  -> 5% of hipSpread
+//   moving hipfire         90%  -> 10% of hipSpread
+export const ACCURACY = { ads: 1, standing: 0.95, moving: 0.90 };
+export const ADS_ZOOM = 1.25;
+export const ADS_TIME = 0.4;      // seconds to raise or lower the sights
+
+/** Cone half-angle in radians for the current stance. */
+export function spreadFor(weapon, moving, adsT) {
+  const hipAcc = moving ? ACCURACY.moving : ACCURACY.standing;
+  const acc = hipAcc + (ACCURACY.ads - hipAcc) * adsT;
+  return weapon.spread + weapon.hipSpread * (1 - acc);
+}
+
 export const WEAPONS = [
   {
     id: 0, name: 'Rifle', auto: true,
-    damage: 21, pellets: 1, interval: 0.105, mag: 30, reserve: 150,
-    spread: 0.009, spreadMove: 0.03, recoil: 0.013, recoilYaw: 0.004,
+    damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150,
+    spread: 0, hipSpread: 0.09, recoil: 0.013, recoilYaw: 0.004,
     reloadTime: 2.0, range: 140, color: 0xffd08a, shakeScale: 1
   },
   {
     id: 1, name: 'Shotgun', auto: false,
-    damage: 9, pellets: 9, interval: 0.8, mag: 6, reserve: 42,
-    spread: 0.055, spreadMove: 0.02, recoil: 0.055, recoilYaw: 0.012,
+    damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42,
+    spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // pattern stays even aimed
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2
   },
   {
     id: 2, name: 'Marksman', auto: false,
-    damage: 82, pellets: 1, interval: 1.25, mag: 5, reserve: 30,
-    spread: 0.0012, spreadMove: 0.06, recoil: 0.09, recoilYaw: 0.01,
+    damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30,
+    spread: 0, hipSpread: 0.12, recoil: 0.09, recoilYaw: 0.01,
     reloadTime: 3.0, range: 250, color: 0x8fd8ff, shakeScale: 2.8
   }
 ];

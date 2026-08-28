@@ -7,7 +7,8 @@ import { clamp } from './util.js';
 const KEY_ACTIONS = {
   KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
   Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint',
-  KeyC: 'crouch', ControlLeft: 'fire', ControlRight: 'fire', KeyF: 'fire',
+  KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
+  KeyF: 'fire',                       // keyboard-only fallback when there is no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
   Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3'
 };
@@ -41,6 +42,7 @@ export class Input {
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     this.keyboardSeen = false;
+    this.editMode = false;   // while true the touch buttons are being rearranged
     this.onKeyboardDetected = null;
     this.onAction = null;           // for UI-only buttons (chat / score / weapon)
     this.sensitivity = Number(localStorage.getItem('pa.sens')) || 1;
@@ -183,8 +185,8 @@ export class Input {
         stickEl.classList.add('on');
         place(base, e.clientX, e.clientY);
         place(knob, e.clientX, e.clientY);
-      } else if (!this._touchLook) {
-        this._touchLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      } else {
+        this.lookStart(e);
       }
     }, { passive: false });
 
@@ -199,11 +201,8 @@ export class Input {
         place(knob, this._touchMove.ox + dx, this._touchMove.oy + dy);
         this.stick.x = clamp(dx / STICK_RADIUS, -1, 1);
         this.stick.y = clamp(-dy / STICK_RADIUS, -1, 1);
-      } else if (this._touchLook && this._touchLook.id === e.pointerId) {
-        this.lookDX += (e.clientX - this._touchLook.x) * TOUCH_SENS * this.sensitivity;
-        this.lookDY += (e.clientY - this._touchLook.y) * TOUCH_SENS * this.sensitivity;
-        this._touchLook.x = e.clientX;
-        this._touchLook.y = e.clientY;
+      } else {
+        this.lookMove(e);
       }
     }, { passive: false });
 
@@ -214,34 +213,66 @@ export class Input {
         this.stick.x = this.stick.y = 0;
         stickEl.classList.remove('on');
       }
-      if (this._touchLook && this._touchLook.id === e.pointerId) this._touchLook = null;
+      this.lookEnd(e);
     };
     this.canvas.addEventListener('pointerup', end);
     this.canvas.addEventListener('pointercancel', end);
   }
 
+  /** Touch aiming, usable from the canvas or from on top of a button. A finger
+   *  that starts on FIRE must still be able to drag the view — on a phone that
+   *  is the same thumb doing both. */
+  lookStart(e) {
+    if (!this._touchLook) this._touchLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  }
+
+  lookMove(e) {
+    const l = this._touchLook;
+    if (!l || l.id !== e.pointerId) return;
+    this.lookDX += (e.clientX - l.x) * TOUCH_SENS * this.sensitivity;
+    this.lookDY += (e.clientY - l.y) * TOUCH_SENS * this.sensitivity;
+    l.x = e.clientX;
+    l.y = e.clientY;
+  }
+
+  lookEnd(e) {
+    if (this._touchLook && this._touchLook.id === e.pointerId) this._touchLook = null;
+  }
+
   // --------------------------------------------------------- on-screen buttons
   _bindButtons() {
-    const UI_ONLY = new Set(['chat', 'score', 'weapon', 'menu']);
+    const UI_ONLY = new Set(['chat', 'score', 'weapon', 'menu', 'layout']);
     for (const el of document.querySelectorAll('.tbtn')) {
       const name = el.dataset.btn;
+      // action buttons double as look pads; the pill row at the top does not
+      const aimable = !UI_ONLY.has(name);
+
       el.addEventListener('pointerdown', e => {
+        if (this.editMode) return;            // layout editor owns the buttons
         e.preventDefault();
         e.stopPropagation();
         el.classList.add('held');
         if (UI_ONLY.has(name)) { this.onAction?.(name); return; }
         this.held.add(name);
         this.justPressed.add(name);
+        if (aimable && e.pointerType === 'touch') this.lookStart(e);
       });
+
+      el.addEventListener('pointermove', e => {
+        if (this.editMode) return;
+        if (aimable && e.pointerType === 'touch') this.lookMove(e);
+      });
+
       const up = e => {
+        if (this.editMode) return;
         e.stopPropagation();
         el.classList.remove('held');
         if (name === 'score') this.onAction?.('scoreoff');
         if (!UI_ONLY.has(name)) this.held.delete(name);
+        this.lookEnd(e);
       };
       el.addEventListener('pointerup', up);
       el.addEventListener('pointercancel', up);
-      el.addEventListener('pointerleave', up);
     }
   }
 

@@ -1,0 +1,209 @@
+// Movement-feel and protection mechanics, measured rather than eyeballed.
+//   ./serve.sh 8080 &   then   node test/mechanics.mjs
+import { chromium } from 'playwright';
+
+const URL = process.env.GAME_URL || 'http://127.0.0.1:8080/';
+const browser = await chromium.launch({
+  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+});
+const ctx = await browser.newContext({ viewport: { width: 900, height: 600 } });
+const page = await ctx.newPage();
+const errs = [];
+page.on('pageerror', e => errs.push(e.message));
+await page.goto(URL);
+await page.waitForFunction(() => window.__paStarted);
+await page.fill('#nameinput', 'mech');
+await page.fill('#roominput', 'solo-' + Date.now());
+await page.click('#playbtn');
+await page.waitForTimeout(1500);
+
+const R = await page.evaluate(async () => {
+  const g = window.game;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const keys = (...on) => {
+    g.input.held.clear();
+    for (const k of on) g.input.held.add(k);
+    g.input._recalcKeys();
+  };
+  const speed = () => Math.hypot(g.player.vel.x, g.player.vel.z);
+  const park = (x, y, z, yaw = 0) => {
+    g.player.pos = { x, y, z };
+    g.player.vel = { x: 0, y: 0, z: 0 };
+    g.player.yaw = yaw; g.player.pitch = 0;
+    g.player.crouchT = 0; g.player.sprintLatch = false; g.player.stepSmooth = 0;
+  };
+  const out = {};
+
+  // ---- ground control is immediate ----
+  park(0, 0.3, -20);
+  await sleep(400);
+  keys('fwd');
+  await sleep(60);                       // ~4 frames
+  out.groundSpeedAfter60ms = +speed().toFixed(2);
+  keys();
+  await sleep(80);
+  out.stopSpeedAfter80ms = +speed().toFixed(2);
+
+  // ---- sprint latches until forward is released ----
+  park(0, 0.3, -20);
+  await sleep(300);
+  keys('fwd', 'sprint');
+  await sleep(120);
+  keys('fwd');                           // shift released, W still held
+  await sleep(200);
+  out.sprintingAfterShiftReleased = g.player.sprintLatch && speed() > 7.5;
+  out.speedWithShiftReleased = +speed().toFixed(2);
+  keys();                                // release W
+  await sleep(120);
+  keys('fwd');
+  await sleep(200);
+  out.sprintEndedAfterForwardReleased = !g.player.sprintLatch;
+  keys();
+
+  // ---- crouch is a 0.3s animation, not a snap ----
+  park(0, 0.3, -20);
+  await sleep(300);
+  const h0 = g.player.height;
+  keys('crouch');
+  await sleep(80);
+  const hMid = g.player.height;
+  await sleep(400);
+  const hEnd = g.player.height;
+  keys();
+  await sleep(500);
+  out.crouch = {
+    standing: +h0.toFixed(2),
+    partwayAt80ms: +hMid.toFixed(2),
+    crouched: +hEnd.toFixed(2),
+    animated: hMid < h0 - 0.05 && hMid > hEnd + 0.05,
+    stoodBackUp: +g.player.height.toFixed(2)
+  };
+
+  // ---- stairs are climbed as a ramp, not a staircase of jolts ----
+  park(13, 0.3, 0, Math.PI / 2);
+  await sleep(300);
+  let prevEye = g.player.eyeY, maxJolt = 0, startY = g.player.pos.y;
+  const sampler = setInterval(() => {
+    const e = g.player.eyeY;
+    maxJolt = Math.max(maxJolt, Math.abs(e - prevEye));
+    prevEye = e;
+  }, 16);
+  keys('fwd');
+  await sleep(2200);
+  keys();
+  clearInterval(sampler);
+  out.stairs = {
+    climbed: +(g.player.pos.y - startY).toFixed(2),
+    biggestSingleViewJump: +maxJolt.toFixed(3)
+  };
+
+  // ---- bunny hopping: strafe and turn together to build speed ----
+  // The arena has no runway long enough for this, so the level is temporarily
+  // reduced to its floor. This measures the air physics, not the map.
+  const realBoxes = g.world.boxes;
+  g.world.boxes = realBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+  park(0, 0.3, 0, 0);
+  await sleep(400);
+  keys('fwd', 'right', 'jump');
+  let peak = 0, sampleAt1s = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 4000) {
+    g.player.yaw -= 0.016;              // turn right, into the strafe
+    await sleep(16);
+    peak = Math.max(peak, speed());
+    if (!sampleAt1s && performance.now() - t0 > 1000) sampleAt1s = speed();
+  }
+  keys();
+  out.bhop = {
+    walkSpeed: 6.2,
+    afterOneSecond: +sampleAt1s.toFixed(2),
+    peak: +peak.toFixed(2),
+    // the mechanic is the *difference*: strafing pays, holding W does not
+    gainedSpeed: peak > 6.2 * 1.35
+  };
+
+  // straight-line hopping with no turning must NOT build speed
+  park(0, 0.3, 0, 0);
+  await sleep(400);
+  keys('fwd', 'jump');
+  let straightPeak = 0;
+  const t1 = performance.now();
+  while (performance.now() - t1 < 2500) { await sleep(16); straightPeak = Math.max(straightPeak, speed()); }
+  keys();
+  out.bhop.straightLinePeak = +straightPeak.toFixed(2);
+  out.bhop.straightLineGainsNothing = straightPeak < 6.4;
+  g.world.boxes = realBoxes;
+  await sleep(100);
+
+  // ---- aiming ----
+  park(0, 0.3, -20);
+  await sleep(300);
+  const fov0 = g.camera.fov;
+  g.input.held.add('ads');
+  await sleep(200);
+  const mid = g.adsT;
+  await sleep(400);
+  const fullAds = g.adsT;
+  const fovAds = g.camera.fov;
+  const gunAds = { ...g.viewmodel.group.position };
+  await sleep(300);
+  const gunAds2 = { ...g.viewmodel.group.position };
+  g.input.held.delete('ads');
+  await sleep(600);
+  const rifle = g.loadout.weapon;
+  out.ads = {
+    halfwayAt200ms: +mid.toFixed(2),
+    fullAt600ms: +fullAds.toFixed(2),
+    backToHipAfterRelease: +g.adsT.toFixed(2),
+    fovHip: +fov0.toFixed(1),
+    fovAimed: +fovAds.toFixed(1),
+    zoom: +(fov0 / fovAds).toFixed(2),
+    gunHeldStill: Math.hypot(gunAds.x - gunAds2.x, gunAds.y - gunAds2.y, gunAds.z - gunAds2.z) < 0.002,
+    crosshairPulledIn: document.getElementById('crosshair').classList.contains('ads') === false
+  };
+  out.spreadRadians = {
+    standingHip: +window.__spreadFor(rifle, false, 0).toFixed(5),
+    movingHip: +window.__spreadFor(rifle, true, 0).toFixed(5),
+    aimedMoving: +window.__spreadFor(rifle, true, 1).toFixed(5)
+  };
+
+  // ---- speed cap and no tunnelling through a thin wall ----
+  park(0, 0.3, -18, 0);
+  g.player.vel = { x: 0, y: 0, z: -21 };   // straight at the 0.6m cover wall at z=-22
+  await sleep(600);
+  out.wallStoppedFastPlayer = g.player.pos.z > -22.5;
+  out.zAfterHighSpeedImpact = +g.player.pos.z.toFixed(2);
+
+  return out;
+});
+
+// ---- shield / fire lock, driven through the real UI ----
+await page.evaluate(() => { document.body.classList.add('touch-ui'); document.getElementById('touch').classList.remove('hidden'); });
+await page.click('#editbtn');
+await page.waitForTimeout(200);
+const editing = await page.evaluate(() => ({
+  editing: window.game.editing,
+  shielded: window.game.shielded,
+  panelUp: !document.getElementById('editpanel').classList.contains('hidden')
+}));
+const blocked = await page.evaluate(() => {
+  const hp = window.game.player.hp;
+  window.game._takeHit('someone', { dmg: 90 });
+  return { hpBefore: hp, hpAfter: window.game.player.hp };
+});
+await page.click('#donelayout');
+await page.waitForTimeout(300);
+const after = await page.evaluate(() => ({
+  stillShielded: window.game.shielded,
+  fireLockedFor: +((window.game.fireLockUntil - performance.now()) / 1000).toFixed(1),
+  shieldLeft: +((window.game.shieldUntil - performance.now()) / 1000).toFixed(1)
+}));
+await page.waitForTimeout(3200);
+const later = await page.evaluate(() => ({
+  shieldExpired: !window.game.shielded,
+  stillFireLocked: performance.now() < window.game.fireLockUntil
+}));
+
+console.log(JSON.stringify({ ...R, edit: { ...editing, ...blocked }, onExit: after, after3s: later }, null, 2));
+console.log('page errors:', errs.length ? errs : 'none');
+await browser.close();

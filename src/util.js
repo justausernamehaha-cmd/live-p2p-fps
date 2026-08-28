@@ -20,12 +20,34 @@ export function hash(str) {
   return h >>> 0;
 }
 
-export const hueFor = id => hash(id) % 360;
+// Hand-picked and widely separated in hue, and deliberately clear of the
+// blue-grey the level is built from. Players are assigned these by their sorted
+// position in the room, not by hashing their id, so two people can never end up
+// with near-identical colours.
+export const PLAYER_COLORS = [
+  0xff8a3d,  // orange
+  0x35d6f5,  // cyan
+  0x8bf03a,  // lime
+  0xff4fd8,  // magenta
+  0xffd93b,  // yellow
+  0xff4d5e,  // red
+  0xa872ff,  // violet
+  0x2ce8a4,  // spring green
+  0xffffff,  // white
+  0x7a8cff   // periwinkle
+];
 
-/** CSS colour for the DOM. Note the commas: THREE.Color's parser rejects the
- *  space-separated form and silently falls back to white. */
+/** Everyone in a room sorted the same way gets the same colour on every screen. */
+export function colorIndexFor(id, allIds) {
+  const i = [...allIds].sort().indexOf(id);
+  return (i < 0 ? 0 : i) % PLAYER_COLORS.length;
+}
+
+export const cssColor = hex => '#' + hex.toString(16).padStart(6, '0');
+
+/** Fallback used before the room membership is known. */
 export function colorFor(id) {
-  return `hsl(${hueFor(id)}, 75%, 58%)`;
+  return cssColor(PLAYER_COLORS[hash(id) % PLAYER_COLORS.length]);
 }
 
 const WORDS = ['iron', 'dust', 'nova', 'echo', 'vault', 'onyx', 'flare', 'rift', 'ghost', 'delta',

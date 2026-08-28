@@ -1,7 +1,7 @@
-import { clamp } from './util.js';
+import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
 
-const RADIUS = 0.4;
+const RADIUS = 0.17;      // matches the rendered body half-width in remote.js
 const HEIGHT = 1.8;
 const CROUCH_HEIGHT = 1.15;
 const EYE_RATIO = 0.9;          // eye sits at 90% of current height
@@ -12,10 +12,34 @@ const JUMP_SPEED = 8.2;
 const WALK = 6.2;
 const SPRINT = 9.0;
 const CROUCH_SPEED = 3.0;
-const ACCEL = 70;               // ground acceleration
-const AIR_ACCEL = 14;
-const FRICTION = 11;
+// Ground: direct control, Ultrakill style. The input IS the velocity, so a
+// direction change is instant and letting go stops you dead — unless you are
+// already going faster than a walk, in which case the speed is yours to keep and
+// only bleeds off with friction.
+//
+// Air: Quake acceleration, which is what makes bunny hopping work. Only the
+// component of your speed already along the direction you are pushing counts
+// against the small AIR_CAP budget, so pressing forward while you are already
+// moving forward gains nothing, but holding a strafe key and turning the view
+// that way keeps the budget free and adds speed every frame.
+// Exposed as an object so the numbers can be swept from a test harness without
+// rebuilding; these are the two knobs that decide how bunny hopping feels.
+// Swept with test/mechanics.mjs: `cap` is the dominant knob and `accel` saturates
+// past about 55. These values make four seconds of strafing worth 11 m/s for a
+// slow turn and 16 for a well-judged one, against 6.2 walking and 9 sprinting —
+// so better technique is always worth more speed, and the 22 m/s safety cap is
+// never reached by hand.
+export const AIR = {
+  accel: 55,                    // how hard the strafe pulls
+  cap: 1.2                      // m/s of "wished" speed the air grants
+};
+const GROUND_FRICTION = 5;      // bleeds off over-speed; a fast re-jump keeps most of it
+const SPEED_CAP = 22;           // sanity limit, well above anything reachable by hand
+const MAX_STEP_DIST = 0.3;      // sub-step the movement so fast players cannot tunnel
+const STEP_SMOOTH_RATE = 5;     // m/s the view catches up after a step, i.e. a linear climb
+const STEP_SMOOTH_MAX = 1.0;
 const MAX_PITCH = Math.PI / 2 - 0.01;
+const CROUCH_TIME = 0.3;        // seconds to fully crouch or stand, so it cannot flicker
 
 export class Player {
   constructor(world) {
@@ -26,19 +50,27 @@ export class Player {
     this.pitch = 0;
     this.height = HEIGHT;
     this.crouching = false;
+    this.crouchT = 0;          // 0 standing, 1 crouched; animated, not snapped
+    this.sprintLatch = false;
     this.onGround = false;
     this.hp = 100;
     this.alive = true;
     this.respawnAt = 0;
     this.kills = 0;
     this.deaths = 0;
+    this.spawnSeq = 0;        // bumped on every spawn so peers can drop stale interpolation
+    this.stepSmooth = 0;      // visual lag behind an instant step up, so stairs are a ramp
     this.bobPhase = 0;
     this.bob = 0;
     this.recoil = 0;             // extra pitch, decays
     this.recoilYaw = 0;
   }
 
-  get eyeY() { return this.pos.y + this.height * EYE_RATIO; }
+  /** Collision moves the body up a whole step at once; the view is dragged along
+   *  behind it at a constant rate so a staircase is climbed as a straight line
+   *  rather than a series of jolts. Shots come from here too, so aim still
+   *  matches exactly what is on screen. */
+  get eyeY() { return this.pos.y + this.height * EYE_RATIO - this.stepSmooth; }
 
   aabb(pos = this.pos, height = this.height) {
     return {
@@ -48,9 +80,13 @@ export class Player {
   }
 
   spawn(point) {
+    this.spawnSeq++;
     this.pos = { x: point.x, y: point.y, z: point.z };
     this.height = HEIGHT;
     this.crouching = false;
+    this.crouchT = 0;
+    this.sprintLatch = false;
+    this.stepSmooth = 0;
     // lift out of anything the spawn point happens to clip
     for (let i = 0; i < 12 && this._overlaps(this.world.boxes); i++) this.pos.y += 0.5;
     this.vel = { x: 0, y: 0, z: 0 };
@@ -72,6 +108,9 @@ export class Player {
   }
 
   update(dt, input) {
+    // the view catches up to a step at a constant speed: linear, not easing
+    this.stepSmooth = Math.max(0, this.stepSmooth - STEP_SMOOTH_RATE * dt);
+
     // recoil relaxes back toward zero and is folded into the view, not the state,
     // so remote players never see a jittering aim direction
     this.recoil *= Math.exp(-9 * dt);
@@ -83,11 +122,17 @@ export class Player {
     }
 
     const wish = input.moveVector();
-    const wantCrouch = input.down('crouch');
-    this._setCrouch(wantCrouch);
+    this._crouch(dt, input.down('crouch'));
 
-    const sprinting = input.down('sprint') && !this.crouching && wish.y > 0.1;
-    const maxSpeed = this.crouching ? CROUCH_SPEED : sprinting ? SPRINT : WALK;
+    // Sprint latches: tapping shift keeps you sprinting until you let go of
+    // forward, rather than making you hold two keys down the whole way.
+    if (input.down('sprint')) this.sprintLatch = true;
+    if (wish.y < 0.1 || this.crouching) this.sprintLatch = false;
+    const sprinting = this.sprintLatch && !this.crouching && wish.y > 0.1;
+
+    // speed follows the crouch animation rather than stepping with it
+    const upright = sprinting ? SPRINT : WALK;
+    const maxSpeed = lerp(upright, CROUCH_SPEED, this.crouchT);
 
     // World-space wish direction. This basis MUST match the camera, which looks
     // along Ry(yaw) * (0,0,-1):
@@ -99,26 +144,61 @@ export class Player {
     const wx = wish.x * cos - wish.y * sin;
     const wz = -(wish.x * sin + wish.y * cos);
 
-    const accel = this.onGround ? ACCEL : AIR_ACCEL;
-    this.vel.x += wx * accel * dt;
-    this.vel.z += wz * accel * dt;
+    // Decide the jump now but apply it after the ground move, so a hop still
+    // leaves the ground at full running speed. Holding space auto-hops, and a
+    // frame that ends in a jump pays no friction at all — that is what lets a
+    // chain of hops keep the speed it has built.
+    const wantJump = input.down('jump') && this.onGround;
 
-    // friction only when no input, so strafing keeps its momentum
-    if (this.onGround && Math.hypot(wish.x, wish.y) < 0.05) {
-      const drop = Math.max(0, 1 - FRICTION * dt);
-      this.vel.x *= drop;
-      this.vel.z *= drop;
-    }
-
+    const wishLen = Math.hypot(wish.x, wish.y);   // already clamped to <= 1
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    if (speed > maxSpeed) {
-      this.vel.x *= maxSpeed / speed;
-      this.vel.z *= maxSpeed / speed;
+
+    if (this.onGround) {
+      if (speed <= maxSpeed + 0.05) {
+        // direct control: you go exactly where you press, at once
+        this.vel.x = wx * maxSpeed;
+        this.vel.z = wz * maxSpeed;
+      } else if (!wantJump) {
+        // landed and stayed down: bleed the extra speed off
+        const drop = Math.max(0, 1 - GROUND_FRICTION * dt);
+        this.vel.x *= drop;
+        this.vel.z *= drop;
+      }
+      // over-speed and taking off again: every bit of it is kept
+    } else if (Math.abs(wish.x) > 0.02) {
+      // Air control, and the whole of bunny hopping.
+      //
+      // Only the strafe key steers in the air; forward is ignored. That is not a
+      // simplification, it is the mechanic: acceleration is only granted up to
+      // AIR_CAP of speed *along the direction pushed*, so the input has to stay
+      // roughly perpendicular to where you are already going. Holding W would
+      // put it 45 degrees off and the budget would already be spent. Hold a
+      // strafe key, turn the view that way, and every frame pays out.
+      const strafe = Math.sign(wish.x) * Math.min(1, Math.abs(wish.x));
+      const dirX = cos * strafe;        // the camera's right vector
+      const dirZ = -sin * strafe;
+      const len = Math.hypot(dirX, dirZ);
+      const nx = dirX / len, nz = dirZ / len;
+
+      const wishSpeed = Math.min(Math.abs(strafe) * maxSpeed, AIR.cap);
+      const current = this.vel.x * nx + this.vel.z * nz;
+      const add = wishSpeed - current;
+      if (add > 0) {
+        const accel = Math.min(AIR.accel * wishSpeed * dt, add);
+        this.vel.x += nx * accel;
+        this.vel.z += nz * accel;
+      }
     }
 
-    if (input.down('jump') && this.onGround) {
+    if (wantJump) {
       this.vel.y = JUMP_SPEED;
       this.onGround = false;
+    }
+
+    const after = Math.hypot(this.vel.x, this.vel.z);
+    if (after > SPEED_CAP) {
+      this.vel.x *= SPEED_CAP / after;
+      this.vel.z *= SPEED_CAP / after;
     }
 
     this.vel.y -= GRAVITY * dt;
@@ -136,21 +216,35 @@ export class Player {
     }
   }
 
-  _setCrouch(want) {
-    if (want === this.crouching) return;
+  _crouch(dt, want) {
+    const step = dt / CROUCH_TIME;
     if (want) {
-      this.crouching = true;
-      this.height = CROUCH_HEIGHT;
-    } else {
-      // refuse to stand up inside geometry
-      const test = this.aabb(this.pos, HEIGHT);
-      for (const b of this.world.boxes) if (aabbOverlap(test, b)) return;
-      this.crouching = false;
-      this.height = HEIGHT;
+      this.crouchT = Math.min(1, this.crouchT + step);
+    } else if (this.crouchT > 0) {
+      // rise only as far as there is headroom for, so standing under a ledge
+      // stops smoothly instead of popping the player into it
+      const next = Math.max(0, this.crouchT - step);
+      if (!this._blockedAtHeight(lerp(HEIGHT, CROUCH_HEIGHT, next))) this.crouchT = next;
     }
+    this.height = lerp(HEIGHT, CROUCH_HEIGHT, this.crouchT);
+    this.crouching = this.crouchT > 0.5;
+  }
+
+  _blockedAtHeight(h) {
+    const test = this.aabb(this.pos, h);
+    for (const b of this.world.boxes) if (aabbOverlap(test, b)) return true;
+    return false;
   }
 
   _move(dt) {
+    // A cover wall is only 0.6 m thick; at bunny-hop speed a single 50 ms frame
+    // would step further than that and pass straight through it.
+    const far = Math.max(Math.abs(this.vel.x), Math.abs(this.vel.y), Math.abs(this.vel.z)) * dt;
+    const steps = Math.min(8, Math.max(1, Math.ceil(far / MAX_STEP_DIST)));
+    for (let i = 0; i < steps; i++) this._moveStep(dt / steps);
+  }
+
+  _moveStep(dt) {
     const boxes = this.world.boxes;
     const dx = this.vel.x * dt;
     const dz = this.vel.z * dt;
@@ -173,7 +267,12 @@ export class Player {
         this._axis('y', -STEP_HEIGHT, boxes);     // settle onto the step
         const stepped = Math.hypot(this.pos.x - start.x, this.pos.z - start.z);
         const slid = Math.hypot(flat.x - start.x, flat.z - start.z);
-        if (stepped <= slid + 1e-4) this.pos = flat;
+        if (stepped <= slid + 1e-4) {
+          this.pos = flat;
+        } else if (this.pos.y > start.y) {
+          // took a step up: hold the view back by the height gained
+          this.stepSmooth = Math.min(STEP_SMOOTH_MAX, this.stepSmooth + (this.pos.y - start.y));
+        }
       }
     }
 

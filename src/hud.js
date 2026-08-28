@@ -10,7 +10,8 @@ export class Hud {
       crosshair: $('crosshair'), respawn: $('respawn'), respawnnum: $('respawnnum'),
       scoreboard: $('scoreboard'), scorebody: $('scorebody'),
       peercount: $('peercount'), ping: $('ping'), roomtag: $('roomtag'),
-      chatform: $('chatform'), chatinput: $('chatinput'), status: $('status')
+      chatform: $('chatform'), chatinput: $('chatinput'), status: $('status'),
+      protection: $('protection')
     };
     this._cache = {};
     this._hitTimer = 0;
@@ -64,8 +65,6 @@ export class Hud {
     this._set('reloading', !!reloading, v => this.el.reloading.classList.toggle('hidden', !v));
   }
 
-  spread(on) { this._set('spread', !!on, v => this.el.crosshair.classList.toggle('spread', v)); }
-
   hitmarker(kill) {
     const m = this.el.hitmarker;
     m.classList.toggle('kill', !!kill);
@@ -87,6 +86,17 @@ export class Hud {
       this._dmgTimer -= dt;
       if (this._dmgTimer <= 0) this.el.damage.classList.remove('on');
     }
+  }
+
+  ads(on) { this._set('ads', !!on, v => this.el.crosshair.classList.toggle('ads', v)); }
+
+  /** Local-only readout: nobody else can see that you are shielded. */
+  protection(text, locked) {
+    this._set('prot', text, v => {
+      this.el.protection.classList.toggle('hidden', !v);
+      this.el.protection.textContent = v || '';
+    });
+    this._set('protlock', !!locked, v => this.el.protection.classList.toggle('locked', v));
   }
 
   feed(html, cls = '') {

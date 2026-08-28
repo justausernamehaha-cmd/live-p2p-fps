@@ -26,19 +26,23 @@ const results = await page.evaluate(async ({ YAWS, KEYS }) => {
   const g = window.game;
   const out = [];
   const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const realBoxes = g.world.boxes;
+  g.world.boxes = realBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
   for (const deg of YAWS) {
     for (const code of Object.keys(KEYS)) {
       const yaw = deg * Math.PI / 180;
-      // high above the arena: unobstructed, so the direction measured is purely
-      // the movement basis and not a collision slide
-      g.player.pos = { x: 0, y: 25, z: 0 };
+      // On the ground, on a bare floor. Ground movement is the direct-control
+      // path where all four keys matter; in the air only the strafe keys steer,
+      // by design, so measuring there would test the wrong thing. The level is
+      // stripped to its floor so nothing can deflect the run.
+      g.player.pos = { x: 0, y: 0.2, z: 0 };
       g.player.vel = { x: 0, y: 0, z: 0 };
       g.player.yaw = yaw; g.player.pitch = 0;
       g.player.recoil = 0; g.player.recoilYaw = 0;
-      await sleep(60);
+      await sleep(160);          // settle onto the floor first
       const start = { x: g.player.pos.x, z: g.player.pos.z };
       window.dispatchEvent(new KeyboardEvent('keydown', { code }));
-      await sleep(420);
+      await sleep(320);
       window.dispatchEvent(new KeyboardEvent('keyup', { code }));
       const dx = g.player.pos.x - start.x, dz = g.player.pos.z - start.z;
       const len = Math.hypot(dx, dz);
@@ -53,6 +57,7 @@ const results = await page.evaluate(async ({ YAWS, KEYS }) => {
                  errDeg: len > 0.01 ? +(Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI).toFixed(1) : 999 });
     }
   }
+  g.world.boxes = realBoxes;
   return out;
 }, { YAWS, KEYS });
 

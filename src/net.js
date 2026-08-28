@@ -16,17 +16,25 @@ const STRATEGIES = {
 
 let joinRoom = null;
 let selfId = '';
+let loading = null;
 
 export function getSelfId() { return selfId; }
 export function strategyNames() { return Object.keys(STRATEGIES); }
 
-/** Loads the signalling strategy. Must be awaited before constructing a Net. */
-export async function initNet(strategy = 'nostr') {
-  const spec = STRATEGIES[strategy] || STRATEGIES.nostr;
-  const mod = await import(spec);
-  joinRoom = mod.joinRoom;
-  selfId = mod.selfId;
-  return selfId;
+/** Loads the signalling strategy. Must be awaited before constructing a Net.
+ *  Safe (and worthwhile) to call early: the module comes off a CDN, and doing it
+ *  while the player is still typing a name takes that wait off the clock between
+ *  pressing CONNECT and seeing anyone. Repeat calls share the one load. */
+export function initNet(strategy = 'nostr') {
+  if (!loading) {
+    const spec = STRATEGIES[strategy] || STRATEGIES.nostr;
+    loading = import(spec).then(mod => {
+      joinRoom = mod.joinRoom;
+      selfId = mod.selfId;
+      return selfId;
+    }).catch(err => { loading = null; throw err; });
+  }
+  return loading;
 }
 
 export class Net {
@@ -38,7 +46,10 @@ export class Net {
     this.pings = new Map();
 
     this.room = joinRoom(
-      { appId: APP_ID, relayConfig: { redundancy: 6 } },
+      // more relays dialled at once: public ones rate-limit and drop, and the
+      // first one to carry the announcement is the one that decides how long a
+      // player waits to see anybody
+      { appId: APP_ID, relayConfig: { redundancy: 8 } },
       roomCode,
       { onJoinError: e => this.h.onJoinError?.(e) }
     );
@@ -89,14 +100,16 @@ export class Net {
     } catch { /* channel closed */ }
   }
 
-  broadcastState(player, loadout) {
+  broadcastState(player, loadout, shielded) {
     this._send(this.aState, {
       x: round2(player.pos.x), y: round2(player.pos.y), z: round2(player.pos.z),
       a: round2(player.yaw), b: round2(player.pitch),
       h: round2(player.height),
       hp: player.alive ? Math.max(1, Math.round(player.hp)) : 0,
       k: player.kills, d: player.deaths,
-      w: loadout.index
+      w: loadout.index,
+      s: player.spawnSeq,          // lets peers drop interpolation across a teleport
+      sf: shielded ? 1 : 0
     });
   }
 

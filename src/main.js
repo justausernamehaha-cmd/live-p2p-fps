@@ -1,17 +1,20 @@
 import * as THREE from 'three';
 import { World } from './world.js';
-import { Player } from './player.js';
+import { Player, AIR } from './player.js';
 import { Input, isTyping } from './input.js';
-import { Loadout, WEAPONS, HEADSHOT_MULT } from './weapons.js';
+import { Loadout, WEAPONS, HEADSHOT_MULT, spreadFor, ADS_ZOOM, ADS_TIME } from './weapons.js';
 import { Effects, ViewModel } from './effects.js';
 import { RemotePlayer } from './remote.js';
 import { Hud, escapeHtml } from './hud.js';
+import { Layout } from './layout.js';
 import { Audio } from './audio.js';
 import { Net, initNet, getSelfId } from './net.js';
-import { clamp, colorFor, randomRoom, now, num } from './util.js';
+import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
 const STATE_HZ = 20;
 const RESPAWN_TIME = 3;
+const EDIT_SHIELD_TAIL = 3000;   // ms of protection carried out of the layout editor
+const EDIT_FIRE_LOCK = 5000;     // ms before the gun works again after editing
 const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
                   (navigator.maxTouchPoints > 1 && !matchMedia('(pointer:fine)').matches);
 
@@ -35,13 +38,21 @@ class Game {
     this.scoreVisible = false;
     this.lastStateSent = 0;
     this.deathAt = 0;
+    this.editing = false;
+    this.shieldUntil = 0;      // ms timestamps; while shielded, incoming damage is ignored
+    this.fireLockUntil = 0;
+    this.adsT = 0;             // 0 hipfire, 1 fully aimed; 0.4s each way
 
     this._initThree();
     this._initInput();
     this._initMenu();
+    // fetch the signalling module now rather than when CONNECT is pressed
+    initNet(this.strategy).catch(() => { /* reported properly on connect */ });
     this.hud.hideLoading();
     window.__paStarted = true;
     window.game = this;          // handy in the console; also what the test harness pokes at
+    window.__spreadFor = spreadFor;
+    window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
     requestAnimationFrame(t => this._frame(t));
   }
 
@@ -70,28 +81,48 @@ class Game {
     fill.position.set(-25, 20, -30);
     this.scene.add(fill);
 
+    // A second scene drawn after a depth clear: whatever is in here is always on
+    // top of the world, which is how the gun stays whole when pressed into a wall.
+    this.vmScene = new THREE.Scene();
+    this.vmCamera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.01, 20);
+    this.vmScene.add(new THREE.HemisphereLight(0xd6e6fa, 0x3a4459, 2.2));
+    const vmKey = new THREE.DirectionalLight(0xfff4e2, 1.7);
+    vmKey.position.set(1.2, 2.4, 1.6);
+    this.vmScene.add(vmKey);
+
     this.world = new World(this.scene);
     this.player = new Player(this.world);
     this.player.spawn(this.world.randomSpawn());
     this.loadout = new Loadout();
-    this.effects = new Effects(this.scene, this.camera);
-    this.viewmodel = new ViewModel(this.camera);
+    this.effects = new Effects(this.scene, this.camera, this.vmScene);
+    this.viewmodel = new ViewModel(this.vmScene);
 
     addEventListener('resize', () => this._resize());
+    addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
+    visualViewport?.addEventListener('resize', () => this._resize());
     this._resize();
   }
 
   _resize() {
-    const aspect = innerWidth / innerHeight;
+    // visualViewport is the only measurement that excludes a phone's collapsing
+    // URL bar; innerHeight can be taller than what you can actually see
+    const w = Math.round(visualViewport?.width || innerWidth);
+    const h = Math.round(visualViewport?.height || innerHeight);
+    document.documentElement.style.setProperty('--appvh', h + 'px');
+    const aspect = w / h;
     this.camera.aspect = aspect;
     // A fixed vertical FOV leaves a portrait phone with a ~40° horizontal view,
     // which is unplayable. Widen vertically to claw some of it back (landscape
     // is still much better, and the HUD says so once).
-    this.camera.fov = aspect >= 1
+    this.baseFov = aspect >= 1
       ? 78
       : clamp(2 * Math.atan(Math.tan(35 * Math.PI / 180) / aspect) * 180 / Math.PI, 78, 106);
+    this.camera.fov = this.baseFov / (1 + (ADS_ZOOM - 1) * (this.adsT || 0));
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(innerWidth, innerHeight, false);
+    this.vmCamera.aspect = aspect;
+    this.vmCamera.fov = this.baseFov;   // the gun is not magnified by aiming
+    this.vmCamera.updateProjectionMatrix();
+    this.renderer.setSize(w, h, false);
   }
 
   _initInput() {
@@ -108,7 +139,17 @@ class Game {
       else if (a === 'scoreoff') this.scoreVisible = false;
       else if (a === 'weapon') this._switch(this.loadout.cycle(1, now() / 1000));
       else if (a === 'menu') this._pause();
+      else if (a === 'layout') this._startEdit();
     };
+
+    this.layout = new Layout();
+    document.getElementById('donelayout').addEventListener('click', () => this._endEdit());
+
+    const fsbtn = document.getElementById('fsbtn');
+    fsbtn.addEventListener('click', () => this._toggleFullscreen());
+    document.addEventListener('fullscreenchange', () => {
+      fsbtn.innerHTML = document.fullscreenElement ? '&#10005;' : '&#9974;';
+    });
 
     this.hud.bindChat(
       text => this._say(text),
@@ -127,17 +168,27 @@ class Game {
     const playBtn = document.getElementById('playbtn');
     const shareBtn = document.getElementById('sharebtn');
 
+    this.strategy = new URLSearchParams(location.hash.slice(1)).get('strategy') || 'nostr';
     nameInput.value = this.name;
     const hashRoom = new URLSearchParams(location.hash.slice(1)).get('room');
-    roomInput.value = hashRoom || localStorage.getItem('pa.room') || randomRoom();
+    const knownRoom = hashRoom || localStorage.getItem('pa.room');
+    roomInput.value = knownRoom || randomRoom();
 
     document.getElementById('randomroom').onclick = () => { roomInput.value = randomRoom(); };
 
+    // Start finding peers while the player is still typing a name: by the time
+    // they press CONNECT the handshake is usually already done, which is most of
+    // the wait gone. Nothing is broadcast until they actually join the match.
+    const prejoin = () => this._prejoin(this._roomFrom(roomInput.value));
+    roomInput.addEventListener('change', prejoin);
+    roomInput.addEventListener('blur', prejoin);
+    if (knownRoom) setTimeout(prejoin, 50);   // an invite link or the last room played
+
     playBtn.onclick = () => {
       this.audio.resume();
-      if (this.net) return this._resume();
+      if (this.running) return this._resume();
       const name = (nameInput.value.trim() || 'player').slice(0, 14);
-      const room = (roomInput.value.trim() || randomRoom()).toLowerCase().replace(/\s+/g, '-');
+      const room = this._roomFrom(roomInput.value);
       localStorage.setItem('pa.name', name);
       localStorage.setItem('pa.room', room);
       playBtn.disabled = true;
@@ -159,29 +210,58 @@ class Game {
   }
 
   // ---------------------------------------------------------------- network
+  _roomFrom(text) {
+    return (String(text || '').trim() || randomRoom()).toLowerCase().replace(/\s+/g, '-');
+  }
+
+  /** Open the room early, without entering the match. */
+  async _prejoin(room) {
+    if (!room || this.running) return;
+    if (this.net && this.net.roomCode === room) return;
+    this.net?.leave();
+    this.net = null;
+    for (const r of this.remotes.values()) r.dispose();
+    this.remotes.clear();
+    try {
+      await initNet(this.strategy);
+      this.net = new Net(room, { name: this.name || 'player' }, this._netHandlers());
+    } catch (err) {
+      console.error(err);   // reported properly if they press CONNECT
+    }
+  }
+
+  _netHandlers() {
+    return {
+      onJoin: id => this._peerJoin(id),
+      onLeave: id => this._peerLeave(id),
+      onHello: (id, m) => this._remote(id).setName(String(m.name || '').slice(0, 14)),
+      onState: (id, s) => this._remote(id).onState(s),
+      onShot: (id, m) => this._remoteShot(id, m),
+      onHit: (id, m) => this._takeHit(id, m),
+      onDied: (id, m) => this._someoneDied(id, m),
+      onChat: (id, m) => this._chatIn(id, m),
+      onPing: (id, rtt) => { const r = this.remotes.get(id); if (r) r.ping = rtt; },
+      onJoinError: e => this.hud.feed('signalling error: ' + escapeHtml(e.error || ''), 'chat')
+    };
+  }
+
   async _connect(name, room) {
     this.name = name;
     this.room = room;
-    const params = new URLSearchParams(location.hash.slice(1));
-    const strategy = params.get('strategy') || 'nostr';
+    const strategy = this.strategy;
     location.hash = 'room=' + encodeURIComponent(room) +
       (strategy !== 'nostr' ? '&strategy=' + strategy : '');
     this.hud.status('connecting…');
 
     try {
       await initNet(strategy);
-      this.net = new Net(room, { name }, {
-        onJoin: id => this._peerJoin(id),
-        onLeave: id => this._peerLeave(id),
-        onHello: (id, m) => this._remote(id).setName(String(m.name || '').slice(0, 14)),
-        onState: (id, s) => this._remote(id).onState(s),
-        onShot: (id, m) => this._remoteShot(id, m),
-        onHit: (id, m) => this._takeHit(id, m),
-        onDied: (id, m) => this._someoneDied(id, m),
-        onChat: (id, m) => this._chatIn(id, m),
-        onPing: (id, rtt) => { const r = this.remotes.get(id); if (r) r.ping = rtt; },
-        onJoinError: e => this.hud.feed('signalling error: ' + escapeHtml(e.error || ''), 'chat')
-      });
+      if (!this.net || this.net.roomCode !== room) {
+        this.net?.leave();
+        this.net = new Net(room, { name }, this._netHandlers());
+      } else {
+        this.net.profile.name = name;    // already connected from the pre-join
+        this.net.hello();
+      }
     } catch (err) {
       console.error(err);
       this.hud.status('could not reach the signalling relays — try ' +
@@ -213,12 +293,25 @@ class Game {
     const r = this.remotes.get(id);
     if (r) { this.hud.feed(`<b>${escapeHtml(r.name)}</b> left`, 'chat'); r.dispose(); }
     this.remotes.delete(id);
+    this._recolour();
   }
 
   _remote(id) {
     let r = this.remotes.get(id);
-    if (!r) { r = new RemotePlayer(id, this.scene); this.remotes.set(id, r); }
+    if (!r) {
+      r = new RemotePlayer(id, this.scene);
+      this.remotes.set(id, r);
+      this._recolour();
+    }
     return r;
+  }
+
+  /** Everyone sorts the room the same way, so everyone agrees on who is which
+   *  colour without anyone having to be in charge of handing them out. */
+  _recolour() {
+    const ids = [getSelfId(), ...this.remotes.keys()];
+    this.myColor = PLAYER_COLORS[colorIndexFor(getSelfId(), ids)];
+    for (const [id, r] of this.remotes) r.setColor(PLAYER_COLORS[colorIndexFor(id, ids)]);
   }
 
   _remoteShot(id, m) {
@@ -232,7 +325,7 @@ class Game {
   }
 
   _takeHit(fromId, m) {
-    if (!this.player.alive) return;
+    if (!this.running || !this.player.alive || this.shielded) return;
     const died = this.player.damage(clamp(num(m.dmg), 0, 200));
     this.hud.damageFlash();
     this.audio.hurt();
@@ -278,6 +371,38 @@ class Game {
     this.hud.feed(`<b>${escapeHtml(this.name)}</b>: ${escapeHtml(text)}`, 'chat');
   }
 
+  // ---------------------------------------------------------- layout editing
+  _startEdit() {
+    if (this.editing || this.menuOpen) return;
+    this.editing = true;
+    this.input.editMode = true;
+    this.input.held.clear();
+    this.layout.enter();
+    document.exitPointerLock?.();
+  }
+
+  _endEdit() {
+    if (!this.editing) return;
+    this.editing = false;
+    this.input.editMode = false;
+    this.layout.exit();
+    // the shield does not vanish the instant the panel closes, but it does not
+    // linger either: three seconds to get to cover, five before the gun works
+    this.shieldUntil = now() + EDIT_SHIELD_TAIL;
+    this.fireLockUntil = now() + EDIT_FIRE_LOCK;
+  }
+
+  get shielded() { return this.editing || now() < this.shieldUntil; }
+
+  async _toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      // the viewport changes size on the way in and out
+      setTimeout(() => this._resize(), 150);
+    } catch { /* refused, or unsupported on this browser */ }
+  }
+
   // ------------------------------------------------------------------ pause
   _pause() {
     if (this.hud.chatOpen) return;
@@ -303,14 +428,14 @@ class Game {
 
   _fire(t, input) {
     const p = this.player;
-    if (!p.alive) return;
+    if (!p.alive || now() < this.fireLockUntil) return;
     const w = this.loadout.tryFire(t, input.down('fire'), input.pressed('fire'));
     if (!w) return;
 
     const eye = new THREE.Vector3(p.pos.x, p.eyeY + p.bob, p.pos.z);
     const base = this._aimDirection();
-    const speed = Math.hypot(p.vel.x, p.vel.z);
-    const spread = w.spread + w.spreadMove * clamp(speed / 9, 0, 1) + (p.onGround ? 0 : w.spreadMove);
+    const moving = Math.hypot(p.vel.x, p.vel.z) > 1.5 || !p.onGround;
+    const spread = spreadFor(w, moving, this.adsT);
 
     // muzzle position for the tracer: roughly where the viewmodel barrel ends
     const right = new THREE.Vector3().crossVectors(base, new THREE.Vector3(0, 1, 0)).normalize();
@@ -331,7 +456,7 @@ class Game {
       const end = eye.clone().addScaledVector(dir, hit.dist);
       if (!endPoint) endPoint = end;
 
-      if (hit.player) {
+      if (hit.player && !hit.player.shielded) {
         const dmg = w.damage * (hit.head ? HEADSHOT_MULT : 1);
         const e = damageByPeer.get(hit.player.id) || { dmg: 0, head: false, r: hit.player };
         e.dmg += dmg;
@@ -399,14 +524,20 @@ class Game {
 
     this.effects.update(dt);
     this.hud.update(dt);
-    this.renderer.render(this.scene, this.camera);
+
+    const r = this.renderer;
+    r.autoClear = false;
+    r.clear();
+    r.render(this.scene, this.camera);
+    r.clearDepth();                       // the gun is drawn over everything
+    r.render(this.vmScene, this.vmCamera);
   }
 
   _tick(t, dt) {
     const p = this.player;
     // while the menu or chat box is up the world keeps simulating (this is an
     // online game — you are still standing there) but stops taking commands
-    const active = !this.menuOpen && !this.hud.chatOpen;
+    const active = !this.menuOpen && !this.hud.chatOpen && !this.editing;
     const input = active ? this.input : IDLE_INPUT;
 
     const look = input.consumeLook(dt);
@@ -419,6 +550,11 @@ class Game {
     if (input.pressed('weaponprev')) this._switch(this.loadout.cycle(-1, t));
     if (input.pressed('lastweapon')) this._switch(this.loadout.swapLast(t));
     if (input.pressed('reload') && this.loadout.startReload(t)) this.audio.reload();
+
+    // sights come up and go down at a constant rate
+    const wantAds = input.down('ads');
+    this.adsT = clamp(this.adsT + (wantAds ? dt : -dt) / ADS_TIME, 0, 1);
+    this.hud.ads(this.adsT > 0.5);
 
     p.update(dt, input);
     if (this.loadout.update(t)) this.audio.reload();
@@ -437,12 +573,12 @@ class Game {
     }
 
     this._camera(dt);
-    this.viewmodel.update(dt, p, this.loadout.reloading);
+    this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
 
     // outgoing state
     if (this.net && t - this.lastStateSent > 1 / STATE_HZ) {
       this.lastStateSent = t;
-      this.net.broadcastState(p, this.loadout);
+      this.net.broadcastState(p, this.loadout, this.shielded);
     }
 
     this._hudTick(dt, input);
@@ -452,6 +588,15 @@ class Game {
   _camera(dt) {
     const p = this.player;
     const cam = this.camera;
+
+    // zoom by narrowing the field of view; the viewmodel keeps its own camera and
+    // its own fov, so the gun does not swell as the world magnifies
+    const zoomed = this.baseFov / (1 + (ADS_ZOOM - 1) * this.adsT);
+    if (Math.abs(cam.fov - zoomed) > 0.01) {
+      cam.fov = zoomed;
+      cam.updateProjectionMatrix();
+    }
+
     const shake = this.effects.shake;
     cam.position.set(
       p.pos.x + (Math.random() - 0.5) * shake * 0.1,
@@ -465,20 +610,33 @@ class Game {
   }
 
   _hudTick(dt, input) {
+    // shield and fire lock are only ever shown to the player they apply to
+    const t = now();
+    const shieldLeft = this.editing ? Infinity : (this.shieldUntil - t) / 1000;
+    const lockLeft = (this.fireLockUntil - t) / 1000;
+    if (this.editing) {
+      this.hud.protection('shielded while editing', false);
+    } else if (lockLeft > 0 || shieldLeft > 0) {
+      const parts = [];
+      if (shieldLeft > 0) parts.push(`shielded ${shieldLeft.toFixed(1)}s`);
+      if (lockLeft > 0) parts.push(`weapon locked ${lockLeft.toFixed(1)}s`);
+      this.hud.protection(parts.join('\n'), lockLeft > 0 && shieldLeft <= 0);
+    } else {
+      this.hud.protection('', false);
+    }
+
     const a = this.loadout.ammo, w = this.loadout.weapon;
     this.hud.setAmmo(w.name, a.mag, a.reserve, this.loadout.reloading);
     this.hud.setHealth(this.player.hp);
-    const speed = Math.hypot(this.player.vel.x, this.player.vel.z);
-    this.hud.spread(speed > 4 || !this.player.onGround);
 
     const show = input.down('score') || this.scoreVisible;
     if (show) {
       const rows = [{
-        name: this.name, color: colorFor(getSelfId()), kills: this.player.kills,
+        name: this.name, color: cssColor(this.myColor ?? PLAYER_COLORS[0]), kills: this.player.kills,
         deaths: this.player.deaths, ping: 0, me: true
       }];
       for (const r of this.remotes.values()) {
-        rows.push({ name: r.name, color: '#' + r.color.getHexString(), kills: r.kills, deaths: r.deaths, ping: r.ping });
+        rows.push({ name: r.name, color: cssColor(r.colorHex), kills: r.kills, deaths: r.deaths, ping: r.ping });
       }
       this.hud.scoreboard(rows, true);
     } else {
@@ -488,7 +646,8 @@ class Game {
     if (this.net) {
       const pings = [...this.net.pings.values()];
       const avg = pings.length ? pings.reduce((s, v) => s + v, 0) / pings.length : 0;
-      this.hud.setNet(this.remotes.size, avg, this.room);
+      const active = [...this.remotes.values()].filter(r => r.buffer.length > 0).length;
+      this.hud.setNet(active, avg, this.room);
     }
   }
 }

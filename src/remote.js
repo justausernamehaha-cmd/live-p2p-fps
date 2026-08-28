@@ -1,17 +1,21 @@
 import * as THREE from 'three';
-import { lerp, lerpAngle, colorFor, hueFor, now, num } from './util.js';
+import { lerp, lerpAngle, PLAYER_COLORS, cssColor, hash, now, num } from './util.js';
 import { rayAABB } from './world.js';
 
 const INTERP_DELAY = 110;    // ms of buffered lag; smooths jitter between peers
 const BUFFER = 24;
-const BODY_R = 0.4;
 const HEAD_H = 0.34;
+// The body is exactly as wide as the head is long, so the silhouette reads as one
+// consistent shape. The hit boxes below are built from the same constants, which
+// keeps the "what you see is what you shoot" promise intact.
+const BODY_R = HEAD_H / 2;
 
 export class RemotePlayer {
   constructor(id, scene) {
     this.id = id;
     this.name = id.slice(0, 6);
-    this.color = new THREE.Color().setHSL(hueFor(id) / 360, 0.75, 0.58);
+    this.colorHex = PLAYER_COLORS[hash(id) % PLAYER_COLORS.length];
+    this.color = new THREE.Color(this.colorHex);
     this.buffer = [];
     this.kills = 0;
     this.deaths = 0;
@@ -20,6 +24,9 @@ export class RemotePlayer {
     this.ping = 0;
     this.lastSeen = now();
     this.flash = 0;
+    this.spawnSeq = -1;
+    this.settling = true;   // hide until we have real snapshots at the current spawn
+    this.shielded = false;
 
     this.pos = new THREE.Vector3();
     this.yaw = 0;
@@ -64,7 +71,7 @@ export class RemotePlayer {
     this.shadow.position.y = 0.02;
     this.group.add(this.shadow);
 
-    this.label = makeLabel(this.name, colorFor(id));
+    this.label = makeLabel(this.name, cssColor(this.colorHex));
     this.label.position.y = 2.25;
     this.group.add(this.label);
 
@@ -76,22 +83,52 @@ export class RemotePlayer {
   setName(name) {
     if (!name || name === this.name) return;
     this.name = name;
+    this._rebuildLabel();
+  }
+
+  /** Room membership decides colours, so this changes as people come and go. */
+  setColor(hex) {
+    if (hex === this.colorHex) return;
+    this.colorHex = hex;
+    this.color.setHex(hex);
+    this.mat.color.copy(this.color);
+    this.mat.emissive.copy(this.color).multiplyScalar(0.35);
+    this.head.material.color.copy(this.color).offsetHSL(0, 0, 0.12);
+    this.head.material.emissive.copy(this.color).multiplyScalar(0.3);
+    this._rebuildLabel();
+  }
+
+  _rebuildLabel() {
     this.group.remove(this.label);
-    this.label.material.map.dispose();
+    this.label.material.map?.dispose();
     this.label.material.dispose();
-    this.label = makeLabel(name, '#' + this.color.getHexString());
+    this.label = makeLabel(this.name, cssColor(this.colorHex));
     this.label.position.y = 2.25;
     this.group.add(this.label);
   }
 
   onState(s) {
     this.lastSeen = now();
+
+    // A respawn teleports them. Interpolating across that would drag the body
+    // through the level, so throw the old samples away and stay hidden until
+    // there are enough new ones to interpolate between at the new position.
+    const seq = num(s.s, 0);
+    if (seq !== this.spawnSeq) {
+      this.spawnSeq = seq;
+      this.buffer.length = 0;
+      this.settling = true;
+      this.group.visible = false;
+    }
+    this.shielded = num(s.sf, 0) === 1;
+
     this.buffer.push({
       t: this.lastSeen,
       x: num(s.x), y: num(s.y), z: num(s.z),
       yaw: num(s.a), pitch: num(s.b), h: num(s.h, 1.8)
     });
     if (this.buffer.length > BUFFER) this.buffer.shift();
+    if (this.settling && this.buffer.length >= 2) this.settling = false;
     this.hp = num(s.hp);
     this.alive = this.hp > 0;
     this.kills = num(s.k, this.kills);
@@ -129,7 +166,7 @@ export class RemotePlayer {
     this.gun.position.y = 1.35 * scaleY;
     this.gun.rotation.x = -this.pitch;
     this.label.position.y = 2.25 * scaleY + 0.1;
-    this.group.visible = this.alive;
+    this.group.visible = this.alive && !this.settling;
 
     if (this.flash > 0) {
       this.flash -= dt;

@@ -29,15 +29,19 @@ same one. All three are public infrastructure that only carries the handshake.
 | | Keyboard + mouse | Touch |
 |---|---|---|
 | Move | `W` `A` `S` `D` | drag the left of the screen |
-| Look | mouse (pointer lock) | drag the right of the screen |
-| Fire | left click, `Ctrl` or `F` | `FIRE` button |
-| Jump / crouch | `Space` / `C` | `JUMP` / `CROUCH` |
+| Look | mouse (pointer lock) | drag anywhere on the right — including across a button |
+| Fire | left click, or `F` | `FIRE` |
+| Aim | right click | `AIM` |
+| Jump | `Space` | `JUMP` |
+| Crouch | `Ctrl` or `C` | `CROUCH` |
 | Sprint | `Shift` | push the stick to its edge |
 | Reload | `R` | `RELOAD` |
 | Weapons | `1` `2` `3`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
+| Fullscreen | button, top right | button, top right |
+| Rearrange the buttons | — | `LAYOUT`, top left |
 
 On a phone, **turn the device sideways**. Portrait works, and the camera widens
 its field of view to compensate, but landscape is far better to play in.
@@ -47,6 +51,38 @@ rather than modal: the first real key press retires the on-screen thumbstick and
 hands movement to `WASD`, while the whole screen stays a look pad for the thumb.
 Arrow keys also aim, and `Ctrl`/`F` fire, so a keyboard alone is playable when
 there is no mouse. Pointer lock is only requested where it exists.
+
+## Movement
+
+Ground movement is direct: the input *is* your velocity, so you turn on the spot
+and stop dead, with no acceleration ramp and no slide.
+
+In the air it changes character, because that is where bunny hopping lives. Only
+the strafe keys steer, and acceleration is granted only up to a small budget of
+speed *along the direction you are pushing*. Hold `W` in the air and you have
+already spent that budget, so nothing happens. Hold a strafe key and turn the
+view the same way, and every frame pays out. Chained jumps keep what you built —
+a frame that ends in a jump pays no ground friction — so a good run climbs from
+6.2 m/s walking to somewhere north of 13, while holding `W` and hammering jump
+gets you exactly walking speed and no more.
+
+Sprint latches: tap `Shift` once and you keep sprinting until you release
+forward. Crouching takes 0.3 s each way so it cannot be flickered, and stairs are
+climbed as a straight line — the body steps up instantly for collision, the view
+follows at a constant rate.
+
+## Shooting
+
+| | accuracy |
+|---|---|
+| Aiming (right click / `AIM`) | 100%, moving or still |
+| Standing hipfire | 95% |
+| Moving hipfire | 90% |
+
+Aiming raises 1.25× sights over 0.4 s, holds the gun perfectly still, and draws
+the crosshair in. The crosshair never blooms — accuracy is a function of stance,
+not something the reticle animates. The shotgun keeps its pellet pattern even
+aimed, because that is what a shotgun is. Headshots do double damage.
 
 ## How the networking works
 
@@ -84,10 +120,14 @@ The game itself needs nothing installed. The tests drive it in a real browser:
 npm install && npx playwright install chromium
 ./serve.sh 8080 &
 node test/movement.mjs
+node test/mechanics.mjs
 ```
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
-camera is looking, at nine different yaws. It exists because the movement basis
+camera is looking, at nine different yaws. `test/mechanics.mjs` measures the
+movement feel and the protection rules — ground control, latched sprint, the
+crouch animation, stair smoothing, bunny-hop speed gain, aiming, and the layout
+editor's shield. It exists because the movement basis
 was once mirrored in z: W and S inverted when facing along z, A and D inverted
 when facing along x, and everything felt swapped at the diagonals. The test that
 missed it measured only distance travelled, which is happily satisfied by a
