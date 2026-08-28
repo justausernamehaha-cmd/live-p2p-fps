@@ -31,6 +31,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Move | `W` `A` `S` `D` | drag the left of the screen |
 | Look | mouse (pointer lock) | drag anywhere on the right — including across a button |
 | Fire | left click, or `F` | `FIRE` |
+| Aim | right click | `AIM` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
 | Sprint | `Shift` | push the stick to its edge |
@@ -50,8 +51,8 @@ its field of view to compensate, but landscape is far better to play in.
 **A keyboard paired with a phone or tablet works.** The input layer is additive
 rather than modal: the first real key press retires the on-screen thumbstick and
 hands movement to `WASD`, while the whole screen stays a look pad for the thumb.
-Arrow keys also turn the view, and `F` fires, so a keyboard alone is playable
-when there is no mouse. Pointer lock is only requested where it exists.
+Arrow keys also aim, and `Ctrl`/`F` fire, so a keyboard alone is playable when
+there is no mouse. Pointer lock is only requested where it exists.
 
 ## Movement
 
@@ -82,25 +83,19 @@ follows at a constant rate.
 
 | | accuracy |
 |---|---|
-| Standing | 95% |
-| Moving | 90% |
+| Aiming (right click / `AIM`) | 100%, moving or still |
+| Standing hipfire | 95% |
+| Moving hipfire | 90% |
 
-There is no aim-down-sights: hipfire is all there is. The crosshair never
-changes size, because accuracy depends on whether you are moving and not on
-anything the reticle animates. The shotgun keeps its pellet pattern regardless,
-because that is what a shotgun is. Headshots do double damage.
+Aiming raises 1.25× sights over 0.4 s, holds the gun perfectly still, and draws
+the crosshair in. The crosshair never blooms — accuracy is a function of stance,
+not something the reticle animates. The shotgun keeps its pellet pattern even
+aimed, because that is what a shotgun is. Headshots do double damage.
 
 A kill refills the gun in your hands to its full ammo capacity — 150 rifle
 rounds, 42 shells, 30 marksman rounds. The magazine still has to be reloaded.
 
 ## A note on mouse input
-
-The right mouse button has no binding: it requests no pointer lock, sets no
-state and triggers no action. It does open the settle window described below,
-because pressing it shakes the mouse like any other button, and while it is held
-mouse look is ignored entirely — it has no function, so nothing is lost by
-refusing to aim through it. The browser's context menu is suppressed. Beyond
-that it does nothing.
 
 While the mouse is captured, every keystroke is swallowed except `Esc`, so
 browser shortcuts cannot fire mid-fight. In fullscreen the reserved combinations
@@ -161,8 +156,7 @@ node test/mouselook.mjs
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
 camera is looking, at nine different yaws. `test/mechanics.mjs` measures the
 movement feel and the protection rules — ground control, latched sprint, the
-crouch animation, stair smoothing, bunny-hop speed gain, momentum through
-landings and stairs and strafe swaps, accuracy by stance, and the layout
+crouch animation, stair smoothing, bunny-hop speed gain, aiming, and the layout
 editor's shield. It exists because the movement basis
 was once mirrored in z: W and S inverted when facing along z, A and D inverted
 when facing along x, and everything felt swapped at the diagonals. The test that

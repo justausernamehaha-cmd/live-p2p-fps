@@ -141,16 +141,37 @@ const R = await page.evaluate(async () => {
   g.world.boxes = realBoxes;
   await sleep(100);
 
-  // ---- accuracy by stance (there is no aiming; hipfire is all there is) ----
-  {
-    const rifle = g.loadout.weapon;
-    out.spreadRadians = {
-      standing: +window.__spreadFor(rifle, false).toFixed(5),
-      moving: +window.__spreadFor(rifle, true).toFixed(5)
-    };
-    out.movingIsLessAccurate =
-      out.spreadRadians.moving > out.spreadRadians.standing;
-  }
+  // ---- aiming ----
+  park(0, 0.3, -20);
+  await sleep(300);
+  const fov0 = g.camera.fov;
+  g.input.held.add('ads');
+  await sleep(200);
+  const mid = g.adsT;
+  await sleep(400);
+  const fullAds = g.adsT;
+  const fovAds = g.camera.fov;
+  const gunAds = { ...g.viewmodel.group.position };
+  await sleep(300);
+  const gunAds2 = { ...g.viewmodel.group.position };
+  g.input.held.delete('ads');
+  await sleep(600);
+  const rifle = g.loadout.weapon;
+  out.ads = {
+    halfwayAt200ms: +mid.toFixed(2),
+    fullAt600ms: +fullAds.toFixed(2),
+    backToHipAfterRelease: +g.adsT.toFixed(2),
+    fovHip: +fov0.toFixed(1),
+    fovAimed: +fovAds.toFixed(1),
+    zoom: +(fov0 / fovAds).toFixed(2),
+    gunHeldStill: Math.hypot(gunAds.x - gunAds2.x, gunAds.y - gunAds2.y, gunAds.z - gunAds2.z) < 0.002,
+    crosshairPulledIn: document.getElementById('crosshair').classList.contains('ads') === false
+  };
+  out.spreadRadians = {
+    standingHip: +window.__spreadFor(rifle, false, 0).toFixed(5),
+    movingHip: +window.__spreadFor(rifle, true, 0).toFixed(5),
+    aimedMoving: +window.__spreadFor(rifle, true, 1).toFixed(5)
+  };
 
   // ---- momentum must survive landings, stairs and strafe swaps ----
   out.momentum = {};

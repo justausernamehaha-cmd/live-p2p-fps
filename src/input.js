@@ -173,10 +173,6 @@ export class Input {
   _bindMouse() {
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
-      // The right button gets no binding: no pointer lock request, no held
-      // state, no action. Its effect on the settle window is handled by the
-      // global edge listeners above, along with every other button.
-      if (e.button === 2) return;
       this.mouseSeen = true;
 
       // Try to capture the mouse, but never let that get in the way of the click
@@ -203,12 +199,13 @@ export class Input {
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
       if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
+      if (e.button === 2) { this.held.add('ads'); this.justPressed.add('ads'); }
     });
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
-      if (e.button === 2) return;
       if (e.button === 0) this.held.delete('fire');
+      if (e.button === 2) this.held.delete('ads');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
 
@@ -245,13 +242,6 @@ export class Input {
         // Clamped, not discarded: real movement in the same event is kept, it
         // just cannot arrive all at once. The ceiling tightens sharply around a
         // button press, where the mouse is being disturbed by your hand.
-        // While the right button is held, mouse movement is ignored outright.
-        // Every previous guard keyed off the button *edge* and so expired while
-        // the button was still down - which is exactly the reported gesture,
-        // holding right and clicking left. The right button has no function
-        // here, so nothing is lost by refusing to aim while it is held.
-        if (e.buttons & 2) { this.dropped++; return; }
-
         const sincePress = now() - this.lastButtonAt;
         if (sincePress < CLICK_DEAD_MS) { this.dropped++; return; }
         const ceiling = sincePress < CLICK_SETTLE_MS ? CLICK_MAX_PX : MAX_PX_PER_EVENT;

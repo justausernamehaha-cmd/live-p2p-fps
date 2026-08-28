@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { World } from './world.js';
 import { Player, AIR } from './player.js';
 import { Input, isTyping } from './input.js';
-import { Loadout, WEAPONS, HEADSHOT_MULT, spreadFor } from './weapons.js';
+import { Loadout, WEAPONS, HEADSHOT_MULT, spreadFor, ADS_ZOOM, ADS_TIME } from './weapons.js';
 import { Effects, ViewModel } from './effects.js';
 import { RemotePlayer } from './remote.js';
 import { Hud, escapeHtml } from './hud.js';
@@ -41,6 +41,7 @@ class Game {
     this.editing = false;
     this.shieldUntil = 0;      // ms timestamps; while shielded, incoming damage is ignored
     this.fireLockUntil = 0;
+    this.adsT = 0;             // 0 hipfire, 1 fully aimed; 0.4s each way
 
     this._initThree();
     this._initInput();
@@ -117,10 +118,10 @@ class Game {
     this.baseFov = aspect >= 1
       ? 78
       : clamp(2 * Math.atan(Math.tan(35 * Math.PI / 180) / aspect) * 180 / Math.PI, 78, 106);
-    this.camera.fov = this.baseFov;
+    this.camera.fov = this.baseFov / (1 + (ADS_ZOOM - 1) * (this.adsT || 0));
     this.camera.updateProjectionMatrix();
     this.vmCamera.aspect = aspect;
-    this.vmCamera.fov = this.baseFov;
+    this.vmCamera.fov = this.baseFov;   // the gun is not magnified by aiming
     this.vmCamera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
   }
@@ -469,7 +470,7 @@ class Game {
     const eye = new THREE.Vector3(p.pos.x, p.eyeY + p.bob, p.pos.z);
     const base = this._aimDirection();
     const moving = Math.hypot(p.vel.x, p.vel.z) > 1.5 || !p.onGround;
-    const spread = spreadFor(w, moving);
+    const spread = spreadFor(w, moving, this.adsT);
 
     // the tracer leaves the barrel tip of the gun actually on screen: read its
     // position out of the viewmodel scene (which is camera space) and put it
@@ -588,13 +589,18 @@ class Game {
     if (input.pressed('lastweapon')) this._switch(this.loadout.swapLast(t));
     if (input.pressed('reload') && this.loadout.startReload(t)) this.audio.reload();
 
+    // sights come up and go down at a constant rate
+    const wantAds = input.down('ads');
+    this.adsT = clamp(this.adsT + (wantAds ? dt : -dt) / ADS_TIME, 0, 1);
+    this.hud.ads(this.adsT > 0.5);
+
     p.update(dt, input);
     if (this.loadout.update(t)) this.audio.reload();
 
     // camera and viewmodel first: the shot is traced from where they actually
     // are this frame, not from where they were on the last one
     this._camera(dt);
-    this.viewmodel.update(dt, p, this.loadout.reloading);
+    this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
     this._fire(t, input);
 
     // respawn
@@ -622,6 +628,14 @@ class Game {
   _camera(dt) {
     const p = this.player;
     const cam = this.camera;
+
+    // zoom by narrowing the field of view; the viewmodel keeps its own camera and
+    // its own fov, so the gun does not swell as the world magnifies
+    const zoomed = this.baseFov / (1 + (ADS_ZOOM - 1) * this.adsT);
+    if (Math.abs(cam.fov - zoomed) > 0.01) {
+      cam.fov = zoomed;
+      cam.updateProjectionMatrix();
+    }
 
     const shake = this.effects.shake;
     cam.position.set(

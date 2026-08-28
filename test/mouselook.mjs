@@ -135,9 +135,10 @@ const R = await page.evaluate(async () => {
     out.buttonsMaskChange = +(g.player.yaw * 180 / Math.PI).toFixed(2);
   }
 
-  out.rightHeld_moveLater   = await whileRightHeld(300, -341, 2);   // right only
-  out.rightHeld_andLeft     = await whileRightHeld(300, -341, 3);   // right + left
-  out.rightHeld_smallDrift  = await whileRightHeld(300, -58, 2);
+  // Holding the right button is aiming, so looking through it has to work; the
+  // suppression is about button *edges*, not about holding a button down.
+  out.lookWhileAiming       = await whileRightHeld(300, -58, 2);    // right held
+  out.lookWhileAimingAndFiring = await whileRightHeld(300, -58, 3); // right + left
   out.leftOnlyStillAims     = await whileRightHeld(300, -58, 1);    // left only
   out.noButtonsStillAims    = await whileRightHeld(300, -58, 0);
 
@@ -172,9 +173,8 @@ if (R.leftHeld_middlePressed !== 0) fail.push(`left held + middle pressed moved 
 if (R.leftHeld_rightPressed !== 0) fail.push(`left held + right pressed moved ${R.leftHeld_rightPressed} degrees`);
 if (R.rightHeld_leftPressed !== 0) fail.push(`right held + left pressed moved ${R.rightHeld_leftPressed} degrees`);
 if (R.buttonsMaskChange !== 0) fail.push(`a buttons-mask change moved ${R.buttonsMaskChange} degrees`);
-if (R.rightHeld_moveLater !== 0) fail.push(`movement while right was held moved ${R.rightHeld_moveLater} degrees`);
-if (R.rightHeld_andLeft !== 0) fail.push(`right+left held moved ${R.rightHeld_andLeft} degrees`);
-if (R.rightHeld_smallDrift !== 0) fail.push(`a small drift while right was held moved ${R.rightHeld_smallDrift} degrees`);
+if (Math.abs(R.lookWhileAiming) < 3) fail.push('looking while aiming was blocked');
+if (Math.abs(R.lookWhileAimingAndFiring) < 3) fail.push('looking while aiming and firing was blocked');
 if (Math.abs(R.leftOnlyStillAims) < 3) fail.push('aiming while only the left button is held was blocked');
 if (Math.abs(R.noButtonsStillAims) < 3) fail.push('aiming with no buttons held was blocked');
 if (Math.abs(R.rightPress100ms) > NUDGE) fail.push(`a late nudge after a RIGHT press moved ${R.rightPress100ms} degrees`);
