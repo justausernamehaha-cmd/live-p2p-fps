@@ -133,8 +133,8 @@ export class ViewModel {
     this.muzzleTip = new THREE.Object3D();
     this.muzzleTip.position.set(0, 0, -0.21);      // half the 0.42 barrel length
     this.barrel.add(this.muzzleTip);
-    this.grip = mk(0.07, 0.16, 0.09, 0x232936, 0, -0.12, 0.05);
-    this.stock = mk(0.07, 0.09, 0.2, 0x232936, 0, -0.03, 0.2);
+    mk(0.07, 0.16, 0.09, 0x232936, 0, -0.12, 0.05);   // grip
+    mk(0.07, 0.09, 0.2, 0x232936, 0, -0.03, 0.2);     // stock
     this.accent = mk(0.06, 0.03, 0.14, 0xd9743b, 0, 0.07, -0.12);
   }
 

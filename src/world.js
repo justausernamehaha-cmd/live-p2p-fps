@@ -192,5 +192,3 @@ function pushBox(pos, nor, uv, cx, cy, cz, sx, sy, sz) {
     }
   }
 }
-
-export { ARENA };

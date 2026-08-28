@@ -45,11 +45,6 @@ export function colorIndexFor(id, allIds) {
 
 export const cssColor = hex => '#' + hex.toString(16).padStart(6, '0');
 
-/** Fallback used before the room membership is known. */
-export function colorFor(id) {
-  return cssColor(PLAYER_COLORS[hash(id) % PLAYER_COLORS.length]);
-}
-
 const WORDS = ['iron', 'dust', 'nova', 'echo', 'vault', 'onyx', 'flare', 'rift', 'ghost', 'delta',
                'ember', 'north', 'sable', 'quartz', 'raven', 'stark'];
 

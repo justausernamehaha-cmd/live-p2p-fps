@@ -87,7 +87,6 @@ export class Input {
     this.lastMoveAt = 0;
     this.lastButtonAt = -1e9;   // last mouse button edge
     this.rawInput = null;       // did the browser grant unaccelerated movement?
-    this.lastDrop = [0, 0, 0];
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;

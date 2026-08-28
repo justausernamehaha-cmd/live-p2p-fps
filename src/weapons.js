@@ -6,7 +6,7 @@ export const HEADSHOT_MULT = 2;
 //
 //   standing   95%  -> 5% of hipSpread
 //   moving     90%  -> 10% of hipSpread
-export const ACCURACY = { standing: 0.95, moving: 0.90 };
+const ACCURACY = { standing: 0.95, moving: 0.90 };
 
 /** Cone half-angle in radians for the current stance. */
 export function spreadFor(weapon, moving) {

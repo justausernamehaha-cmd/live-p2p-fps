@@ -57,7 +57,6 @@ export class Player {
     this.onGround = false;
     this.hp = 100;
     this.alive = true;
-    this.respawnAt = 0;
     this.kills = 0;
     this.deaths = 0;
     this.spawnSeq = 0;        // bumped on every spawn so peers can drop stale interpolation
@@ -377,5 +376,3 @@ export class Player {
     return false;
   }
 }
-
-export { RADIUS, HEIGHT, CROUCH_HEIGHT, EYE_RATIO };

@@ -19,7 +19,6 @@ let selfId = '';
 let loading = null;
 
 export function getSelfId() { return selfId; }
-export function strategyNames() { return Object.keys(STRATEGIES); }
 
 /** Loads the signalling strategy. Must be awaited before constructing a Net.
  *  Safe (and worthwhile) to call early: the module comes off a CDN, and doing it
