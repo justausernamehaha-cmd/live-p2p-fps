@@ -90,22 +90,23 @@ changes size, because accuracy depends on whether you are moving and not on
 anything the reticle animates. The shotgun keeps its pellet pattern regardless,
 because that is what a shotgun is. Headshots do double damage.
 
-A kill pays out a magazine of ammunition for the gun in your hands — 30 rifle
-rounds, 6 shells, 5 marksman rounds — up to what that gun can carry. Killing on
-a full reserve gives nothing.
+A kill refills the gun in your hands to its full ammo capacity — 150 rifle
+rounds, 42 shells, 30 marksman rounds. The magazine still has to be reloaded.
 
 ## A note on mouse input
 
-The right mouse button is not read at all — no binding, no pointer-lock request,
-no state. Only the browser's context menu is suppressed, so right-clicking does
-nothing whatsoever.
+The right mouse button has no binding: it requests no pointer lock, sets no
+state and triggers no action. It does open the settle window described below,
+because pressing it shakes the mouse like any other button, and the browser's
+context menu is suppressed. Beyond that it does nothing.
 
 Pressing a mouse button physically disturbs the mouse, and pointer acceleration
 turns a few millimetres into tens of reported pixels, which lands as a view jolt.
 Two things guard against it: the lock is requested with `unadjustedMovement`, which turns
 OS acceleration off where the browser supports it (F3 shows `raw=true` when it
-was granted), and movement is capped per event — hard around a button press,
-loosely otherwise. Sustained turning still reaches ~380 degrees a second.
+was granted), and movement is capped per event: dropped entirely for the first 80ms of a
+press, throttled to about a degree until 170ms, and capped at roughly six
+degrees otherwise. Sustained turning still reaches ~380 degrees a second.
 
 ## How the networking works
 

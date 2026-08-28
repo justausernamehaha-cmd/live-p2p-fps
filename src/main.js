@@ -373,7 +373,7 @@ class Game {
       this.audio.kill();
       this.hud.hitmarker(true);
       const gained = this.loadout.awardOnKill();
-      if (gained) this.hud.feed(`+${gained} ${escapeHtml(this.loadout.weapon.name.toLowerCase())} ammo`, 'chat');
+      if (gained) this.hud.feed(`+${gained} ${escapeHtml(this.loadout.weapon.name.toLowerCase())} ammo &mdash; full`, 'chat');
     } else if (this.remotes.has(m.by)) {
       this.remotes.get(m.by).kills++;
     }

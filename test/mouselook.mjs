@@ -65,10 +65,28 @@ const R = await page.evaluate(async () => {
     await sleep(120);
     return +(g.player.yaw * 180 / Math.PI).toFixed(2);
   };
-  out.nudge30msIn = await duringPress(30, -58);
-  out.nudge90msIn = await duringPress(90, -58);
-  out.nudgeBigMidPress = await duringPress(60, -341);
-  out.afterPressEnds = await duringPress(200, -58);
+  out.nudge10msIn = await duringPress(10, -58);
+  out.nudge50msIn = await duringPress(50, -341);
+  out.nudge100msIn = await duringPress(100, -58);
+  out.nudge140msIn = await duringPress(140, -341);
+  out.afterPressEnds = await duringPress(220, -58);
+
+  // the reported gesture specifically: the RIGHT button is what shook the mouse,
+  // and it has no binding at all - the window must still open for it
+  const rightPress = async (delayMs, mx) => {
+    const c = document.getElementById('game');
+    g.player.yaw = 0;
+    g.input.lastButtonAt = -1e9;
+    c.dispatchEvent(new PointerEvent('pointerdown', {
+      pointerId: 1, pointerType: 'mouse', button: 2, buttons: 2, bubbles: true,
+      clientX: 500, clientY: 320 }));
+    await sleep(delayMs);
+    move(mx, 0);
+    await sleep(120);
+    return +(g.player.yaw * 180 / Math.PI).toFixed(2);
+  };
+  out.rightPress10ms = await rightPress(10, -341);
+  out.rightPress100ms = await rightPress(100, -58);
 
   // A single event may never swing the view more than the ceiling allows,
   // whatever its size and wherever it came from.
@@ -92,9 +110,12 @@ const fail = [];
 const NUDGE = 1.1;   // 8px at 0.0022 rad/px is about one degree
 if (Math.abs(R.onClick58) > NUDGE || Math.abs(R.onClick341) > NUDGE || Math.abs(R.onClick593) > NUDGE)
   fail.push(`a spike on a click moved the view (${R.onClick58}/${R.onClick341}/${R.onClick593} degrees)`);
-if (Math.abs(R.nudge30msIn) > NUDGE) fail.push(`a nudge 30ms into a press moved ${R.nudge30msIn} degrees`);
-if (Math.abs(R.nudge90msIn) > NUDGE) fail.push(`a nudge 90ms into a press moved ${R.nudge90msIn} degrees`);
-if (Math.abs(R.nudgeBigMidPress) > NUDGE) fail.push(`a 341px nudge mid-press moved ${R.nudgeBigMidPress} degrees`);
+if (R.nudge10msIn !== 0) fail.push(`a nudge 10ms into a press moved ${R.nudge10msIn} degrees`);
+if (R.nudge50msIn !== 0) fail.push(`a nudge 50ms into a press moved ${R.nudge50msIn} degrees`);
+if (Math.abs(R.nudge100msIn) > NUDGE) fail.push(`a nudge 100ms into a press moved ${R.nudge100msIn} degrees`);
+if (Math.abs(R.nudge140msIn) > NUDGE) fail.push(`a nudge 140ms into a press moved ${R.nudge140msIn} degrees`);
+if (R.rightPress10ms !== 0) fail.push(`a nudge after a RIGHT press moved ${R.rightPress10ms} degrees`);
+if (Math.abs(R.rightPress100ms) > NUDGE) fail.push(`a late nudge after a RIGHT press moved ${R.rightPress100ms} degrees`);
 if (Math.abs(R.afterPressEnds) < 3) fail.push('aiming did not resume after the press window');
 const CEILING = 7;     // 50px at 0.0022 rad/px is about 6.3 degrees
 if (Math.abs(R.spike58.degrees) > CEILING) fail.push('a 58px event exceeded the ceiling');

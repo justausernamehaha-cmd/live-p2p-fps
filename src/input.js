@@ -39,15 +39,16 @@ const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
 // gives the mouse as you click, a synthetic warp - can no longer move the view
 // more than about six degrees.
 const MAX_PX_PER_EVENT = 50;
-// Pressing a button physically nudges the mouse - noticeably so when the left
-// button is pressed while the right is held, which rotates the hand leftwards -
-// and pointer acceleration turns a few millimetres into tens of reported pixels.
-// The nudge lasts as long as the press, not three frames.
+// Pressing any mouse button physically nudges the mouse - noticeably so when the
+// left button is pressed while the right is held, which rotates the hand
+// leftwards - and pointer acceleration turns a few millimetres into tens of
+// reported pixels.
 //
-// Movement in that window is throttled rather than dropped: deliberately
-// tracking a target while shooting still works, it just cannot lurch. A 58px
-// jolt becomes about one degree instead of seven.
-const CLICK_SETTLE_MS = 120;
+// Two stages. The jolt itself is dropped outright; the rest of the press is
+// throttled, so deliberately tracking a target while shooting still works and
+// only lurches are removed.
+const CLICK_DEAD_MS = 80;      // nothing at all gets through
+const CLICK_SETTLE_MS = 170;   // after which movement is throttled, then normal
 const CLICK_MAX_PX = 8;
 
 // Sliders, checkboxes and buttons are <input> too, and a focused slider must not
@@ -162,8 +163,11 @@ export class Input {
   _bindMouse() {
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
-      // The right button is not a game input. Nothing reads it, so nothing here
-      // reacts to it: no pointer lock request, no press window, no state at all.
+      // Any button being pressed shakes the mouse, so the settle window opens for
+      // all of them. That is not a binding: the right button still requests no
+      // pointer lock, sets no held state and triggers no action. It is only
+      // noted so the jolt it causes can be ignored.
+      this.lastButtonAt = now();
       if (e.button === 2) return;
       this.mouseSeen = true;
 
@@ -190,14 +194,13 @@ export class Input {
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
-      this.lastButtonAt = now();
       if (e.button === 0) { this.held.add('fire'); this.justPressed.add('fire'); }
     });
 
     addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') return;
-      if (e.button === 2) return;
       this.lastButtonAt = now();
+      if (e.button === 2) return;
       if (e.button === 0) this.held.delete('fire');
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
@@ -216,9 +219,9 @@ export class Input {
         // Clamped, not discarded: real movement in the same event is kept, it
         // just cannot arrive all at once. The ceiling tightens sharply around a
         // button press, where the mouse is being disturbed by your hand.
-        const ceiling = now() - this.lastButtonAt < CLICK_SETTLE_MS
-          ? CLICK_MAX_PX
-          : MAX_PX_PER_EVENT;
+        const sincePress = now() - this.lastButtonAt;
+        if (sincePress < CLICK_DEAD_MS) { this.dropped++; return; }
+        const ceiling = sincePress < CLICK_SETTLE_MS ? CLICK_MAX_PX : MAX_PX_PER_EVENT;
         const mx = clamp(e.movementX, -ceiling, ceiling);
         const my = clamp(e.movementY, -ceiling, ceiling);
         if (mx !== e.movementX || my !== e.movementY) {

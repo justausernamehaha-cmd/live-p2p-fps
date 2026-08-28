@@ -92,12 +92,12 @@ export class Loadout {
     return w;
   }
 
-  /** A kill pays out a magazine's worth of ammunition for the gun in hand, up to
-   *  what that gun can carry. Returns how many rounds were actually gained. */
+  /** A kill refills the gun in hand to its full ammo capacity. Returns how many
+   *  rounds were actually gained, which is nothing if you were already full. */
   awardOnKill() {
     const w = this.weapon, a = this.ammo;
     const before = a.reserve;
-    a.reserve = Math.min(w.reserve, a.reserve + w.mag);
+    a.reserve = w.reserve;
     return a.reserve - before;
   }
 
