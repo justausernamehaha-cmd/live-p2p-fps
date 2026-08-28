@@ -223,6 +223,7 @@ export class Input {
     // that was still shifting the view, because the settle window never opened.
     // mousedown/mouseup are listened for as well, since the middle button in
     // particular does not always produce a pointer event.
+    const UP_EVENTS = new Set(['pointerup', 'mouseup', 'auxclick']);
     const edge = e => {
       this.lastButtonAt = now();
       // Read which buttons are down from the event's own mask rather than from
@@ -230,8 +231,13 @@ export class Input {
       // while another is held may never reach the canvas, so deriving the state
       // from `buttons` is the only way to see it - that is why firing while
       // holding right click did nothing.
+      //
+      // The mask is only trusted to *clear* an action on an actual release.
+      // Some events under-report it, and one of those arriving mid-fight took
+      // fire and ads away together: the gun stopped after a few rounds and the
+      // sights dropped at the same moment.
       if (e && typeof e.buttons === 'number' && e.pointerType !== 'touch') {
-        this._syncMouseButtons(e.buttons);
+        this._syncMouseButtons(e.buttons, UP_EVENTS.has(e.type));
       }
     };
     for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'auxclick']) {
@@ -246,7 +252,7 @@ export class Input {
       if (e.buttons !== this._prevButtons) {
         this._prevButtons = e.buttons;
         this.lastButtonAt = now();
-        this._syncMouseButtons(e.buttons);   // a press we never saw arrive
+        this._syncMouseButtons(e.buttons, false);   // a press we never saw arrive
       }
 
       if (this.pointerLocked) {
@@ -441,14 +447,14 @@ export class Input {
   /** Mirror the mouse's button mask into the action set. Only actions the mouse
    *  itself put there are taken away again, so a touch player holding FIRE is
    *  never disarmed by a stray mouse event on a hybrid device. */
-  _syncMouseButtons(buttons) {
+  _syncMouseButtons(buttons, allowClear) {
     for (const [bit, action] of [[1, 'fire'], [2, 'ads']]) {
       const down = (buttons & bit) !== 0;
       const had = this._mouseHeld.has(action);
       if (down && !had) {
         this._mouseHeld.add(action);
         this.press(action);
-      } else if (!down && had) {
+      } else if (!down && had && allowClear) {
         this._mouseHeld.delete(action);
         this.release(action);
       }

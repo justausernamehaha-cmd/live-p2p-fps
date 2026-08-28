@@ -64,6 +64,31 @@ const R = await page.evaluate(async () => {
   await sleep(400);
   out.stillFiringAfterRelease = magAfter !== g.loadout.ammo.mag;
 
+  // An event that under-reports which buttons are down must not take the aim or
+  // the trigger away. This is the "I fire a few rounds and drop out of aim"
+  // report: one stray mask of 0 used to clear both at once.
+  await reset();
+  down(2, 2); await sleep(40);
+  down(0, 3); await sleep(40);
+  g.loadout.state[g.loadout.index].mag = 30; g.fireLockUntil = 0;
+  const magBeforeStray = g.loadout.ammo.mag;
+  // the mask-transition guard only syncs when the mask *changes*, so seed it
+  // with the true state or the stray events below are never even looked at
+  g.input._prevButtons = 3;
+  for (let i = 0; i < 6; i++) {
+    // a move claiming nothing is held, of the kind captured mid-fight
+    dispatchEvent(new PointerEvent('pointermove', { pointerType:'mouse', bubbles:true,
+      movementX: 4, movementY: 0, buttons: 0 }));
+    await sleep(60);
+  }
+  out.afterStrayMasks = state();
+  out.keptFiringThrough = magBeforeStray - g.loadout.ammo.mag;
+  // and a genuine release still ends it
+  up(0, 2); await sleep(60);
+  out.leftReleaseStillWorks = state();
+  up(2, 0); await sleep(60);
+  out.rightReleaseStillWorks = state();
+
   // and the other release order
   await reset();
   down(0, 1); await sleep(50);
@@ -85,6 +110,12 @@ if (!(R.bothDown.fire && R.bothDown.ads)) fail.push('holding both was not seen')
 if (R.leftReleasedFirst.fire) fail.push('the trigger stayed down after left was released');
 if (R.bothReleased.fire || R.bothReleased.ads) fail.push('a button stayed held after both were released');
 if (R.stillFiringAfterRelease) fail.push('the gun kept firing after the buttons were released');
+if (!(R.afterStrayMasks.fire && R.afterStrayMasks.ads))
+  fail.push('a stray buttons=0 event dropped the aim or the trigger');
+if (R.keptFiringThrough < 2) fail.push('the gun stopped firing through stray events');
+if (R.leftReleaseStillWorks.fire || !R.leftReleaseStillWorks.ads)
+  fail.push('a real left release did not behave');
+if (R.rightReleaseStillWorks.ads) fail.push('a real right release did not drop the aim');
 if (!R.rightReleasedFirst.fire) fail.push('releasing right dropped the trigger too');
 if (R.rightReleasedFirst.ads) fail.push('aim stayed on after right was released');
 if (R.thenLeftReleased.fire) fail.push('the trigger stayed down at the end');
