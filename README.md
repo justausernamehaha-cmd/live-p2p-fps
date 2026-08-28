@@ -97,8 +97,14 @@ rounds, 42 shells, 30 marksman rounds. The magazine still has to be reloaded.
 
 The right mouse button has no binding: it requests no pointer lock, sets no
 state and triggers no action. It does open the settle window described below,
-because pressing it shakes the mouse like any other button, and the browser's
-context menu is suppressed. Beyond that it does nothing.
+because pressing it shakes the mouse like any other button, and while it is held
+mouse look is ignored entirely — it has no function, so nothing is lost by
+refusing to aim through it. The browser's context menu is suppressed. Beyond
+that it does nothing.
+
+While the mouse is captured, every keystroke is swallowed except `Esc`, so
+browser shortcuts cannot fire mid-fight. In fullscreen the reserved combinations
+go too, via the Keyboard Lock API.
 
 Pressing a mouse button physically disturbs the mouse, and pointer acceleration
 turns a few millimetres into tens of reported pixels, which lands as a view jolt.

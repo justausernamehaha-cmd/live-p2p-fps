@@ -112,9 +112,18 @@ export class Input {
     addEventListener('keydown', e => {
       if (e.repeat) return;
       if (this.textMode || isTyping(e)) return;
+
+      // With the mouse captured the page is the application, so swallow every
+      // key - not only the ones the game uses. This has to happen before the
+      // early return below, or Ctrl+S, quick-find, F5 and anything else the game
+      // does not bind would still reach the browser mid-fight. Escape is left
+      // alone, because it is how you get the mouse back.
+      if (this.pointerLocked && e.code !== 'Escape') e.preventDefault();
+
       const a = KEY_ACTIONS[e.code];
       if (a === undefined && !(e.code in LOOK_KEYS)) return;
-      if (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+      if (!this.pointerLocked &&
+          (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow'))) e.preventDefault();
 
       if (!this.keyboardSeen) {
         this.keyboardSeen = true;
@@ -219,6 +228,13 @@ export class Input {
         // Clamped, not discarded: real movement in the same event is kept, it
         // just cannot arrive all at once. The ceiling tightens sharply around a
         // button press, where the mouse is being disturbed by your hand.
+        // While the right button is held, mouse movement is ignored outright.
+        // Every previous guard keyed off the button *edge* and so expired while
+        // the button was still down - which is exactly the reported gesture,
+        // holding right and clicking left. The right button has no function
+        // here, so nothing is lost by refusing to aim while it is held.
+        if (e.buttons & 2) { this.dropped++; return; }
+
         const sincePress = now() - this.lastButtonAt;
         if (sincePress < CLICK_DEAD_MS) { this.dropped++; return; }
         const ceiling = sincePress < CLICK_SETTLE_MS ? CLICK_MAX_PX : MAX_PX_PER_EVENT;
@@ -252,10 +268,14 @@ export class Input {
       if (this.pointerLocked) {
         this.lockFailedAt = 0;     // it worked, so stop treating it as refused
         this._mouseDrag = null;
+        // Chrome will hand over the reserved combinations too (Ctrl+W and
+        // friends), but only in fullscreen; elsewhere this simply rejects.
+        try { navigator.keyboard?.lock?.()?.catch?.(() => {}); } catch { /* unsupported */ }
         this.lockedAt = now();     // ignore the settling moves that follow
         this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
+        try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
         this.releaseAll();         // nothing may survive losing the mouse
         this.onAction?.('pause');
       }

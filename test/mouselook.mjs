@@ -88,6 +88,23 @@ const R = await page.evaluate(async () => {
   out.rightPress10ms = await rightPress(10, -341);
   out.rightPress100ms = await rightPress(100, -58);
 
+  // the exact reported gesture: right held down, and movement arriving at any
+  // point during that hold, long after any edge-based window has expired
+  const whileRightHeld = async (delayMs, mx, buttons) => {
+    g.player.yaw = 0;
+    g.input.lastButtonAt = performance.now() - 5000;   // no recent edge at all
+    await sleep(delayMs);
+    dispatchEvent(new PointerEvent('pointermove', {
+      pointerType: 'mouse', bubbles: true, movementX: mx, movementY: 0, buttons }));
+    await sleep(120);
+    return +(g.player.yaw * 180 / Math.PI).toFixed(2);
+  };
+  out.rightHeld_moveLater   = await whileRightHeld(300, -341, 2);   // right only
+  out.rightHeld_andLeft     = await whileRightHeld(300, -341, 3);   // right + left
+  out.rightHeld_smallDrift  = await whileRightHeld(300, -58, 2);
+  out.leftOnlyStillAims     = await whileRightHeld(300, -58, 1);    // left only
+  out.noButtonsStillAims    = await whileRightHeld(300, -58, 0);
+
   // A single event may never swing the view more than the ceiling allows,
   // whatever its size and wherever it came from.
   g.input.lastButtonAt = -1e9;      // away from any click, the ceiling alone applies
@@ -115,6 +132,11 @@ if (R.nudge50msIn !== 0) fail.push(`a nudge 50ms into a press moved ${R.nudge50m
 if (Math.abs(R.nudge100msIn) > NUDGE) fail.push(`a nudge 100ms into a press moved ${R.nudge100msIn} degrees`);
 if (Math.abs(R.nudge140msIn) > NUDGE) fail.push(`a nudge 140ms into a press moved ${R.nudge140msIn} degrees`);
 if (R.rightPress10ms !== 0) fail.push(`a nudge after a RIGHT press moved ${R.rightPress10ms} degrees`);
+if (R.rightHeld_moveLater !== 0) fail.push(`movement while right was held moved ${R.rightHeld_moveLater} degrees`);
+if (R.rightHeld_andLeft !== 0) fail.push(`right+left held moved ${R.rightHeld_andLeft} degrees`);
+if (R.rightHeld_smallDrift !== 0) fail.push(`a small drift while right was held moved ${R.rightHeld_smallDrift} degrees`);
+if (Math.abs(R.leftOnlyStillAims) < 3) fail.push('aiming while only the left button is held was blocked');
+if (Math.abs(R.noButtonsStillAims) < 3) fail.push('aiming with no buttons held was blocked');
 if (Math.abs(R.rightPress100ms) > NUDGE) fail.push(`a late nudge after a RIGHT press moved ${R.rightPress100ms} degrees`);
 if (Math.abs(R.afterPressEnds) < 3) fail.push('aiming did not resume after the press window');
 const CEILING = 7;     // 50px at 0.0022 rad/px is about 6.3 degrees
