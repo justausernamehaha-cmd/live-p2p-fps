@@ -197,11 +197,55 @@ far below the plate's top the body was when it lost its speed: inside
 `STEP_HEIGHT` is a fault, a 2.5 m wall is allowed to stop you. Watched go red at
 19 of 108 with the gate restored, green at 0 of 108 with it gone.
 
+## Seeing through a portal — built 2026-08-30
+
+Each mouth renders the scene again from a camera put through the portal by the
+same transform that moves the player, and the disc samples that texture in
+**screen space** — the virtual camera drew the same viewport with the same
+projection, so the pixel behind a fragment is the pixel at the same place in the
+target. No UVs are involved, which is why it stays correct at every angle.
+
+- **Hide the *exit*, not the entry.** The virtual camera stands behind the far
+  mouth looking out of it, so that mouth is right against the lens: leave it in
+  and every portal is a picture of the back of its own partner. This was the one
+  thing standing between "it renders" and "it works", and it looked like a dark
+  blob covering everything.
+- **The near plane has to be bent onto the exit's own plane** (Lengyel's oblique
+  projection, `obliqueNear()`), or the first thing the virtual camera draws is the
+  inside of the wall the exit is on.
+- **Portals drawn inside a portal view keep last frame's texture.** One render per
+  mouth per frame instead of one per level of recursion, and it is what makes two
+  facing mouths a corridor rather than a flat disc. A frame stale, which nobody
+  can see.
+- **There was no body to see.** This is first-person and the only thing on screen
+  was the gun, so `SelfAvatar` in remote.js follows the player and is drawn *only*
+  into portal views. Same silhouette as a RemotePlayer, so what you see of
+  yourself is what everyone else sees.
+- **`Math.sign(0)` is 0, not 1**, which is a degenerate case in the oblique
+  construction. It survives it, but it is worth knowing it is there.
+- Rationed: only mouths on screen, nearest first, `MAX_VIEWS` of them, at half
+  resolution. Measured at 61 fps with two live views against 61 with none, under
+  the software rasteriser.
+
+Proved by reading the portal's own render target rather than the screen: paint
+the player a colour nothing in the arena wears and count how much of it the front
+mouth shows — 934 pixels with the body in portal views, 0 with it taken out.
+
+## Three more things the portals got wrong, fixed the same day
+
+- **A portal used to slide until its border lined up with the block's edge.** It
+  now lands exactly where it was shot, overhang and all; the erosion is still
+  computed but only to answer "can this surface hold a portal at all", which is
+  what decides whether the shot explodes.
+- **The ring used to turn.** It is a circle scaled unevenly into an oval, so
+  rotating the mesh sweeps that oval around instead of spinning a ring inside it
+  — the mouth visibly changed shape, wider than tall and back, once a second.
+- **The rim was not an entrance.** The crossing test measured the middle of the
+  player against the exact oval, so clipping the edge with a shoulder scraped you
+  along it. The mouth is widened by the player's radius now.
+
 ## Ideas, not built
 
-- **See-through portals.** Traversal was built first and deliberately: it is most
-  of what makes them feel right and needs no render target. Looking through one
-  would.
 - **Peers seeing edits live.** The designer is deliberately single-player: a
   seed is how a level travels. Sharing edits would need an authority for
   conflicts, which this game does not have anywhere else either.

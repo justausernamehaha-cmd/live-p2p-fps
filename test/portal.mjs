@@ -35,20 +35,21 @@ t('a shot in the middle of a wall places a portal there',
 t('a wall portal stands upright', mid && near(Math.abs(mid.v.y), 1), mid && fx(mid.v.y));
 t('and its width axis is horizontal', mid && near(mid.u.y, 0), mid && fx(mid.u.y));
 
-// ---------------------------------------------------------------- it slides
-// hard into the bottom-left corner of the same wall: it cannot sit there, but
-// the wall is enormous, so it must slide until the whole oval is on the face
+// ------------------------------------------------- it goes where it was shot
+// Hard into the bottom-left corner of the same wall. The wall is enormous, so a
+// portal is allowed here — and it goes exactly where the shot landed, overhang
+// and all. It used to slide until its border lined up with the block's edge,
+// which is not what aiming at a spot means.
 const corner = fitPortal(face, { x: -9.9, y: 0.05, z: -0.5 }, { x: 0, y: 0, z: 1 });
 t('a corner shot still places a portal', !!corner);
 // FIT slack: fitPortal allows half a millimetre so an exact fit is not decided
 // by the last bit of a float. Nothing here is measuring closer than that.
 const SLACK = 1e-3;
-t('...slid so the whole oval is on the face',
-  corner && corner.c.x >= -10 + HALF_W - SLACK && corner.c.y >= HALF_H - SLACK,
+t('...exactly where it was shot, not shuffled along the block',
+  corner && near(corner.c.x, -9.9, SLACK) && near(corner.c.y, 0.05, SLACK),
   corner && JSON.stringify([fx(corner.c.x), fx(corner.c.y)]));
-t('...and no further than it had to',
-  corner && near(corner.c.x, -10 + HALF_W, 2e-3) && near(corner.c.y, HALF_H, 2e-3),
-  corner && JSON.stringify([fx(corner.c.x), fx(corner.c.y)]));
+t('...and it is allowed to hang over the edge',
+  corner && corner.c.x - HALF_W < -10, corner && fx(corner.c.x - HALF_W));
 
 // ----------------------------------------------------------- it explodes
 // a 1 x 1 m plate cannot hold a 1.36 x 1.8 oval however it is slid
@@ -62,8 +63,9 @@ const exact = {
   min: { x: -HALF_W, y: 0, z: -0.5 }, max: { x: HALF_W, y: HALF_H * 2, z: 0.5 }
 };
 const exactFace = faceOf({ box: exact, axis: 2, sign: -1 });
-const snug = fitPortal(exactFace, { x: HALF_W, y: 0, z: -0.5 }, { x: 0, y: 0, z: 1 });
-t('a surface exactly big enough fits, dead centre',
+// shot dead centre, which is the only place it could sit anyway
+const snug = fitPortal(exactFace, { x: 0, y: HALF_H, z: -0.5 }, { x: 0, y: 0, z: 1 });
+t('a surface exactly big enough takes a portal',
   snug && near(snug.c.x, 0, 2e-3) && near(snug.c.y, HALF_H, 2e-3),
   snug && JSON.stringify([fx(snug.c.x), fx(snug.c.y)]));
 
@@ -72,19 +74,18 @@ const shy = { min: { x: -HALF_W + 0.01, y: 0, z: -0.5 }, max: { x: HALF_W, y: HA
 t('a hair too narrow explodes',
   fitPortal(faceOf({ box: shy, axis: 2, sign: -1 }), { x: 0, y: 1, z: -0.5 }, { x: 0, y: 0, z: 1 }) === null);
 
-// The property the whole fit exists for, checked over the face rather than at
-// one hand-picked spot: wherever the shot lands, the oval that comes back is
-// entirely on the surface. A hundred points is cheap and catches a class of
-// mistake that one corner case can walk straight past.
-let offFace = 0, refused = 0;
+// The property that matters now, checked over the face rather than at one
+// hand-picked spot: wherever the shot lands on a surface big enough to hold a
+// portal, the portal lands there — never anywhere else. A hundred points is
+// cheap and catches a class of mistake one corner case walks straight past.
+let moved = 0, refused = 0;
 for (let i = 0; i < 100; i++) {
   const px = -10 + (i * 0.2) % 20, py = (i * 0.37) % 6;
   const f = fitPortal(face, { x: px, y: py, z: -0.5 }, { x: 0, y: 0, z: 1 });
   if (!f) { refused++; continue; }
-  if (f.c.x - HALF_W < -10 - SLACK || f.c.x + HALF_W > 10 + SLACK ||
-      f.c.y - HALF_H < -SLACK || f.c.y + HALF_H > 6 + SLACK) offFace++;
+  if (Math.abs(f.c.x - px) > SLACK || Math.abs(f.c.y - py) > SLACK) moved++;
 }
-t('every shot on a big wall lands a portal wholly on it', offFace === 0, offFace + ' off the face');
+t('every shot on a big wall puts the portal where it was aimed', moved === 0, moved + ' were shuffled');
 t('...and none of them was refused', refused === 0, refused + ' refused');
 
 // ------------------------------------------------------------------ the floor
@@ -175,6 +176,11 @@ t('just inside the rim crosses',
   crossing({ x: HALF_W * 0.9, y: 1, z: 0.2 }, { x: HALF_W * 0.9, y: 1, z: -0.2 }, A) > 0);
 t('and just outside it does not',
   crossing({ x: HALF_W * 1.05, y: 1, z: 0.2 }, { x: HALF_W * 1.05, y: 1, z: -0.2 }, A) < 0);
+// the rim is an entrance: a shoulder's width outside the drawn oval still counts
+t('brushing the rim from outside the oval still goes in',
+  crossing({ x: HALF_W * 1.1, y: 1, z: 0.2 }, { x: HALF_W * 1.1, y: 1, z: -0.2 }, A, 0.17) > 0);
+t('...but a long way outside still does not',
+  crossing({ x: HALF_W + 0.6, y: 1, z: 0.2 }, { x: HALF_W + 0.6, y: 1, z: -0.2 }, A, 0.17) < 0);
 t('a tall player clipping the top of a low portal still goes in',
   crossing({ x: 0, y: 1 + HALF_H * 0.95, z: 0.2 }, { x: 0, y: 1 + HALF_H * 0.95, z: -0.2 }, A) > 0);
 

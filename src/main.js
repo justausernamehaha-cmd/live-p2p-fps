@@ -4,7 +4,7 @@ import { Player, AIR } from './player.js';
 import { Input, isTyping } from './input.js';
 import { Loadout, WEAPONS, HEADSHOT_MULT, spreadFor, ADS_ZOOM, ADS_TIME } from './weapons.js';
 import { Effects, ViewModel } from './effects.js';
-import { RemotePlayer } from './remote.js';
+import { RemotePlayer, SelfAvatar } from './remote.js';
 import { Hud, escapeHtml } from './hud.js';
 import { Layout } from './layout.js';
 import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
@@ -115,6 +115,10 @@ class Game {
     this.portals = new PortalField(this.scene, this.effects);
     this.portals.onPlaced = (side, p) => this.net?.portal(side, p);
     this.player.portals = this.portals;
+    // a body of your own, drawn only into portal views: shoot one portal in
+    // front of you and one behind, and the person you see is you
+    this.selfAvatar = new SelfAvatar(this.scene);
+    this.portals.selfView = this.selfAvatar.group;
 
     addEventListener('resize', () => this._resize());
     addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
@@ -777,6 +781,8 @@ class Game {
     this.hud.update(dt);
 
     const r = this.renderer;
+    // what is on the other side of each mouth, before anything is drawn for real
+    this.portals.renderViews(r, this.scene, this.camera);
     r.autoClear = false;
     r.clear();
     r.render(this.scene, this.camera);
@@ -828,6 +834,8 @@ class Game {
     // camera and viewmodel first: the shot is traced from where they actually
     // are this frame, not from where they were on the last one
     this._camera(dt);
+    this.selfAvatar.update(p);
+    this.selfAvatar.setColor(this.myColor ?? PLAYER_COLORS[0]);
     this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
     this._fire(t, input);
 

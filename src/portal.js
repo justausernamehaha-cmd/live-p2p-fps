@@ -18,13 +18,14 @@
 // on a platform rides with it, which is the whole reason platforms and portals
 // arrived in the same change.
 
-// "A player tall and double players wide." The player is 1.8 m tall and 0.34 m
-// across (RADIUS 0.17 in player.js), so a portal is 1.8 tall — and 1.36 wide,
-// reading "double players wide" as room for two of them abreast with the space
-// between that a doorway needs. A 0.68 m mouth would be only a quarter of a
-// metre wider than the player and nothing about it would feel easy to step into.
+// Two metres tall, at the user's asking — a little over head height, so you walk
+// through one rather than duck into it. Width reads "double players wide" as room
+// for two of them abreast: the player is 0.34 m across (RADIUS 0.17 in
+// player.js), so 1.36 m, with the space between that a doorway needs. A 0.68 m
+// mouth would be a quarter of a metre wider than the player and nothing about it
+// would feel easy to step into.
 export const HALF_W = 0.68;
-export const HALF_H = 0.9;
+export const HALF_H = 1.0;
 
 // How far outside the mouth the exit puts you. Enough to clear the player's own
 // radius plus the collision skin, so you never materialise inside the wall you
@@ -121,18 +122,18 @@ export function frameFor(n, look) {
  *  Returns {c, u, v, n} on success, or null when the surface cannot hold the
  *  whole oval — in which case the caller makes it explode.
  *
- *  Sliding is the interesting half. The set of centres at which an axis-aligned
- *  box of half-size (HALF_W, HALF_H) fits inside a convex polygon is that
- *  polygon eroded by the box, which is exact and is itself convex: push every
- *  edge inward by how far the box reaches along that edge's normal. Clip the
- *  face by those offset edges and whatever survives is every legal centre. The
- *  nearest point of it to where the shot landed is where the portal goes — which
- *  is "slide it to the nearest place it fits" stated as arithmetic. Empty means
- *  the surface was too small, and no amount of sliding would have helped.
+ *  A portal goes exactly where it was shot. It used to slide itself along until
+ *  its border lined up with the block's edge, which is not what anybody aiming
+ *  at a spot means by hitting it — you would fire at a corner and watch the
+ *  portal appear somewhere you had not pointed.
  *
- *  The oval is inscribed in that box rather than fitted itself, so the fit is a
- *  little conservative at a slanted corner. That errs toward refusing a portal
- *  that would poke over an edge, which is the right way to be wrong. */
+ *  The erosion is still computed, but only to answer the other half of the
+ *  question: *can* this surface hold a portal at all? The set of centres at which
+ *  an axis-aligned box of half-size (HALF_W, HALF_H) fits inside a convex polygon
+ *  is that polygon eroded by the box — push every edge inward by how far the box
+ *  reaches along that edge's normal and clip. Empty means the surface is too
+ *  small however you place it, and the shot explodes. Anything else takes the
+ *  portal at the point of impact, overhang and all. */
 export function fitPortal(face, point, look) {
   if (!face || face.verts.length < 3) return null;
   const { u, v, n } = frameFor(face.n, look);
@@ -164,8 +165,9 @@ export function fitPortal(face, point, look) {
     if (poly.length < 1) return null;             // nowhere on this face fits
   }
 
-  const [s0, t0] = to2(point);
-  const [s, t] = nearestInPoly(poly, s0, t0);
+  // where the shot landed, projected onto the face's own plane so a portal is
+  // never a hair in front of or behind the surface it is on
+  const [s, t] = to2(point);
   const c = add3(origin, add3(scale3(u, s), scale3(v, t)));
   return { c, u, v, n };
 }
@@ -180,8 +182,13 @@ export function overlapsPartner(portal, partner) {
 
 // --------------------------------------------------------------- traversal
 /** Did the segment p0 -> p1 pass through this portal's mouth, front to back?
- *  Returns the fraction along the segment where it crossed, or -1. */
-export function crossing(p0, p1, portal) {
+ *  Returns the fraction along the segment where it crossed, or -1.
+ *
+ *  `pad` widens the mouth by that many metres in both directions. The player is
+ *  a cylinder, not a line, so brushing the rim with your shoulder is still going
+ *  in — passing it the player's radius is what makes the edge of a portal an
+ *  entrance rather than a place to get stuck against. */
+export function crossing(p0, p1, portal, pad = 0) {
   const d0 = dot(sub3(p0, portal.c), portal.n);
   const d1 = dot(sub3(p1, portal.c), portal.n);
   if (d0 <= 0 || d1 > 0) return -1;         // must start in front and end behind
@@ -190,8 +197,8 @@ export function crossing(p0, p1, portal) {
   const k = d0 / denom;
   const hit = v3(p0.x + (p1.x - p0.x) * k, p0.y + (p1.y - p0.y) * k, p0.z + (p1.z - p0.z) * k);
   const rel = sub3(hit, portal.c);
-  const s = dot(rel, portal.u) / HALF_W;
-  const t = dot(rel, portal.v) / HALF_H;
+  const s = dot(rel, portal.u) / (HALF_W + pad);
+  const t = dot(rel, portal.v) / (HALF_H + pad);
   return s * s + t * t <= 1 ? k : -1;
 }
 
@@ -317,27 +324,3 @@ function clipHalfPlane(poly, nx, ny, d) {
   return out;
 }
 
-/** Nearest point of a convex polygon to (s,t) — the point itself when it is
- *  already inside, otherwise the closest point on the boundary. A single
- *  surviving vertex (an exact fit) is handled by the same code. */
-function nearestInPoly(poly, s, t) {
-  if (poly.length === 1) return poly[0];
-  let inside = true;
-  for (let i = 0; i < poly.length && inside; i++) {
-    const a = poly[i], b = poly[(i + 1) % poly.length];
-    const ex = b[0] - a[0], ey = b[1] - a[1];
-    if ((s - a[0]) * ey - (t - a[1]) * ex > EPS) inside = false;   // right of a CCW edge
-  }
-  if (inside) return [s, t];
-  let best = poly[0], bestD = Infinity;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i], b = poly[(i + 1) % poly.length];
-    const ex = b[0] - a[0], ey = b[1] - a[1];
-    const len2 = ex * ex + ey * ey;
-    const k = len2 < EPS ? 0 : Math.max(0, Math.min(1, ((s - a[0]) * ex + (t - a[1]) * ey) / len2));
-    const px = a[0] + ex * k, py = a[1] + ey * k;
-    const d = (px - s) ** 2 + (py - t) ** 2;
-    if (d < bestD) { bestD = d; best = [px, py]; }
-  }
-  return best;
-}

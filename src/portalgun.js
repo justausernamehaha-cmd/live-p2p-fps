@@ -12,7 +12,43 @@ const BALL_SPEED = 78;        // fast enough to read as a shot, not a lob
 const BALL_RANGE = 220;       // beyond this it simply fizzles out
 const BALL_R = 0.09;          // "a perfect small ball"
 const BALL_STEP = 1.2;        // metres per collision query along its flight
-const SPIN = 1.7;             // radians a second the ring turns, so it reads as live
+// The ring does not turn, and must not. It is a circle scaled unevenly into an
+// oval, so rotating the mesh sweeps that oval around instead of spinning a ring
+// inside it: the mouth visibly changes shape, wider than tall and back again,
+// once a second. A portal that is there stays exactly as it was put.
+
+// Seeing through a portal means rendering the scene again from behind the other
+// one, once per portal, per frame. That is the most expensive thing this game
+// does, so it is rationed: only portals actually on screen are redrawn, at most
+// this many of them, at half resolution.
+const MAX_VIEWS = 2;
+const VIEW_SCALE = 0.5;
+const VIEW_RANGE = 90;        // metres past which a mouth is not worth redrawing
+
+// The disc samples its view in screen space: the virtual camera rendered the
+// same viewport with the same projection, so the pixel behind this fragment is
+// the pixel at the same place in the target. No UV mapping is involved at all,
+// which is what keeps it correct at every angle.
+const VIEW_VERT = `
+  varying vec4 vClip;
+  void main() {
+    vClip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = vClip;
+  }`;
+const VIEW_FRAG = `
+  uniform sampler2D uView;
+  uniform vec3 uFallback;
+  uniform float uHasView;
+  uniform vec3 uTint;
+  varying vec4 vClip;
+  void main() {
+    if (uHasView < 0.5) { gl_FragColor = vec4(uFallback, 0.92); return; }
+    vec2 uv = (vClip.xy / vClip.w) * 0.5 + 0.5;
+    vec3 col = texture2D(uView, clamp(uv, 0.002, 0.998)).rgb;
+    // a breath of the mouth's own colour, so which portal you are looking
+    // through is still readable when both ends show the same grey room
+    gl_FragColor = vec4(mix(col, uTint, 0.12), 1.0);
+  }`;
 
 export class PortalField {
   constructor(scene, effects) {
@@ -30,6 +66,15 @@ export class PortalField {
     this.myRandom = Math.random();
     this.colors.set(this.selfId, { ...SOLO_PAIR });
     this.onPlaced = null;        // the game hooks this to broadcast
+    // Anything in here is drawn only into portal views, never into the player's
+    // own camera: their own body, which they can see through a portal and must
+    // not see hanging in front of their face.
+    this.selfView = null;
+    this._vcam = new THREE.PerspectiveCamera();
+    this._vcam.matrixAutoUpdate = false;
+    this._plane = new THREE.Plane();
+    this._m = new THREE.Matrix4();
+    this._viewSize = { w: 0, h: 0 };
   }
 
   // ------------------------------------------------------------------ colours
@@ -105,10 +150,6 @@ export class PortalField {
    *  geometry. */
   update(dt, world) {
     this._rideMovers(world);
-    for (const p of this._all()) {
-      p.spin += SPIN * dt;
-      if (p.ring) p.ring.rotation.z = p.spin;
-    }
 
     for (let i = this.balls.length - 1; i >= 0; i--) {
       const b = this.balls[i];
@@ -191,7 +232,7 @@ export class PortalField {
 
     const color = this.colorFor(owner, side);
     const portal = {
-      owner, side, color, spin: 0,
+      owner, side, color,
       c: { ...spec.c }, n: { ...spec.n }, u: { ...spec.u }, v: { ...spec.v },
       mover: spec.mover ?? -1
     };
@@ -241,15 +282,150 @@ export class PortalField {
     return out;
   }
 
+  // ------------------------------------------------------------------- views
+  /** Draw what is on the other side of every portal worth drawing.
+   *
+   *  Looking through a portal is the scene rendered again from a camera that has
+   *  been put through the portal — the player's own camera, moved by exactly the
+   *  transform that moves the player. The result is sampled in screen space, so
+   *  the window is correct at every angle without a UV in sight.
+   *
+   *  Two things make it work rather than nearly work:
+   *
+   *  The near plane is bent onto the exit portal's own plane. The virtual camera
+   *  sits *behind* the exit — that is what looking out of it means — so without
+   *  this the first thing it draws is the back of the wall the exit is on, and
+   *  every portal is a picture of the inside of a wall.
+   *
+   *  Portals drawn inside a portal view keep the texture they had last frame.
+   *  That costs one render per portal per frame instead of one per portal per
+   *  level of recursion, and it is what makes a mouth facing its own partner show
+   *  a corridor going away from you rather than a flat disc. It is a frame stale,
+   *  which at sixty frames a second nobody has ever been able to see.
+   */
+  renderViews(renderer, scene, camera) {
+    const all = this._all().filter(p => p.group);
+    if (!all.length) return;
+    this._sizeTargets(renderer);
+
+    // only what is on screen, nearest first, and never more than the ration
+    camera.updateMatrixWorld();
+    this._frustum = this._frustum || new THREE.Frustum();
+    this._frustum.setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const eye = camera.getWorldPosition(new THREE.Vector3());
+    const wanted = [];
+    for (const p of all) {
+      const partner = this._partnerOf(p);
+      if (!partner) continue;
+      const c = new THREE.Vector3(p.c.x, p.c.y, p.c.z);
+      const d = c.distanceTo(eye);
+      if (d > VIEW_RANGE) continue;
+      // a sphere, so a mouth half off the edge of the screen still counts
+      if (!this._frustum.intersectsSphere(new THREE.Sphere(c, HALF_H + 0.2))) continue;
+      wanted.push({ p, partner, d });
+    }
+    if (!wanted.length) return;
+    wanted.sort((a, b) => a.d - b.d);
+
+    const prevTarget = renderer.getRenderTarget();
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = true;
+    if (this.selfView) this.selfView.visible = true;
+
+    for (const { p, partner } of wanted.slice(0, MAX_VIEWS)) {
+      if (!p.target) p.target = this._makeTarget();
+      this._aimVirtualCamera(camera, p, partner);
+      // The *exit* is what has to go, not the mouth being looked through. The
+      // virtual camera stands behind the far mouth looking out of it, so that
+      // mouth is right against the lens: leave it in and every portal is a
+      // picture of the back of its own partner. The near mouth stays, and shows
+      // the texture it had last frame, which is what turns two facing portals
+      // into a corridor going away from you instead of a flat disc.
+      partner.group.visible = false;
+      renderer.setRenderTarget(p.target);
+      renderer.render(scene, this._vcam);
+      partner.group.visible = true;
+      p.disc.material.uniforms.uView.value = p.target.texture;
+      p.disc.material.uniforms.uHasView.value = 1;
+    }
+
+    if (this.selfView) this.selfView.visible = false;
+    renderer.setRenderTarget(prevTarget);
+    renderer.autoClear = prevAutoClear;
+  }
+
+  _partnerOf(p) {
+    const pair = this.pairs.get(p.owner);
+    if (!pair) return null;
+    return p.side === 'a' ? pair.b : pair.a;
+  }
+
+  /** Put the camera through the portal, and bend its near plane onto the far
+   *  mouth's surface so nothing between the two is drawn. */
+  _aimVirtualCamera(camera, from, to) {
+    const basis = (q, flip) => {
+      const m = new THREE.Matrix4().makeBasis(
+        new THREE.Vector3(q.u.x, q.u.y, q.u.z).multiplyScalar(flip ? -1 : 1),
+        new THREE.Vector3(q.v.x, q.v.y, q.v.z),
+        new THREE.Vector3(q.n.x, q.n.y, q.n.z).multiplyScalar(flip ? -1 : 1)
+      );
+      m.setPosition(q.c.x, q.c.y, q.c.z);
+      return m;
+    };
+    // Mt * flip(u, n) * Mf^-1 — the same half turn about the exit's up axis that
+    // portalMap() applies to the player, written as one matrix.
+    this._m.copy(basis(to, true)).multiply(basis(from, false).invert());
+
+    const v = this._vcam;
+    v.matrixWorld.multiplyMatrices(this._m, camera.matrixWorld);
+    v.matrixWorldInverse.copy(v.matrixWorld).invert();
+    v.projectionMatrix.copy(camera.projectionMatrix);
+    v.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    v.matrixWorldNeedsUpdate = false;
+
+    this._plane.setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(to.n.x, to.n.y, to.n.z),
+      new THREE.Vector3(to.c.x, to.c.y, to.c.z));
+    this._plane.applyMatrix4(v.matrixWorldInverse);
+    obliqueNear(v.projectionMatrix, this._plane);
+  }
+
+  _makeTarget() {
+    const t = new THREE.WebGLRenderTarget(
+      Math.max(2, this._viewSize.w), Math.max(2, this._viewSize.h),
+      { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true }
+    );
+    t.texture.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  /** Keep the targets matched to the window. Resizing is rare and reallocating
+   *  every frame would be absurd, so it only happens when the size really moved. */
+  _sizeTargets(renderer) {
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(2, Math.round(size.x * VIEW_SCALE));
+    const h = Math.max(2, Math.round(size.y * VIEW_SCALE));
+    if (w === this._viewSize.w && h === this._viewSize.h) return;
+    this._viewSize = { w, h };
+    for (const p of this._all()) if (p.target) p.target.setSize(w, h);
+  }
+
   // ------------------------------------------------------------------ meshes
   _build(p) {
     p.group = new THREE.Group();
     // the mouth: dark, so it reads as a hole rather than as a sticker
     p.disc = new THREE.Mesh(
-      new THREE.CircleGeometry(1, 40),
-      new THREE.MeshBasicMaterial({
-        color: 0x0a0f18, transparent: true, opacity: 0.82,
-        side: THREE.DoubleSide, depthWrite: false
+      new THREE.CircleGeometry(1, 48),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uView: { value: null },
+          uHasView: { value: 0 },
+          uFallback: { value: new THREE.Color(0x0a0f18) },
+          uTint: { value: new THREE.Color(p.color) }
+        },
+        vertexShader: VIEW_VERT, fragmentShader: VIEW_FRAG,
+        side: THREE.DoubleSide, depthWrite: false, transparent: true
       })
     );
     p.ring = new THREE.Mesh(
@@ -269,6 +445,7 @@ export class PortalField {
     p.light.position.set(0, 0, 0.4);
     p.group.add(p.light);
     p.group.renderOrder = 4;
+    p.target = null;             // its view of the far side, made on first use
     this.group.add(p.group);
     this._placeMesh(p);
   }
@@ -292,6 +469,7 @@ export class PortalField {
   _paint(p, color) {
     p.color = color;
     p.ring?.material.color.setHex(color);
+    p.disc?.material.uniforms.uTint.value.setHex(color);
     if (p.light) p.light.color.setHex(color);
   }
 
@@ -300,6 +478,31 @@ export class PortalField {
     this.group.remove(p.group);
     p.disc.geometry.dispose(); p.disc.material.dispose();
     p.ring.geometry.dispose(); p.ring.material.dispose();
+    p.target?.dispose();
+    p.target = null;
     p.group = null;
   }
+}
+
+/** Bend a projection matrix's near plane onto an arbitrary plane, given in the
+ *  camera's own space. Lengyel's construction: replace the third row so that the
+ *  near plane and the clip plane coincide, which costs nothing at draw time and
+ *  clips exactly, unlike a user clipping plane. */
+function obliqueNear(projection, plane) {
+  const e = projection.elements;
+  const c = new THREE.Vector4(plane.normal.x, plane.normal.y, plane.normal.z, plane.constant);
+  if (Math.abs(c.w) < 1e-6 && c.lengthSq() < 1e-12) return;
+  const q = new THREE.Vector4(
+    (Math.sign(c.x) + e[8]) / e[0],
+    (Math.sign(c.y) + e[9]) / e[5],
+    -1,
+    (1 + e[10]) / e[14]
+  );
+  const denom = c.dot(q);
+  if (Math.abs(denom) < 1e-9) return;      // the plane runs through the eye
+  c.multiplyScalar(2 / denom);
+  e[2] = c.x;
+  e[6] = c.y;
+  e[10] = c.z + 1;
+  e[14] = c.w;
 }

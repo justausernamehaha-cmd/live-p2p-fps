@@ -74,6 +74,11 @@ const PORTAL_LEAD = RADIUS + 0.06;
 // with the lowest sample at a quarter height that could never happen — the floor
 // stopped the body while the sample was still a foot above the mouth.
 const PORTAL_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
+// The sample line is the middle of the player, but a player is a cylinder. The
+// mouth is widened by the radius so that clipping the rim with a shoulder counts
+// as going in — the edge of a portal is an entrance, not somewhere to scrape
+// along.
+const PORTAL_EDGE = RADIUS;
 const PORTAL_COOLDOWN = 0.14;   // stops a pair sitting close together strobing
 
 export class Player {
@@ -508,7 +513,7 @@ export class Player {
         const hy = this.height * frac;
         const p0 = { x: this.pos.x, y: this.pos.y + hy, z: this.pos.z };
         const p1 = { x: p0.x + sx, y: p0.y + sy, z: p0.z + sz };
-        const k = crossing(p0, p1, lead);
+        const k = crossing(p0, p1, lead, PORTAL_EDGE);
         if (k < 0) continue;
         if (!best || k < best.k) best = { k, link, hy, p0, p1 };
       }

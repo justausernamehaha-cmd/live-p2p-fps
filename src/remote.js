@@ -237,3 +237,64 @@ function makeLabel(text, color) {
   sprite.scale.set(1.6, 0.4, 1);
   return sprite;
 }
+
+/** The local player's own body.
+ *
+ *  There has never been one: this is a first-person game and the only thing on
+ *  screen was the gun. Seeing yourself through a portal needs something to see,
+ *  so this follows the player around and is drawn *only* into portal views —
+ *  PortalField hides it for the player's own camera, where it would be a torso
+ *  hanging in front of their face.
+ *
+ *  It is deliberately the same silhouette as a RemotePlayer, so what you see of
+ *  yourself is what everyone else sees of you. */
+export class SelfAvatar {
+  constructor(scene) {
+    this.group = new THREE.Group();
+    this.color = new THREE.Color(PLAYER_COLORS[0]);
+    const mat = new THREE.MeshLambertMaterial({
+      color: this.color, emissive: this.color.clone().multiplyScalar(0.35)
+    });
+    this.mat = mat;
+    this.body = new THREE.Mesh(
+      new THREE.CapsuleGeometry(BODY_R, 1.8 - HEAD_H - BODY_R * 2, 4, 12), mat);
+    this.body.position.y = 0.72;
+    this.head = new THREE.Mesh(
+      new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H),
+      new THREE.MeshLambertMaterial({
+        color: this.color.clone().offsetHSL(0, 0, 0.12),
+        emissive: this.color.clone().multiplyScalar(0.3)
+      })
+    );
+    this.head.position.y = 1.62;
+    this.gun = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.1, 0.6),
+      new THREE.MeshLambertMaterial({ color: 0x232936 })
+    );
+    this.gun.position.set(0.22, 1.35, -0.4);
+    this.group.add(this.body, this.head, this.gun);
+    this.group.visible = false;      // portal views only
+    scene.add(this.group);
+  }
+
+  setColor(hex) {
+    if (hex === undefined || hex === this.colorHex) return;
+    this.colorHex = hex;
+    this.color.setHex(hex);
+    this.mat.color.copy(this.color);
+    this.mat.emissive.copy(this.color).multiplyScalar(0.35);
+    this.head.material.color.copy(this.color).offsetHSL(0, 0, 0.12);
+    this.head.material.emissive.copy(this.color).multiplyScalar(0.3);
+  }
+
+  update(player) {
+    const s = player.height / 1.8;
+    this.group.position.set(player.pos.x, player.pos.y, player.pos.z);
+    this.group.rotation.y = player.yaw;
+    this.body.scale.y = s;
+    this.body.position.y = 0.72 * s;
+    this.head.position.y = 1.62 * s;
+    this.gun.position.y = 1.35 * s;
+    this.gun.rotation.x = -player.pitch;
+  }
+}

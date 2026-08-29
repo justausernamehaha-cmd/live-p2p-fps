@@ -173,6 +173,102 @@ const R = await page.evaluate(async () => {
     out.broadAccepted = !!(p3 && p3.a);
   }
 
+  // --------------------------------------------- it goes where it was shot
+  // Not shuffled along until its border lines up with the block's edge. Fired
+  // hard into the corner of the arena's floor-level wall, the portal has to
+  // appear at the point of impact, overhang and all.
+  g.portals.clear();
+  const wall = g.world.boxes.find(b => b.min.z < -59 && b.max.x - b.min.x > 100);
+  out.foundOuterWall = !!wall;
+  if (wall) {
+    const aimY = 0.35;                       // low enough that a slide would show
+    g.portals.fire('me', { x: 12, y: aimY, z: -50 }, { x: 0, y: 0, z: -1 }, 'a');
+    await sleep(700);
+    const pa = g.portals.pairs.get('me')?.a;
+    out.shotWhereAimed = pa ? round(Math.abs(pa.c.y - aimY)) : null;
+    out.landedAtImpact = !!pa && Math.abs(pa.c.y - aimY) < 0.02 && Math.abs(pa.c.x - 12) < 0.02;
+    out.allowedToOverhang = !!pa && pa.c.y - 1.0 < 0;      // half of a 2 m portal
+  }
+
+  // ------------------------------------------------------- 2 m tall, oval
+  out.portalHeight = round(2 * 1.0);
+  const anyPortal = g.portals.pairs.get('me')?.a;
+  out.discIsUpright = !!anyPortal && anyPortal.disc.scale.y > anyPortal.disc.scale.x;
+  out.ringMatchesDisc = !!anyPortal &&
+    Math.abs(anyPortal.ring.scale.x - anyPortal.disc.scale.x) < 1e-6 &&
+    Math.abs(anyPortal.ring.scale.y - anyPortal.disc.scale.y) < 1e-6;
+  // and it does not turn once it is there: rotating an unevenly scaled circle
+  // sweeps the oval around and the mouth visibly changes shape
+  const ringAngle0 = anyPortal ? anyPortal.ring.rotation.z : 0;
+  await sleep(500);
+  out.ringDidNotTurn = !!anyPortal && Math.abs(anyPortal.ring.rotation.z - ringAngle0) < 1e-9;
+
+  // ------------------------------------------ the rim is an entrance too
+  // Walk in offset almost the whole half-width, so the body only clips the edge.
+  const rimRun = async (offset) => {
+    g.portals.clear();
+    const X = -52;
+    g.portals.place('me', 'a', { c: { x: X, y: 1.0, z: -3 }, n: { x: 0, y: 0, z: 1 },
+      u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    g.portals.place('me', 'b', { c: { x: X + 25, y: 1.0, z: 0 }, n: { x: 1, y: 0, z: 0 },
+      u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    park(X + offset, 0.3, -1.4, 0);
+    await sleep(150);
+    const before = g.player.portalCount;
+    keys('fwd');
+    await sleep(700);
+    keys();
+    return g.player.portalCount - before >= 1;
+  };
+  out.enteredAtTheRim = await rimRun(0.66);        // all but touching the edge
+  out.enteredDeadCentre = await rimRun(0);
+  out.refusedWellOutside = !(await rimRun(1.6));   // a metre and a half off: no
+
+  // --------------------------------------- standing between two portals
+  // Two mouths facing each other with the player in the gap. Nothing is moving
+  // into anything, so nothing may teleport — this used to be the shape that
+  // could strobe a player back and forth for ever.
+  g.portals.clear();
+  const BX = -52;
+  g.portals.place('me', 'a', { c: { x: BX, y: 1.3, z: -2.4 }, n: { x: 0, y: 0, z: 1 },
+    u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: BX, y: 1.3, z: 2.4 }, n: { x: 0, y: 0, z: -1 },
+    u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  park(BX, 0.05, 0, 0);
+  keys();
+  const stillCount = g.player.portalCount;
+  await sleep(1200);
+  out.stoodBetween = {
+    teleports: g.player.portalCount - stillCount,
+    stayed: Math.abs(g.player.pos.x - BX) < 0.3 && Math.abs(g.player.pos.z) < 0.5
+  };
+
+  // ------------------------------------------------- and you can see yourself
+  // The strongest form of the claim, read out of the portal's own view rather
+  // than off the screen: paint the player a colour nothing in the arena wears,
+  // then count how much of it the front mouth is showing. The control is the
+  // same frame with the body taken out of portal views entirely.
+  const magentaIn = async (showSelf) => {
+    g.portals.selfView = showSelf ? g.selfAvatar.group : null;
+    g.myColor = 0xff00ff;
+    g.selfAvatar.setColor(0xff00ff);
+    await sleep(500);
+    const t = g.portals.pairs.get('me')?.a?.target;
+    if (!t) return -1;
+    const buf = new Uint8Array(t.width * t.height * 4);
+    g.renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, buf);
+    let n = 0;
+    for (let i = 0; i < buf.length; i += 4) {
+      if (buf[i] > 90 && buf[i + 2] > 90 && buf[i] - buf[i + 1] > 45 && buf[i + 2] - buf[i + 1] > 45) n++;
+    }
+    return n;
+  };
+  out.selfSeenThroughPortal = await magentaIn(true);
+  out.selfNotSeenWithoutBody = await magentaIn(false);
+  g.portals.selfView = g.selfAvatar.group;
+  out.viewIsLive = g.portals.pairs.get('me')?.a?.disc.material.uniforms.uHasView.value;
+  out.selfHiddenFromOwnCamera = g.selfAvatar.group.visible === false;
+
   // ------------------------------------------------------- moving platforms
   g.portals.clear();
   out.moverCount = g.world.movers.length;
@@ -253,6 +349,28 @@ want('the gun places a portal on a wall', R.gunPlaced, R.gunPlaced);
 want('...standing upright on it', R.placedUpright, R.placedUpright);
 want('a surface too narrow explodes instead', R.thinRefused, { face: R.thinFace, refused: R.thinRefused });
 want('...while the same wall\'s broad side takes one', R.broadAccepted, R.broadAccepted);
+
+want('a portal lands exactly where it was shot', R.landedAtImpact,
+  { offBy: R.shotWhereAimed });
+want('...and is allowed to hang over the edge', R.allowedToOverhang, R.allowedToOverhang);
+want('a portal is 2 m tall', R.portalHeight === 2, R.portalHeight);
+want('...taller than it is wide', R.discIsUpright, R.discIsUpright);
+want('...with the ring on the mouth, not around it', R.ringMatchesDisc, R.ringMatchesDisc);
+want('a placed portal does not turn', R.ringDidNotTurn, R.ringDidNotTurn);
+
+want('brushing the rim still takes you in', R.enteredAtTheRim, R.enteredAtTheRim);
+want('...as does walking in dead centre', R.enteredDeadCentre, R.enteredDeadCentre);
+want('...but walking well past it does not', R.refusedWellOutside, R.refusedWellOutside);
+
+want('standing between two portals teleports nobody', R.stoodBetween.teleports === 0, R.stoodBetween);
+want('...and leaves them where they stood', R.stoodBetween.stayed, R.stoodBetween);
+
+want('a portal in view is rendering its far side', R.viewIsLive === 1, R.viewIsLive);
+want('you can see yourself through a portal', R.selfSeenThroughPortal > 200,
+  { seen: R.selfSeenThroughPortal, control: R.selfNotSeenWithoutBody });
+want('...and it really is the body you are seeing', R.selfNotSeenWithoutBody === 0,
+  R.selfNotSeenWithoutBody);
+want('your body never shows in your own camera', R.selfHiddenFromOwnCamera, R.selfHiddenFromOwnCamera);
 
 want('the arena has moving platforms', R.moverCount >= 4, R.moverCount);
 want('a platform actually moves', R.moverMoved, R.moverMoved);

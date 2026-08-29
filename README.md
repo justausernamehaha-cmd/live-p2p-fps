@@ -173,12 +173,18 @@ colour of your left-click portal and the right one the colour of your right.
 
 **One pair each.** Firing a third of the same colour replaces the older one.
 
-A portal is an oval, a player tall and two wide, and it goes on any surface with
-room for the whole of it — walls, floors, ceilings, ramps, the side of a moving
-platform. Shot into a corner it **slides to the nearest place it fits** rather
-than being refused. Shot at something too small it **explodes and is gone**: the
-end of a cover wall is one metre thick and a portal is 1.36 wide, so that wall
-takes one on its face and never on its edge.
+A portal is an oval **two metres tall and 1.36 wide**, and it goes on any surface
+with room for the whole of it — walls, floors, ceilings, ramps, the side of a
+moving platform. It lands **exactly where you shot it** and stays there: it does
+not shuffle itself along until its border lines up with the block's edge, and it
+does not turn once it is placed. Shot at something too small to hold a portal at
+all it **explodes and is gone**: the end of a cover wall is one metre thick and a
+portal is 1.36 wide, so that wall takes one on its face and never on its edge.
+
+**You can see through them.** Each mouth is a window onto whatever is in front of
+the other one, rendered from a camera put through the portal exactly the way you
+would be. Put one in front of you and one behind and you are looking at yourself,
+down a corridor that keeps going.
 
 Anyone can use anyone's portals, which is why the colours matter. With one
 player they are blue and orange. As soon as anybody else is in the room every
@@ -188,8 +194,11 @@ each player announces one random number when they join and every machine folds
 the same set together, so all of them reach the same answer with no authority
 and no negotiation.
 
-Walking in is meant to be easy — any part of your body through the mouth is you
-through it — and you **keep everything you had**. Your speed is turned into the
+Walking in is meant to be easy. Any part of your body through the mouth is you
+through it, and the rim counts: brush the very edge with a shoulder and you go
+in rather than scraping along it. You can stand between two of them without being
+thrown about — nothing moving into a mouth means nothing goes through it. And you
+**keep everything you had**. Your speed is turned into the
 exit's direction, not scrubbed, so a long drop into a portal on the floor comes
 out of a wall as a long flat run. Your view is turned with it.
 
@@ -403,7 +412,7 @@ src/player.js   local movement, collision, step-up, crouch
 src/input.js    keyboard + mouse + touch, combined
 src/weapons.js  four weapons and their ammo state
 src/portal.js   portals as geometry: fitting, traversal, colours (no three.js)
-src/portalgun.js the portal gun, the ball it fires, and how a portal is drawn
+src/portalgun.js the portal gun, the ball, and seeing through a mouth
 src/remote.js   remote player rendering, interpolation, hitboxes
 src/net.js      Trystero room and the message actions
 src/effects.js  tracers, impacts, muzzle flash, viewmodel
@@ -420,6 +429,9 @@ instead of sitting black.
 * `src/weapons.js` — damage, fire rate, spread, recoil, magazine sizes.
 * `src/portal.js` — the size of a portal, how forgiving its mouth is, and how
   far outside it you are put on the way out.
+* `src/portalgun.js` — `MAX_VIEWS` and `VIEW_SCALE`: how many mouths redraw the
+  world each frame and at what resolution. Seeing through a portal is by a long
+  way the most expensive thing this game does.
 * `src/level.js` — `MOVE_SPEED`, how fast every moving platform travels.
 * `src/player.js` — movement constants at the top (speed, gravity, jump, step
   height), including the fall gravity multiplier and how much of a fall is paid
