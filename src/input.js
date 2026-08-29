@@ -4,7 +4,9 @@ import { clamp, now } from './util.js';
 // the same state, and they are additive: a phone with a Bluetooth keyboard
 // drives movement from WASD while the thumb on the right half still aims.
 
-const KEY_ACTIONS = {
+// The stock bindings. They are only defaults now: the settings panel writes a
+// copy of this map to localStorage, so `binds` is what the game actually reads.
+export const DEFAULT_BINDS = {
   KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
   Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint',
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
@@ -12,6 +14,25 @@ const KEY_ACTIONS = {
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
   Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3'
 };
+
+// Shown in the settings panel, in this order. Anything not listed here is still
+// bindable in principle but has no row, which keeps the panel to one screen.
+export const BINDABLE = [
+  ['fwd', 'Forward'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right'],
+  ['jump', 'Jump'], ['sprint', 'Sprint'], ['crouch', 'Crouch'],
+  ['fire', 'Fire'], ['reload', 'Reload'], ['lastweapon', 'Last weapon'],
+  ['weapon1', 'Weapon 1'], ['weapon2', 'Weapon 2'], ['weapon3', 'Weapon 3'],
+  ['score', 'Scoreboard']
+];
+
+// Actions that can be held or latched. Sprint and jump are here because on a
+// phone a third finger is not available, and a latched jump is what makes bunny
+// hopping possible with a thumb.
+export const TOGGLEABLE = [
+  ['crouch', 'Crouch'], ['ads', 'Aim'], ['sprint', 'Sprint'], ['jump', 'Jump']
+];
+
+const BIND_KEY = 'pa.binds';
 
 const LOOK_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
@@ -94,6 +115,10 @@ export class Input {
     try {
       for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
     } catch { /* nothing saved */ }
+    this.binds = this._loadBinds();
+    // set while another mode owns the pointer on purpose (the level designer
+    // releases it with Alt); without it every click grabs the mouse straight back
+    this.suspendLock = false;
     this.rawInput = null;       // did the browser grant unaccelerated movement?
     this.lastMovement = [0, 0];
     this.textMode = false;          // chat box has focus: swallow game keys
@@ -133,7 +158,7 @@ export class Input {
 
       if (e.repeat) return;            // suppressed above, but only acted on once
 
-      const a = KEY_ACTIONS[e.code];
+      const a = this.binds[e.code];
       if (a === undefined && !(e.code in LOOK_KEYS)) return;
 
       if (!this.keyboardSeen) {
@@ -152,7 +177,7 @@ export class Input {
     // guard here dropped exactly that release whenever focus had moved to a text
     // field in between, which is one click into the chat box away.
     addEventListener('keyup', e => {
-      const a = KEY_ACTIONS[e.code];
+      const a = this.binds[e.code];
       if (a) this.release(a);
       if (e.code in LOOK_KEYS) this.held.delete('look' + e.code);
       this._recalcKeys();
@@ -198,7 +223,7 @@ export class Input {
       const reallyLocked = document.pointerLockElement === this.canvas;
       if (reallyLocked !== this.pointerLocked) this.pointerLocked = reallyLocked;
 
-      if (!reallyLocked && !this.lockRefused) {
+      if (!reallyLocked && !this.lockRefused && !this.suspendLock) {
         if (this.canvas.requestPointerLock) {
           this._lock();
         } else {
@@ -328,6 +353,7 @@ export class Input {
   /** Only ever locks when a real mouse is in play — a touch device that has a
    *  keyboard attached still needs its screen for aiming. */
   requestLock() {
+    if (this.suspendLock) return;
     if (this.hasTouch && !this.mouseSeen) return;
     if (this.lockRefused || !this.canvas.requestPointerLock) return;
     this._lock();
@@ -443,6 +469,57 @@ export class Input {
   }
 
   isToggle(action) { return this.toggleMode.has(action); }
+
+  // ---------------------------------------------------------------- bindings
+  _loadBinds() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(BIND_KEY));
+      if (saved && typeof saved === 'object') {
+        // only keep pairs that still mean something, so an old save cannot
+        // bind a key to an action the game no longer has
+        const actions = new Set(Object.values(DEFAULT_BINDS));
+        const out = {};
+        for (const [code, action] of Object.entries(saved)) {
+          if (typeof code === 'string' && actions.has(action)) out[code] = action;
+        }
+        if (Object.keys(out).length) return out;
+      }
+    } catch { /* nothing saved, or unreadable */ }
+    return { ...DEFAULT_BINDS };
+  }
+
+  _saveBinds() {
+    try { localStorage.setItem(BIND_KEY, JSON.stringify(this.binds)); } catch { /* private mode */ }
+  }
+
+  /** Every key currently bound to an action. */
+  keysFor(action) {
+    return Object.keys(this.binds).filter(code => this.binds[code] === action);
+  }
+
+  /** Point one key at one action, taking that key off whatever else had it and
+   *  clearing the action's old keys — one row in the panel, one key. */
+  bind(action, code) {
+    if (!code || code === 'Escape') return false;
+    for (const c of Object.keys(this.binds)) {
+      if (this.binds[c] === action || c === code) delete this.binds[c];
+    }
+    this.binds[code] = action;
+    // a rebind mid-game must not leave the old key stuck down
+    this.held.delete(action);
+    this.toggled.delete(action);
+    this._recalcKeys();
+    this._saveBinds();
+    return true;
+  }
+
+  resetBinds() {
+    this.binds = { ...DEFAULT_BINDS };
+    this.held.clear();
+    this.toggled.clear();
+    this._recalcKeys();
+    this._saveBinds();
+  }
 
   /** Mirror the mouse's button mask into the action set. Only actions the mouse
    *  itself put there are taken away again, so a touch player holding FIRE is

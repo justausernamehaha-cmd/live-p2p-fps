@@ -74,6 +74,7 @@
     <div class="tbtn" data-btn="reload">RELOAD</div>
     <div class="tbtn" data-btn="crouch">CROUCH</div>
     <div class="tbtn" data-btn="ads">AIM</div>
+    <div class="tbtn" data-btn="sprint">SPRINT</div>
   </div>
   <div id="tside">
     <div class="tbtn small" data-btn="weapon">WEAPON</div>
@@ -93,22 +94,16 @@
     <input type="range" id="sizeslider" min="55" max="200" step="5" value="100" disabled>
     <span id="sizeval">--</span>
   </label>
-  <div class="esize moderow" data-action="crouch">Crouch
-    <span class="modes">
-      <button type="button" data-action="crouch" data-mode="hold">HOLD</button>
-      <button type="button" data-action="crouch" data-mode="toggle">TOGGLE</button>
-    </span>
-  </div>
-  <div class="esize moderow" data-action="ads">Aim
-    <span class="modes">
-      <button type="button" data-action="ads" data-mode="hold">HOLD</button>
-      <button type="button" data-action="ads" data-mode="toggle">TOGGLE</button>
-    </span>
-  </div>
+  <div id="moderows"></div>
   <label class="esize" id="sensrow">Sensitivity
     <input type="range" id="sensslider" min="20" max="300" step="5" value="100">
     <span id="sensval">1.00&times;</span>
   </label>
+  <div class="ekeys keysonly">
+    <b>Keys<span id="bindhint">click a key, then press the new one</span></b>
+    <div id="keybinds"></div>
+    <button id="resetbinds" type="button">RESET KEYS</button>
+  </div>
   <div class="erow">
     <span id="editshield">shielded while editing</span>
     <button id="resetlayout" type="button">RESET</button>
@@ -132,6 +127,15 @@
       </div>
     </label>
 
+    <details class="help seedwrap" id="seedwrap">
+      <summary>Room seed &mdash; play a level you designed</summary>
+      <textarea id="seedinput" rows="2" spellcheck="false"
+                placeholder="paste a level seed here, or leave it empty for the default arena"></textarea>
+      <p class="fine">There is no server, so everyone in the room has to paste the
+        same seed &mdash; or just open the invite link, which carries it.
+        Type <b>level design</b> as the room code to build one.</p>
+    </details>
+
     <button id="playbtn" class="primary">CONNECT</button>
     <button id="sharebtn" class="ghost hidden">COPY INVITE LINK</button>
 
@@ -148,6 +152,7 @@
             <li>Mouse look · <kbd>Click</kbd> fire · <kbd>R</kbd> reload</li>
             <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / wheel weapons · <kbd>Q</kbd> last</li>
             <li><kbd>Tab</kbd> scores · <kbd>T</kbd> chat · <kbd>Esc</kbd> menu</li>
+            <li><kbd>`</kbd> or <kbd>=</kbd> settings: rebind keys, hold/toggle, sensitivity</li>
           </ul>
         </div>
         <div>
@@ -163,8 +168,77 @@
       </div>
     </details>
 
+    <details class="help">
+      <summary>Level designer</summary>
+      <div class="cols">
+        <div>
+          <b>Getting in</b>
+          <ul>
+            <li>Type <kbd>level design</kbd> as the room code and press CONNECT.</li>
+            <li>Pick the room's width, length and height. You cannot leave that box.</li>
+            <li>Nobody else joins a design room &mdash; it is yours alone.</li>
+            <li>EXPORT gives a seed. Paste it into ROOM SEED to play the level.</li>
+          </ul>
+        </div>
+        <div>
+          <b>Building</b>
+          <ul>
+            <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly where you look &mdash; nose up to rise</li>
+            <li><kbd>Shift</kbd> fly fast &middot; <kbd>Space</kbd>/<kbd>C</kbd> straight up and down</li>
+            <li>Click a surface, drag a rectangle, click, then pull a height</li>
+            <li><kbd>Q</kbd> then <kbd>E</kbd> for a floating box between two corners</li>
+            <li><kbd>Alt</kbd> frees the mouse &middot; <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+click selects</li>
+            <li><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>R</kbd> delete &middot; <kbd>G</kbd> grid snap</li>
+            <li><kbd>Tab</kbd> play the room you just built &middot; <kbd>H</kbd> key list</li>
+          </ul>
+        </div>
+      </div>
+    </details>
+
     <p class="fine">No game server: players connect directly over WebRTC.
       Public Nostr relays are used once, only to introduce peers.</p>
+  </div>
+</div>
+
+<!-- ============ level designer ============ -->
+<div id="designsetup" class="hidden">
+  <div class="panel">
+    <h2>Room size</h2>
+    <p class="tag">metres. You cannot leave this box once you are inside.</p>
+    <div class="dims">
+      <label>Width (X)<input type="number" id="dw" min="10" max="240" step="0.5" value="60"></label>
+      <label>Length (Z)<input type="number" id="dl" min="10" max="240" step="0.5" value="60"></label>
+      <label>Height (Y)<input type="number" id="dh" min="4" max="60" step="0.5" value="14"></label>
+    </div>
+    <button id="dstart" class="primary">START BUILDING</button>
+    <button id="dresume" class="ghost hidden">CONTINUE THE SAVED LEVEL</button>
+    <button id="dcancel" class="ghost">BACK</button>
+    <div id="dsetupmsg"></div>
+  </div>
+</div>
+
+<div id="designhud" class="hidden">
+  <div class="dhead"><b id="dmode">BUILDING</b><span id="dstats"></span></div>
+  <div id="dtool"></div>
+  <div id="dsel"></div>
+  <div id="dswatches"></div>
+  <div id="dmsg"></div>
+  <div id="dkeys">
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly &middot; <kbd>Shift</kbd> fast</div>
+    <div><kbd>Space</kbd>/<kbd>C</kbd> straight up and down</div>
+    <div>click, drag, click, pull, click &mdash; a box</div>
+    <div><kbd>Q</kbd> then <kbd>E</kbd> floating box</div>
+    <div><kbd>Alt</kbd> free the mouse (and use these buttons)</div>
+    <div><kbd>Alt</kbd>+<kbd>Ctrl</kbd>+click select &middot; right click cancels</div>
+    <div><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>R</kbd> delete &middot; <kbd>G</kbd> snap</div>
+    <div><kbd>Tab</kbd> playtest &middot; <kbd>H</kbd> hides this list</div>
+  </div>
+  <textarea id="dseed" rows="2" spellcheck="false" placeholder="the level seed appears here"></textarea>
+  <div class="drow">
+    <button id="dexport" type="button">EXPORT</button>
+    <button id="dload" type="button">LOAD</button>
+    <button id="dnew" type="button">NEW ROOM</button>
+    <button id="dquit" type="button">QUIT</button>
   </div>
 </div>
 

@@ -21,13 +21,19 @@ export class Hud {
 
   showGame(showTouch) {
     this.el.menu.classList.add('hidden');
+    this.el.menu.classList.remove('overlay');
+    document.body.classList.remove('paused');
     this.el.hud.classList.remove('hidden');
     this.el.touch.classList.toggle('hidden', !showTouch);
     document.body.classList.toggle('touch-ui', !!showTouch);
   }
 
-  showMenu() {
+  /** `paused` draws the menu over the running game instead of covering it:
+   *  the panel floats on a blur of whatever you were looking at. */
+  showMenu(paused = false) {
     this.el.menu.classList.remove('hidden');
+    this.el.menu.classList.toggle('overlay', !!paused);
+    document.body.classList.toggle('paused', !!paused);
   }
 
   hideLoading() { this.el.loading.classList.add('hidden'); }

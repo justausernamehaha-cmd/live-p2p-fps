@@ -7,6 +7,8 @@ import { Effects, ViewModel } from './effects.js';
 import { RemotePlayer } from './remote.js';
 import { Hud, escapeHtml } from './hud.js';
 import { Layout } from './layout.js';
+import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
+import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
@@ -15,6 +17,9 @@ const STATE_HZ = 20;
 const RESPAWN_TIME = 3;
 const EDIT_SHIELD_TAIL = 3000;   // ms of protection carried out of the layout editor
 const EDIT_FIRE_LOCK = 5000;     // ms before the gun works again after editing
+// The one room code that opens the level designer instead of a match. Matched
+// before the code is normalised, so `level design` and `level-design` both work.
+const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
 const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
                   (navigator.maxTouchPoints > 1 && !matchMedia('(pointer:fine)').matches);
 
@@ -39,6 +44,7 @@ class Game {
     this.lastStateSent = 0;
     this.deathAt = 0;
     this.editing = false;
+    this.design = null;        // the level designer, while a design room is open
     this.shieldUntil = 0;      // ms timestamps; while shielded, incoming damage is ignored
     this.fireLockUntil = 0;
     this.adsT = 0;             // 0 hipfire, 1 fully aimed; 0.4s each way
@@ -54,6 +60,7 @@ class Game {
     window.__spreadFor = spreadFor;
     window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
     window.__selfId = getSelfId;
+    window.__Level = Level;      // test/designer.mjs decodes seeds with it
     requestAnimationFrame(t => this._frame(t));
   }
 
@@ -141,6 +148,9 @@ class Game {
       // but opening the settings panel or the chat box releases it deliberately,
       // and popping the menu over them is not what anyone asked for.
       if (a === 'pause') {
+        // the designer releases the pointer on purpose when Alt is held; that is
+        // not someone pressing Escape, and it must not throw the menu up
+        if (this.design?.mouseFree) return;
         if (this.running && !this.hud.chatOpen && !this.editing) this._pause();
       }
       else if (a === 'chat') this._openChat();
@@ -154,7 +164,11 @@ class Game {
     this.layout = new Layout();
     this.layout.isToggle = a => this.input.isToggle(a);
     this.layout.onMode = (action, toggle) => this.input.setToggleMode(action, toggle);
+    this.layout.keysFor = a => this.input.keysFor(a);
+    this.layout.onBind = (action, code) => this.input.bind(action, code);
+    this.layout.onResetBinds = () => this.input.resetBinds();
     this.layout.showModes();
+    this.layout.showBinds();
     document.getElementById('donelayout').addEventListener('click', () => this._endEdit());
 
     // sensitivity lives in the same panel: LAYOUT opens it on a phone, backtick
@@ -176,7 +190,7 @@ class Game {
     });
 
     addEventListener('keydown', e => {
-      if (e.code !== 'Backquote' || isTyping(e) || this.hud.chatOpen) return;
+      if ((e.code !== 'Backquote' && e.code !== 'Equal') || isTyping(e) || this.hud.chatOpen) return;
       e.preventDefault();
       if (this.editing) this._endEdit();
       else this._startEdit();
@@ -213,6 +227,14 @@ class Game {
 
     document.getElementById('randomroom').onclick = () => { roomInput.value = randomRoom(); };
 
+    // A level seed is the whole level in one line. It arrives either from an
+    // invite link or from a paste, and it is what makes a designed room playable.
+    const seedInput = document.getElementById('seedinput');
+    const hashSeed = new URLSearchParams(location.hash.slice(1)).get('seed');
+    seedInput.value = hashSeed || localStorage.getItem('pa.seed') || '';
+    if (seedInput.value) document.getElementById('seedwrap').open = true;
+    this.seedInput = seedInput;
+
     // Start finding peers while the player is still typing a name: by the time
     // they press CONNECT the handshake is usually already done, which is most of
     // the wait gone. Nothing is broadcast until they actually join the match.
@@ -225,9 +247,23 @@ class Game {
       this.audio.resume();
       if (this.running) return this._resume();
       const name = (nameInput.value.trim() || 'player').slice(0, 14);
-      const room = this._roomFrom(roomInput.value);
       localStorage.setItem('pa.name', name);
+      this.name = name;
+
+      // the designer is a room code, not a button, so it is one word to remember
+      if (DESIGN_CODE.test(roomInput.value.trim())) return this.openDesignSetup();
+
+      let level = null;
+      const seed = seedInput.value.trim();
+      if (seed) {
+        try { level = Level.decode(seed); }
+        catch (err) { this.hud.status(err.message, true); return; }
+      }
+      const room = this._roomFrom(roomInput.value);
       localStorage.setItem('pa.room', room);
+      try { localStorage.setItem('pa.seed', seed); } catch { /* private mode */ }
+      this.seed = seed;
+      this.world.setLevel(level);
       playBtn.disabled = true;
       this._connect(name, room).then(ok => {
         playBtn.disabled = false;
@@ -238,7 +274,10 @@ class Game {
     };
 
     shareBtn.onclick = async () => {
-      const url = location.origin + location.pathname + '#room=' + encodeURIComponent(this.room);
+      // the seed rides along, so a friend opening the link gets the same level
+      // without anyone having to paste eight kilobytes into a chat window
+      const url = location.origin + location.pathname + '#room=' + encodeURIComponent(this.room) +
+        (this.seed ? '&seed=' + encodeURIComponent(this.seed) : '');
       try {
         if (navigator.share && IS_MOBILE) await navigator.share({ title: 'Peer Arena', url });
         else { await navigator.clipboard.writeText(url); this.hud.status('invite link copied'); }
@@ -253,7 +292,7 @@ class Game {
 
   /** Open the room early, without entering the match. */
   async _prejoin(room) {
-    if (!room || this.running) return;
+    if (!room || this.running || DESIGN_CODE.test(room)) return;
     if (this.net && this.net.roomCode === room) return;
     this.net?.leave();
     this.net = null;
@@ -410,6 +449,77 @@ class Game {
     this.hud.feed(`<b>${escapeHtml(this.name)}</b>: ${escapeHtml(text)}`, 'chat');
   }
 
+  // ------------------------------------------------------------ level design
+  /** The room-size chooser. Also the way back out of a level already open. */
+  openDesignSetup() {
+    const panel = document.getElementById('designsetup');
+    const saved = Designer.savedSeed();
+    const resume = document.getElementById('dresume');
+    resume.classList.toggle('hidden', !saved);
+    document.getElementById('dsetupmsg').textContent = '';
+    this.hud.showMenu(false);
+    document.getElementById('menu').classList.add('hidden');
+    panel.classList.remove('hidden');
+
+    if (this._designSetupBound) return;
+    this._designSetupBound = true;
+
+    const num = (id, lo, hi, fallback) => {
+      const v = Number(document.getElementById(id).value);
+      return Number.isFinite(v) ? clamp(v, lo, hi) : fallback;
+    };
+    document.getElementById('dstart').onclick = () => {
+      this._enterDesign(new Level(num('dw', MIN_W, MAX_W, 60),
+                                 num('dl', MIN_W, MAX_W, 60),
+                                 num('dh', MIN_H, MAX_H, 14)));
+    };
+    resume.onclick = () => {
+      try {
+        this._enterDesign(Level.decode(Designer.savedSeed()));
+      } catch (err) {
+        document.getElementById('dsetupmsg').textContent = err.message;
+      }
+    };
+    document.getElementById('dcancel').onclick = () => {
+      panel.classList.add('hidden');
+      if (this.design) this.hud.showGame(this.input.hasTouch);
+      else this.hud.showMenu(false);
+    };
+  }
+
+  _enterDesign(level) {
+    document.getElementById('designsetup').classList.add('hidden');
+    // a design room is single-player by definition: drop any signalling the
+    // pre-join may already have opened, so nobody can wander in
+    this.net?.leave();
+    this.net = null;
+    for (const r of this.remotes.values()) r.dispose();
+    this.remotes.clear();
+
+    this.room = 'level design';
+    this.seed = '';
+    this.running = true;
+    this.menuOpen = false;
+    this.design = this.design || new Designer(this);
+    this.design.start(level);
+    this.hud.showGame(this.input.hasTouch);
+    this.hud.status('');
+    document.getElementById('playbtn').textContent = 'RESUME';
+    if (!this.input.hasTouch) this.hud.feed('click the window to aim', 'chat');
+  }
+
+  leaveDesign() {
+    if (!this.design) return;
+    this.design.stop();
+    this.design = null;
+    this.running = false;
+    this.world.setLevel(null);
+    this.player.spawn(this.world.randomSpawn());
+    document.getElementById('playbtn').textContent = 'CONNECT';
+    this.hud.showMenu(false);
+    document.exitPointerLock?.();
+  }
+
   // ---------------------------------------------------------- layout editing
   _startEdit() {
     if (this.editing || this.menuOpen || !this.running) return;
@@ -452,11 +562,15 @@ class Game {
   _pause() {
     if (this.hud.chatOpen) return;
     this.menuOpen = true;
-    this.hud.showMenu();
+    // Paused over the game rather than instead of it: the world stays on screen
+    // behind a blur, and the mouse is free to use the panel.
+    this.hud.showMenu(true);
+    document.exitPointerLock?.();
   }
 
   _resume() {
     this.menuOpen = false;
+    document.getElementById('designsetup').classList.add('hidden');
     this.hud.showGame(this.input.hasTouch);
     this._relock();
   }
@@ -577,8 +691,12 @@ class Game {
     r.autoClear = false;
     r.clear();
     r.render(this.scene, this.camera);
-    r.clearDepth();                       // the gun is drawn over everything
-    r.render(this.vmScene, this.vmCamera);
+    // A ghost is not carrying a rifle, and the viewmodel would sit in front of
+    // everything it is trying to point at
+    if (!this.design?.ghost) {
+      r.clearDepth();                     // the gun is drawn over everything
+      r.render(this.vmScene, this.vmCamera);
+    }
   }
 
   _tick(t, dt) {
@@ -587,6 +705,14 @@ class Game {
     // online game — you are still standing there) but stops taking commands
     const active = !this.menuOpen && !this.hud.chatOpen && !this.editing;
     const input = active ? this.input : IDLE_INPUT;
+
+    // The ghost flies, aims and builds on its own terms, and drives the camera
+    // itself; the playtest half of the designer falls through to everything below.
+    if (this.design && this.design.frame(t, active ? dt : 0)) {
+      this._hudTick(dt, input);
+      this.input.endFrame();
+      return;
+    }
 
     const look = input.consumeLook(dt);
     p.look(look.dx, look.dy);
@@ -626,7 +752,7 @@ class Game {
     }
 
     // outgoing state
-    if (this.net && t - this.lastStateSent > 1 / STATE_HZ) {
+    if (this.net && !this.design && t - this.lastStateSent > 1 / STATE_HZ) {
       this.lastStateSent = t;
       this.net.broadcastState(p, this.loadout, this.shielded);
     }
@@ -685,13 +811,16 @@ class Game {
 
     // a mouse user with no pointer capture aims by dragging, which is worth
     // saying out loud rather than leaving them to wonder
-    this.hud.lockHint(this.input.needsMouseCapture && !this.menuOpen && !this.editing && !this.hud.chatOpen);
+    this.hud.lockHint(this.input.needsMouseCapture && !this.menuOpen && !this.editing &&
+                      !this.hud.chatOpen && !this.design?.mouseFree);
 
     // shield and fire lock are only ever shown to the player they apply to
     const t = now();
     const shieldLeft = this.editing ? Infinity : (this.shieldUntil - t) / 1000;
     const lockLeft = (this.fireLockUntil - t) / 1000;
-    if (this.editing) {
+    if (this.design) {
+      this.hud.protection('', false);     // nobody to be shielded from in here
+    } else if (this.editing) {
       this.hud.protection('shielded while editing', false);
     } else if (lockLeft > 0 || shieldLeft > 0) {
       const parts = [];
@@ -706,7 +835,8 @@ class Game {
     this.hud.setAmmo(w.name, a.mag, a.reserve, this.loadout.reloading);
     this.hud.setHealth(this.player.hp);
 
-    const show = input.down('score') || this.scoreVisible;
+    // Tab is the playtest switch in a design room, not the scoreboard
+    const show = !this.design && (input.down('score') || this.scoreVisible);
     if (show) {
       const rows = [{
         name: this.name, color: cssColor(this.myColor ?? PLAYER_COLORS[0]), kills: this.player.kills,

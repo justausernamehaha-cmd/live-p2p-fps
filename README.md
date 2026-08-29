@@ -19,6 +19,9 @@ play with people who are not on your network.
 Everyone who opens the same **room code** ends up in the same match. The
 `COPY INVITE LINK` button produces a URL with the room baked into the hash.
 
+One room code is special: type **`level design`** and you get the level designer
+instead of a match. See [Designing a level](#designing-a-level).
+
 If a room never finds anyone, the signalling relays are the thing to change —
 add `&strategy=torrent` (or `&strategy=mqtt`) to the address, e.g.
 `…/#room=iron-4821&strategy=torrent`, and have everyone in the match use the
@@ -34,7 +37,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Aim | right click | `AIM` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
-| Sprint | `Shift` | push the stick to its edge |
+| Sprint | `Shift` | `SPRINT`, or push the stick to its edge |
 | Reload | `R` | `RELOAD` |
 | Weapons | `1` `2` `3`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
@@ -42,14 +45,24 @@ same one. All three are public infrastructure that only carries the handshake.
 | Menu | `Esc` | `MENU` |
 | Input debug overlay | `F3` | — |
 | Fullscreen | F11 | button, top right |
-| Settings (sensitivity) | `` ` `` | `LAYOUT`, above the player count |
+| Settings, key bindings | `` ` `` or `=` | `LAYOUT`, above the player count |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
 
-Crouch and aim can each be set to **hold** or **toggle** in that settings panel.
-On a keyboard both rows are simply there; on a touch layout the row appears for
-whichever button you select, so you can set it while you are moving the button
-around. The choice is remembered per device and applies to every input for that
-action — the touch button, the key and the mouse alike.
+**Every key can be rebound** from that panel: click the key beside an action and
+press the one you want. It takes the key off whatever else had it, so nothing
+ends up bound twice, and `RESET KEYS` puts the defaults back. The map lives in
+`localStorage`, so it survives a reload.
+
+Crouch, aim, **sprint and jump** can each be set to **hold** or **toggle** in the
+same panel. On a keyboard all four rows are simply there; on a touch layout the
+row appears for whichever button you select, so you can set it while you are
+moving the button around. The choice is remembered per device and applies to
+every input for that action — the touch button, the key and the mouse alike.
+A latched jump is what makes bunny hopping possible with a thumb: tap `JUMP`
+once and the hops keep coming, leaving both thumbs for the stick and the aim.
+
+`Esc` **pauses over the game rather than instead of it** — the match stays on
+screen behind a blur, the pointer is released, and the panel is there to use.
 
 On a phone, **turn the device sideways**. Portrait works, and the camera widens
 its field of view to compensate, but landscape is far better to play in.
@@ -59,6 +72,54 @@ rather than modal: the first real key press retires the on-screen thumbstick and
 hands movement to `WASD`, while the whole screen stays a look pad for the thumb.
 Arrow keys also aim, and `Ctrl`/`F` fire, so a keyboard alone is playable when
 there is no mouse. Pointer lock is only requested where it exists.
+
+## Designing a level
+
+Type **`level design`** as the room code. Nobody else can join that room: the
+designer is single-player by construction, and no signalling connection is
+opened at all.
+
+You start by choosing the room's **width, length and height** in metres. That
+box is the world — a ghost cannot leave it, and nothing can be built outside it.
+
+| | |
+|---|---|
+| Fly | `W` `A` `S` `D`, along the look direction — nose up and press forward to rise |
+| Faster | `Shift` |
+| Straight up / down | `Space` / `C` |
+| Free the mouse | hold `Alt` — also how you reach the panel's buttons |
+| Draw a box on a surface | click the surface, drag the rectangle, click, pull a height, click |
+| Floating box | `Q` at one corner, `E` at the opposite one |
+| Select anything | `Alt` + `Ctrl` + click — floor, walls and ceiling included |
+| Colour it | `1` … `0`, ten colours (`0` is the tenth, not a reset) |
+| Delete it | `R` — the floor, walls and ceiling cannot be deleted |
+| Grid snap | `G` toggles 0.5 m snapping |
+| Cancel | right click, or `Esc` |
+| Play what you built | `Tab` — and `Tab` again to go back to building |
+| Hide the key list | `H` |
+
+A rectangle is drawn on **one surface**, worked out from the first click. The
+second point stays on that surface even when the cursor wanders off it, rather
+than jumping onto whatever is behind. The height is then pulled along that
+surface's normal, and it **can go negative**, which sinks the box into the
+surface instead of standing it out from it.
+
+The `Q`/`E` corners are a fixed three metres in front of the eye, with a white
+marker sitting there the whole time, so the corner you are about to place is
+something you can see rather than something you guess.
+
+### Playing what you designed
+
+`EXPORT` turns the level into a **seed**: one line that carries the room size,
+every box and every colour, with a checksum so a truncated paste is refused
+rather than silently half-loaded. Paste it into **ROOM SEED** on the connect
+screen and the match is played in that level instead of the arena.
+
+There is no server, so every player in the room needs the same seed — but
+`COPY INVITE LINK` bakes it into the URL, so sharing the link is enough.
+
+The level autosaves to `localStorage` while you build, and `CONTINUE THE SAVED
+LEVEL` picks it back up.
 
 ## Movement
 
@@ -140,7 +201,10 @@ Driven in headless Chromium, two peers at once, over the real public relays:
   and kill counter updated on the shooter's machine;
 * the touch thumbstick, look pad and `FIRE` button on a phone-sized viewport;
 * **a physical keyboard on that same touch device** — `WASD` drove movement,
-  the thumbstick retired itself, and the look pad kept working alongside it.
+  the thumbstick retired itself, and the look pad kept working alongside it;
+* the level designer end to end: a room built, played in, exported, and the seed
+  loaded in a **second browser page that never saw the designer**, where the
+  player stood on the box the designer had made.
 
 Frame rate was 25 fps under a software rasteriser, which is the renderer's
 floor, not the game's.
@@ -160,7 +224,20 @@ node test/mouselook.mjs
 node test/mousebuttons.mjs
 node test/holdtoggle.mjs
 node test/map.mjs
+node test/designer.mjs
+node test/settings.mjs
 ```
+
+`test/designer.mjs` is the one that matters for the designer, because it refuses
+to assert on the designer's own bookkeeping. A drawn box is checked against the
+world's collision list; a playtest is checked by the height of the player's feet
+once they have fallen; and the seed is checked by loading it in a **second page**
+and standing on the level there. Every one of its assertions has been watched go
+red with the bug reintroduced.
+
+`test/settings.mjs` proves a rebound key by moving the player with it and by the
+old key going dead, and a latched jump by counting take-offs over two seconds
+with nothing held down.
 
 `test/map.mjs` scans the whole arena floor and asserts that every place you can
 stand lets you stand *up*. That is the fault hand-checking missed the first
@@ -183,7 +260,9 @@ player walking backwards.
 index.html      markup for HUD, touch controls and the menu
 style.css
 src/main.js     wiring, game loop, hit registration
-src/world.js    the arena (hand-placed AABBs), merged meshes, raycasting
+src/world.js    boxes, merged meshes, raycasting, and the built-in arena
+src/level.js    a level as data: room size, boxes, colours, and the seed string
+src/designer.js the level designer — ghost flight, the box tools, playtest
 src/player.js   local movement, collision, step-up, crouch
 src/input.js    keyboard + mouse + touch, combined
 src/weapons.js  three weapons and their ammo state

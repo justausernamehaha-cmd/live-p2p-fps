@@ -23,13 +23,49 @@ const PALETTE = {
 };
 
 export class World {
-  constructor(scene) {
+  /** With no level, the hand-written arena below. With one, its data instead. */
+  constructor(scene, level = null) {
     this.boxes = [];       // {min:{x,y,z}, max:{x,y,z}}
     this.spawns = [];
+    this.level = null;
     this.group = new THREE.Group();
     scene.add(this.group);
-    this._build();
+    this.setLevel(level);
+  }
+
+  setLevel(level) {
+    this.level = level || null;
+    this.boxes = [];
+    this.spawns = [];
+    if (this.level) {
+      this.boxes = this.level.worldBoxes();
+      this.spawns = this.level.spawnPoints(this.boxes);
+    } else {
+      this._build();
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        this.spawns.push({ x: Math.cos(a) * 24 * S, y: 0.05, z: Math.sin(a) * 24 * S });
+      }
+    }
+    this.refresh();
+  }
+
+  /** Re-derive the meshes from `boxes`. Cheap enough to call on every edit. */
+  refresh() {
+    for (const child of this.group.children.slice()) {
+      this.group.remove(child);
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    }
     this._mesh();
+  }
+
+  /** Pull the box list back out of the level after the designer changed it. */
+  syncLevel() {
+    if (!this.level) return;
+    this.boxes = this.level.worldBoxes();
+    this.spawns = this.level.spawnPoints(this.boxes);
+    this.refresh();
   }
 
   /** cx/cz = centre, y = bottom */
@@ -115,12 +151,6 @@ export class World {
       [16, 16], [-16, -16], [27, 27], [-27, -27], [27, -27], [-27, 27]
     ];
     for (const [x, z, y = 0] of crates) this.add(x * S, y, z * S, 2, 2, 2, PALETTE.block);
-
-    // ---- spawn points, spread around the ring ----
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
-      this.spawns.push({ x: Math.cos(a) * 24 * S, y: 0.05, z: Math.sin(a) * 24 * S });
-    }
   }
 
   _mesh() {
@@ -148,7 +178,8 @@ export class World {
     }
 
     // grid overlay on the floor so movement reads clearly
-    const grid = new THREE.GridHelper(ARENA, ARENA / 2, 0x64748b, 0x3c4658);
+    const span = this.level ? Math.max(this.level.w, this.level.l) : ARENA;
+    const grid = new THREE.GridHelper(span, Math.max(4, Math.round(span / 2)), 0x64748b, 0x3c4658);
     grid.position.y = 0.01;
     grid.material.transparent = true;
     grid.material.opacity = 0.25;
@@ -168,6 +199,47 @@ export class World {
     }
     return best;
   }
+
+  /** The nearest box the ray enters, and which of its faces it came in through.
+   *  The level designer needs the face, not just the distance. */
+  pick(origin, dir, maxDist = 400) {
+    let best = null;
+    for (const b of this.boxes) {
+      const h = rayBoxFace(origin, dir, b.min, b.max);
+      if (!h || h.t > maxDist) continue;
+      if (!best || h.t < best.t) best = { box: b, t: h.t, axis: h.axis, sign: h.sign };
+    }
+    if (best) {
+      best.point = {
+        x: origin.x + dir.x * best.t,
+        y: origin.y + dir.y * best.t,
+        z: origin.z + dir.z * best.t
+      };
+    }
+    return best;
+  }
+}
+
+const AXES = ['x', 'y', 'z'];
+
+/** Slab intersection that also reports the entry face: `axis` is 0/1/2 and
+ *  `sign` is -1 for the low face and +1 for the high one. Null if it misses,
+ *  or if the entry point is behind the origin. */
+export function rayBoxFace(ro, rd, min, max) {
+  let tmin = -Infinity, tmax = Infinity, axis = 0, sign = -1;
+  for (let i = 0; i < 3; i++) {
+    const k = AXES[i];
+    const inv = 1 / (rd[k] || 1e-9);
+    let t1 = (min[k] - ro[k]) * inv;
+    let t2 = (max[k] - ro[k]) * inv;
+    let s = -1;                         // entering through the low face
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; s = 1; }
+    if (t1 > tmin) { tmin = t1; axis = i; sign = s; }
+    if (t2 < tmax) tmax = t2;
+    if (tmax < tmin) return null;
+  }
+  if (tmin < 0 || tmax < 0) return null;
+  return { t: tmin, axis, sign };
 }
 
 export function rayAABB(ro, rd, min, max) {

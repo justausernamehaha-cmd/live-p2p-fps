@@ -114,6 +114,8 @@ canvas#game{position:fixed;inset:0;width:100%;height:100%;display:block;touch-ac
 #tbuttons [data-btn=jump]{grid-column:1;grid-row:2}
 #tbuttons [data-btn=crouch]{grid-column:1;grid-row:3;width:74px;height:46px;border-radius:23px}
 #tbuttons [data-btn=ads]{grid-column:2;grid-row:3;width:74px;height:46px;border-radius:23px}
+#tbuttons [data-btn=sprint]{grid-column:1/span 2;grid-row:4;width:100%;height:40px;border-radius:20px;
+  justify-self:stretch}
 
 /* With the touch pad up, the corners belong to the buttons: the readouts move
    out from under them and the killfeed drops below the pill row. */
@@ -193,10 +195,15 @@ body.editing #fsbtn{display:none}
 
 /* Docked to the left edge, clear of the action buttons on the right and of the
    readouts along the bottom, so nothing has to be shoved aside while editing. */
+/* No backdrop-filter here. The panel is 95% opaque, so the blur behind it was
+   invisible — but once it had been laid out over the canvas even once, the
+   compositor kept the effect alive and the frame rate stayed at a third of
+   normal for the rest of the session. Measured, not guessed: 35 frames in
+   570ms before opening it, 11 after. */
 #editpanel{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:24;
   width:min(76vw,264px);
-  background:#0b111ff2;border:1px solid var(--line);border-left:0;
-  border-radius:0 12px 12px 0;backdrop-filter:blur(4px);
+  background:#0b111ffa;border:1px solid var(--line);border-left:0;
+  border-radius:0 12px 12px 0;
   padding:14px;display:flex;flex-direction:column;gap:12px}
 /* the size control is meaningless until there is something selected to resize */
 #sizerow{display:none}
@@ -244,3 +251,89 @@ body:not(.touch-ui) .touchonly{display:none}
   text-align:center;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--accent2);text-shadow:0 2px 6px #000;white-space:pre-line;line-height:1.7}
 #protection.locked{color:var(--accent)}
+
+
+/* ---------------- paused over the game ---------------- */
+/* A pause is not a different screen: the match stays on the glass behind a blur,
+   and the pointer is already released, so the panel is simply usable. */
+/* The blur costs one hitch on the way out — the compositor tears the layer down
+   and takes about a second to settle — but nothing while it is up. Measured at
+   38 frames per 600ms paused, 21 in the 600ms after resuming, 36 by the next
+   second. Worth it: the match stays visible behind the menu. */
+#menu.overlay{background:#0b0f14b8;backdrop-filter:blur(10px) saturate(.85);
+  -webkit-backdrop-filter:blur(10px) saturate(.85)}
+#menu.overlay .panel{background:#121924e8;box-shadow:0 24px 70px #000c}
+#menu.overlay h1,#menu.overlay .tag{display:none}
+body.paused #hud{opacity:.35}
+
+/* ---------------- key rebinding ---------------- */
+.ekeys{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.ekeys>b{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+#bindhint{text-transform:none;letter-spacing:0;font-size:10.5px;color:#61758f;font-weight:400}
+#keybinds{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;max-height:34vh;overflow:auto}
+.bindrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
+.bindrow span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bindkey{min-width:62px;padding:4px 8px;border-radius:5px;border:1px solid var(--line);
+  border-bottom-width:2px;background:#0b1119;color:var(--text);font:inherit;font-size:11px}
+.bindkey:hover{border-color:var(--accent2)}
+.bindkey.arming{border-color:var(--accent);color:var(--accent);background:#ff8a3d1a}
+.bindkey.unbound{color:var(--bad)}
+#resetbinds{align-self:flex-start;padding:7px 12px;border-radius:7px;border:1px solid var(--line);
+  background:transparent;color:var(--dim);font-size:11px;letter-spacing:.1em;font-weight:700}
+/* a phone has no keys to rebind */
+body.touch-ui .keysonly{display:none}
+@media (max-width:560px){#keybinds{grid-template-columns:1fr}}
+/* the panel has grown a keyboard section, so let it use the height it needs */
+body:not(.touch-ui) #editpanel{width:min(92vw,430px);max-height:92vh;overflow:auto}
+
+/* ---------------- level designer ---------------- */
+#designsetup{position:fixed;inset:0;display:grid;place-items:center;z-index:22;padding:16px;
+  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 70%);overflow:auto}
+#designsetup.hidden{display:none}
+#designsetup h2{font-size:20px;letter-spacing:.14em;text-transform:uppercase}
+#designsetup .panel{width:min(460px,100%)}
+.dims{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.dims label{margin:0}
+#dsetupmsg{min-height:18px;margin-top:10px;font-size:12.5px;color:var(--bad);text-align:center}
+
+#designhud{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:12;
+  width:min(80vw,326px);background:#0b111ffa;border:1px solid var(--line);border-left:0;
+  border-radius:0 12px 12px 0;padding:13px;
+  display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--dim);
+  pointer-events:auto}
+#designhud.hidden{display:none}
+.dhead{display:flex;align-items:baseline;gap:8px;justify-content:space-between}
+.dhead b{font-size:12px;letter-spacing:.16em;color:var(--accent2)}
+.dhead b.play{color:var(--accent)}
+#dstats{font-size:10.5px;color:#61758f;text-align:right}
+#dtool{color:var(--text);line-height:1.45}
+#dsel{font-size:11px;color:#61758f}
+#dmsg{min-height:16px;font-size:11.5px;color:var(--accent2);line-height:1.4}
+#dswatches{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
+.dsw{height:22px;border:1px solid #ffffff2e;border-radius:4px;font-size:9px;font-weight:800;
+  color:#0009;cursor:pointer;padding:0}
+.dsw.on{outline:2px solid var(--accent);outline-offset:1px}
+#dkeys{display:flex;flex-direction:column;gap:3px;font-size:11px;color:#7f90a8;line-height:1.5;
+  border-top:1px solid var(--line);padding-top:9px}
+#dkeys.hidden{display:none}
+#dseed,#seedinput{width:100%;background:#0b1119;border:1px solid var(--line);border-radius:7px;
+  padding:8px;color:var(--text);font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  resize:vertical;outline:none}
+#dseed:focus,#seedinput:focus{border-color:var(--accent2)}
+#seedinput{margin-top:8px;font-size:12px}
+.seedwrap summary{margin-bottom:2px}
+.drow{display:flex;gap:6px;flex-wrap:wrap}
+.drow button{flex:1 1 auto;padding:8px 6px;border-radius:7px;border:1px solid var(--line);
+  background:transparent;color:var(--dim);font-size:10.5px;letter-spacing:.1em;font-weight:700}
+.drow button:hover{border-color:var(--accent2);color:var(--text)}
+
+/* Building has no health, no ammo and no killfeed to read; playtesting does. */
+body.design-ghost #botleft,body.design-ghost #botright,
+body.design-ghost #topleft,body.design-ghost #respawn{display:none}
+body.designing #editbtn{display:none}
+/* the settings panel docks to the same edge, so one of them has to go */
+body.editing #designhud{display:none}
+/* a design room has no peers, no ping and nothing to shield against */
+body.designing #netstat{display:none}
+body.design-play #dswatches,body.design-play #dseed,body.design-play .drow{display:none}

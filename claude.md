@@ -37,68 +37,59 @@ against the live site.
 | `stuckkeys.mjs` | a key release is never discarded |
 | `holdtoggle.mjs` | crouch and aim in hold or toggle mode |
 | `map.mjs` | every place you can stand lets you stand up |
+| `designer.mjs` | the designer builds a level a *second page* can then stand on |
+| `settings.mjs` | rebinding, four latchable actions, sprint button, pause overlay |
 
----
+## Things worth not rediscovering
 
-# Idea, not built yet: level designer
+- **A large `backdrop-filter` over the canvas costs a third of the frame rate,
+  and keeps costing it after the element is hidden.** Growing `#editpanel` to fit
+  the key-binding rows dropped the game from 35 frames per 570 ms to 11, for the
+  rest of the session, the moment the panel had been opened once. The panel is
+  95% opaque so the blur was invisible anyway — it is gone. The pause overlay
+  keeps its blur deliberately (that one is the point) and pays for it with a
+  single ~1 s hitch on the way out, measured, not assumed.
+- `Level.remove()` refusing `locked` boxes is belt-and-braces: the shell lives in
+  `level.shell`, not `level.boxes`, so `remove` could not reach it anyway. Both
+  guards had to be broken at once before `designer.mjs` would go red — which is
+  the honest reading of "the floor cannot be deleted".
+- A test that pokes `player.yaw`/`pitch` and calls `designer._tools()` straight
+  after is aiming with **last frame's camera**. The real loop is `_camera()` then
+  `_tools()`; a harness has to do the same or every box comes out a thin pillar.
 
-Asked for 2026-08-28. Recorded to build later — **nothing of this exists in the
-code**.
+## Key collisions, resolved
 
-## Getting in
+The designer reuses keys the match already owns. Nothing actually clashes,
+because the two modes never run at once, but the resolutions are worth writing
+down:
 
-Type `level design` as the room code on the connect screen. That drops you into
-a design mode instead of a match.
+- `Tab` is the scoreboard in a match and the **playtest toggle** in a design
+  room. The scoreboard is suppressed while `game.design` is set, since a design
+  room has no peers to score.
+- `Q`, `R` and `1`–`3` are last-weapon, reload and weapon select in a match, and
+  corner, delete and colour while building. Mode-separated; in playtest they go
+  back to being weapon keys, which is what you want when testing a room.
+- `Ctrl` is **crouch**. `Alt`+`Ctrl`+click therefore also crouches — harmless,
+  because you are a ghost with no crouch while building, and selection is
+  ghost-only.
+- **`Alt`+click and `Ctrl`+`Alt`+click are grabbed by some Linux window
+  managers** (KDE moves the window on `Alt`+drag). If that bites, the fix is in
+  the WM, not here — there is no way for a page to see a click the compositor
+  ate.
+- Releasing the pointer with `Alt` fires `pointerlockchange`, which the game
+  reads as `Esc` and answers with the pause menu. Guarded: `onAction('pause')`
+  returns early while `design.mouseFree`.
+- `` ` `` was **already** the settings panel, which is exactly the panel the key
+  rebinding went into, so it stayed. `=` is bound as an alias.
+- `G` (grid snap) and `H` (hide the key list) are new and unused elsewhere.
 
-Before starting, choose the room's **width, length and height**. You cannot
-leave that box once inside.
+## Ideas, not built
 
-## Moving
-
-You are a ghost.
-
-- `W` `A` `S` `D` move forward, left, back, right.
-- Movement follows where you are looking, so **look up and go forward to rise**.
-- `Alt` releases the mouse, so you can point at things precisely.
-
-## Drawing a rectangle on a surface
-
-Only rectangles (rectangular boxes) are supported.
-
-1. Tap a starting point. The program works out **which surface that point is on**.
-2. The second point is **constrained to that same surface** — if the cursor
-   leaves it, the point stays on the surface rather than jumping elsewhere.
-3. **Left click** fixes the rectangle's base.
-4. **Move the mouse to pull a height**, and the box is finished.
-
-## Drawing a floating box
-
-For something not attached to a surface:
-
-1. Go to where one corner should be and press `Q`.
-2. Go to where the opposite corner should be and press `E`.
-3. The box is finished.
-
-## Selecting and editing
-
-- **`Alt` + `Ctrl` + click** an object to select it. The floor, walls and ceiling
-  are selectable too.
-- `1` … `0` set the selected object's colour (ten colours).
-- `R` deletes the selected object. **The floor, walls and ceiling cannot be
-  deleted.**
-
-## Questions to settle before building this
-
-Recorded so they get asked rather than guessed at:
-
-- Does the ghost collide with anything, or pass through placed boxes?
-- Is the height step in 3 pulled along the surface normal, and can it go
-  negative to sink a box into the surface?
-- For the `Q`/`E` floating box, are the corners the player's position, or the
-  point being looked at? Position is the literal reading.
-- Which ten colours, and does `0` mean the tenth or a reset to default?
-- Is a level saved, and where — `localStorage`, an export string, or shared with
-  peers so others can play it?
-- Does the designer stay single-player, or do peers in the same room see edits?
-- Should the arena in `world.js` become loadable data so a designed level can
-  replace it? It is currently hand-written boxes in `_build()`.
+- **Peers seeing edits live.** The designer is deliberately single-player: a
+  seed is how a level travels. Sharing edits would need an authority for
+  conflicts, which this game does not have anywhere else either.
+- **More than boxes.** Ramps and cylinders would break the "everything is an
+  axis-aligned box" assumption that makes collision and hitscan trivial and
+  identical on every peer. It is load-bearing, not laziness.
+- **A level browser.** Seeds are pasteable but not discoverable; there is no
+  server to list them on.
