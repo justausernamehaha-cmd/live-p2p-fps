@@ -95,25 +95,49 @@ box is the world — a ghost cannot leave it, and nothing can be built outside i
 | Faster | `Shift` |
 | Straight up / down | `Space` / `C` |
 | Free the mouse | hold `Alt` — also how you reach the panel's buttons |
-| Draw a box on a surface | click the surface, drag the rectangle, click, pull a height, click |
-| Floating box | `Q` at one corner, `E` at the opposite one |
+| Box or ramp | `F` switches which one you are drawing |
+| Draw one on a surface | click the surface, drag the base, click, pull a height, click |
+| Floating one | `Q` at one corner, `E` at the opposite one |
 | Select anything | `Alt` + `Ctrl` + click — floor, walls and ceiling included |
 | Colour it | `1` … `0`, ten colours (`0` is the tenth, not a reset) |
-| Delete it | `R` — the floor, walls and ceiling cannot be deleted |
+| Turn it | `R` by 90°, `Shift`+`R` by 15°, about the axis `X` selects — **or drag one of its three rings** |
+| Delete it | `T` — the floor, walls and ceiling cannot be deleted |
 | Grid snap | `G` toggles 0.5 m snapping |
 | Cancel | right click, or `Esc` |
 | Play what you built | `Tab` — and `Tab` again to go back to building |
 | Hide the key list | `H` |
 
-A rectangle is drawn on **one surface**, worked out from the first click. The
-second point stays on that surface even when the cursor wanders off it, rather
-than jumping onto whatever is behind. The height is then pulled along that
-surface's normal, and it **can go negative**, which sinks the box into the
-surface instead of standing it out from it.
+**Every one of those is rebindable too**, from a *Level designer* section that
+appears in the settings panel while a design room is open. It is a separate
+keyboard from the match's: `R` reloads a rifle and turns a ramp without either
+having to give way, because the two modes never run at once.
+
+A shape is drawn on **one surface**, worked out from the first click. The second
+point stays on that surface even when the cursor wanders off it, rather than
+jumping onto whatever is behind. The height is then pulled along that surface's
+normal, and it **can go negative**, which sinks the shape into the surface
+instead of standing it out from it.
+
+A **ramp** is the same three clicks. It climbs along whichever way you dragged
+further, and its "up" is the surface you drew it on, so a ramp drawn on a wall
+leans out of that wall. `R` re-aims it in quarter turns.
+
+Selecting anything that is not the shell puts **three rings** around it, one per
+axis. Grab one with the mouse (hold `Alt` to free the pointer) and drag: the
+object turns with the ring, snapped to 15° unless `G` has snapping off.
 
 The `Q`/`E` corners are a fixed three metres in front of the eye, with a white
 marker sitting there the whole time, so the corner you are about to place is
 something you can see rather than something you guess.
+
+### What a level is made of
+
+Everything is still convex, and almost everything is still an axis-aligned box —
+which is what keeps collision and hitscan cheap and identical on every peer.
+Ramps and anything you turn cannot be, so they become **convex solids** instead:
+a list of vertices, the faces between them, and the planes that bound them
+(`src/solid.js`). Boxes keep the faster exact path; solids get plane-based
+raycasting and a capsule push-out. Nothing is in both lists.
 
 ### Playing what you designed
 
@@ -168,6 +192,11 @@ Three rules hold the movement together, and all three are measured by
   is paid out as ground speed — up to 8 m/s of it, along the way you are already
   going. Height is worth momentum, which is the same bargain the hop chain makes.
 
+The arena's **stairs are ramps**. The pitch is the same as the flight of
+half-metre steps they replaced, so everything that could be climbed still can,
+but a run up no longer stutters and a hop chain no longer catches on the nose of
+every step.
+
 ## Shooting
 
 | | accuracy |
@@ -183,6 +212,9 @@ aimed, because that is what a shotgun is. Headshots do double damage.
 
 A kill refills the gun in your hands to its full ammo capacity — 150 rifle
 rounds, 42 shells, 30 marksman rounds. The magazine still has to be reloaded.
+
+A kill is worth **one magazine** for the gun in hand — 30 rifle, 6 shotgun,
+5 marksman — rather than the full refill it used to be.
 
 ## A note on mouse input
 
@@ -249,6 +281,8 @@ node test/map.mjs
 node test/designer.mjs
 node test/settings.mjs
 node test/momentum.mjs
+node test/slopes.mjs
+node test/solid.mjs      # no browser and no server: the fastest one
 ```
 
 `test/designer.mjs` is the one that matters for the designer, because it refuses
@@ -265,6 +299,12 @@ counting take-offs over two seconds with nothing held down.
 `test/momentum.mjs` counts hops by the player leaving the floor, friction by the
 speed a second later, and the fall bonus by the difference between a short drop
 and a long one from the same standing start.
+
+`test/solid.mjs` is the only suite that needs neither a browser nor a server, so
+it runs in about a second and is worth running first. `test/slopes.mjs` is its
+other half: it proves the geometry means something to the *player*, by walking up
+a ramp onto the platform and by checking that a turned wall blocks along the axis
+it was turned onto and no longer blocks the one it left.
 
 `test/map.mjs` scans the whole arena floor and asserts that every place you can
 stand lets you stand *up*. That is the fault hand-checking missed the first
@@ -288,8 +328,9 @@ index.html      markup for HUD, touch controls and the menu
 style.css
 src/main.js     wiring, game loop, hit registration
 src/world.js    boxes, merged meshes, raycasting, and the built-in arena
-src/level.js    a level as data: room size, boxes, colours, and the seed string
-src/designer.js the level designer — ghost flight, the box tools, playtest
+src/solid.js    convex solids: ramps and turned boxes, and how to hit them
+src/level.js    a level as data: room size, shapes, colours, and the seed string
+src/designer.js the level designer — ghost flight, the tools, rotation, playtest
 src/player.js   local movement, collision, step-up, crouch
 src/input.js    keyboard + mouse + touch, combined
 src/weapons.js  three weapons and their ammo state

@@ -1,8 +1,11 @@
 import * as THREE from 'three';
+import { makeSolid, rayConvex, isAxisAligned, SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
 
-// Everything in the arena is an axis-aligned box, which keeps collision and
-// hitscan trivial and identical on every peer (the layout is hard-coded, so
-// there is nothing to synchronise).
+// Almost everything here is an axis-aligned box, which keeps collision and
+// hitscan trivial and identical on every peer. The exceptions — ramps, and
+// anything the level designer has turned — go through solid.js as convex solids
+// instead. Both lists are hard-coded or seeded, so there is still nothing to
+// synchronise at runtime.
 
 // Everything is laid out at S times the original distances. Heights and
 // player-scale props (crates, stair rises, wall thickness) deliberately do not
@@ -11,7 +14,9 @@ import * as THREE from 'three';
 const S = 2;
 const ARENA = 60 * S;  // floor is ARENA x ARENA, centred on the origin
 const WALL_H = 9;
-const STEP = 0.5;      // stair rise — must stay <= Player.stepHeight
+// Ramps replaced the stairs, but the pitch is still expressed as a rise per
+// half-metre of run, so the climb is the same as the steps it grew out of.
+const STEP = 0.5;
 
 const PALETTE = {
   floor: 0x3d4757,
@@ -25,7 +30,9 @@ const PALETTE = {
 export class World {
   /** With no level, the hand-written arena below. With one, its data instead. */
   constructor(scene, level = null) {
-    this.boxes = [];       // {min:{x,y,z}, max:{x,y,z}}
+    this.parts = [];       // every piece, before it is sorted into the two below
+    this.boxes = [];       // {min:{x,y,z}, max:{x,y,z}} — the axis-aligned ones
+    this.solids = [];      // convex solids — ramps, and anything turned
     this.spawns = [];
     this.level = null;
     this.group = new THREE.Group();
@@ -35,19 +42,40 @@ export class World {
 
   setLevel(level) {
     this.level = level || null;
-    this.boxes = [];
+    this.parts = [];
+    if (this.level) this.parts = this.level.worldBoxes();
+    else this._build();
+    this._split();
     this.spawns = [];
     if (this.level) {
-      this.boxes = this.level.worldBoxes();
       this.spawns = this.level.spawnPoints(this.boxes);
     } else {
-      this._build();
       for (let i = 0; i < 8; i++) {
         const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
         this.spawns.push({ x: Math.cos(a) * 24 * S, y: 0.05, z: Math.sin(a) * 24 * S });
       }
     }
     this.refresh();
+  }
+
+  /** Upright boxes keep the exact, cheap axis-aligned path; ramps and anything
+   *  turned become convex solids. Nothing is in both lists. */
+  _split() {
+    this.boxes = [];
+    this.solids = [];
+    for (const p of this.parts) {
+      if (isAxisAligned(p)) {
+        this.boxes.push({
+          min: { x: p.x0, y: p.y0, z: p.z0 },
+          max: { x: p.x1, y: p.y1, z: p.z1 },
+          color: p.color, src: p.src || p
+        });
+      } else {
+        const s = makeSolid(p);
+        s.src = p.src || p;
+        this.solids.push(s);
+      }
+    }
   }
 
   /** Re-derive the meshes from `boxes`. Cheap enough to call on every edit. */
@@ -63,33 +91,39 @@ export class World {
   /** Pull the box list back out of the level after the designer changed it. */
   syncLevel() {
     if (!this.level) return;
-    this.boxes = this.level.worldBoxes();
+    this.parts = this.level.worldBoxes();
+    this._split();
     this.spawns = this.level.spawnPoints(this.boxes);
     this.refresh();
   }
 
-  /** cx/cz = centre, y = bottom */
-  add(cx, y, cz, w, h, d, color) {
+  /** cx/cz = centre, y = bottom. w and d are along the part's *own* axes, which
+   *  only differ from the world's once `rot` turns it. */
+  add(cx, y, cz, w, h, d, color, shape = SHAPE_BOX, rot = null) {
     const b = {
-      min: { x: cx - w / 2, y, z: cz - d / 2 },
-      max: { x: cx + w / 2, y: y + h, z: cz + d / 2 },
-      color
+      x0: cx - w / 2, y0: y, z0: cz - d / 2,
+      x1: cx + w / 2, y1: y + h, z1: cz + d / 2,
+      color, shape,
+      rx: rot ? rot[0] : 0, ry: rot ? rot[1] : 0, rz: rot ? rot[2] : 0
     };
-    this.boxes.push(b);
+    this.parts.push(b);
     return b;
   }
 
-  // a flight of stairs from ground up to `height`, facing +dir along an axis
-  stairs(cx, cz, width, height, axis, dir, color) {
-    const n = Math.round(height / STEP);
-    for (let i = 0; i < n; i++) {
-      const off = (i + 0.5) * STEP * 2 * dir;
-      const x = axis === 'x' ? cx + off : cx;
-      const z = axis === 'z' ? cz + off : cz;
-      const w = axis === 'x' ? STEP * 2 : width;
-      const d = axis === 'z' ? STEP * 2 : width;
-      this.add(x, 0, z, w, (n - i) * STEP, d, color);
-    }
+  /** A ramp up to `height`, tall against (cx,cz) and falling away along `dir`.
+   *  This was a flight of half-metre steps; the pitch is the same, so anything
+   *  that could be walked up before still can, but a run up it no longer stutters
+   *  and a hop chain no longer catches on the nose of every step.
+   *
+   *  The wedge in solid.js always climbs along its own +x, so the run is stored
+   *  along local x and a turn about Y aims it. */
+  slope(cx, cz, width, height, axis, dir, color) {
+    const run = height * 2;                       // the old staircase's pitch
+    const wx = axis === 'x' ? cx + (run / 2) * dir : cx;
+    const wz = axis === 'z' ? cz + (run / 2) * dir : cz;
+    const ry = axis === 'x' ? (dir > 0 ? Math.PI : 0)
+                            : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+    return this.add(wx, 0, wz, run, height, width, color, SHAPE_SLOPE, [0, ry, 0]);
   }
 
   _build() {
@@ -105,10 +139,10 @@ export class World {
     // ---- centre: raised platform with a stair on each side ----
     this.add(0, 0, 0, 14 * S, 2.5, 14 * S, PALETTE.plate);
     this.add(0, 2.5, 0, 3, 3.4, 3, PALETTE.accent);          // sightline breaker
-    this.stairs(7 * S, 0, 6 * S, 2.5, 'x', 1, PALETTE.block);
-    this.stairs(-7 * S, 0, 6 * S, 2.5, 'x', -1, PALETTE.block);
-    this.stairs(0, 7 * S, 6 * S, 2.5, 'z', 1, PALETTE.block);
-    this.stairs(0, -7 * S, 6 * S, 2.5, 'z', -1, PALETTE.block);
+    this.slope(7 * S, 0, 6 * S, 2.5, 'x', 1, PALETTE.block);
+    this.slope(-7 * S, 0, 6 * S, 2.5, 'x', -1, PALETTE.block);
+    this.slope(0, 7 * S, 6 * S, 2.5, 'z', 1, PALETTE.block);
+    this.slope(0, -7 * S, 6 * S, 2.5, 'z', -1, PALETTE.block);
 
     // ---- four corner bunkers, open on the inward diagonal ----
     // The perch occupies x,z in [42,52] (mirrored per corner); the stair flight
@@ -119,7 +153,7 @@ export class World {
       this.add(cx, 0, cz - sz * 5 * S, 12 * S, 3.2, 1, PALETTE.block);   // inner wall
       this.add(cx - sx * 5 * S, 0, cz, 1, 3.2, 12 * S, PALETTE.block);   // inner wall
       this.add(cx + sx * 3.5 * S, 3.0, cz + sz * 3.5 * S, 5 * S, 0.4, 5 * S, PALETTE.plate);
-      this.stairs(cx - sx * 1 * S, cz + sz * 5 * S, 3, 3.0, 'z', -sz, PALETTE.block);
+      this.slope(cx - sx * 1 * S, cz + sz * 5 * S, 3, 3.0, 'z', -sz, PALETTE.block);
       this.add(cx + sx * 1 * S, 0, cz - sz * 3 * S, 2, 2, 2, PALETTE.accent2);
     }
 
@@ -155,20 +189,24 @@ export class World {
 
   _mesh() {
     const byColor = new Map();
-    for (const b of this.boxes) {
-      if (!byColor.has(b.color)) byColor.set(b.color, []);
-      byColor.get(b.color).push(b);
-    }
+    const bucket = c => {
+      if (!byColor.has(c)) byColor.set(c, { boxes: [], solids: [] });
+      return byColor.get(c);
+    };
+    for (const b of this.boxes) bucket(b.color).boxes.push(b);
+    for (const s of this.solids) bucket(s.color).solids.push(s);
+
     // one merged BufferGeometry per colour keeps the draw-call count in single digits
     for (const [color, list] of byColor) {
       const positions = [];
       const normals = [];
       const uvs = [];
-      for (const b of list) {
+      for (const b of list.boxes) {
         const sx = b.max.x - b.min.x, sy = b.max.y - b.min.y, sz = b.max.z - b.min.z;
         pushBox(positions, normals, uvs,
           b.min.x + sx / 2, b.min.y + sy / 2, b.min.z + sz / 2, sx, sy, sz);
       }
+      for (const s of list.solids) pushSolid(positions, normals, uvs, s);
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
@@ -197,6 +235,10 @@ export class World {
       const t = rayAABB(origin, dir, b.min, b.max);
       if (t < best) best = t;
     }
+    for (const s of this.solids) {
+      const h = rayConvex(origin, dir, s, best);
+      if (h && h.t < best) best = h.t;
+    }
     return best;
   }
 
@@ -208,6 +250,15 @@ export class World {
       const h = rayBoxFace(origin, dir, b.min, b.max);
       if (!h || h.t > maxDist) continue;
       if (!best || h.t < best.t) best = { box: b, t: h.t, axis: h.axis, sign: h.sign };
+    }
+    // A turned box or a ramp has no axis-aligned face to name, so the designer
+    // gets the plane it hit instead and draws on that.
+    for (const s of this.solids) {
+      const h = rayConvex(origin, dir, s, maxDist);
+      if (!h || h.inside || h.t > maxDist) continue;
+      if (!best || h.t < best.t) {
+        best = { box: s, solid: s, t: h.t, axis: -1, sign: 1, plane: h.n };
+      }
     }
     if (best) {
       best.point = {
@@ -258,6 +309,23 @@ export function aabbOverlap(a, b) {
   return a.min.x < b.max.x && a.max.x > b.min.x &&
          a.min.y < b.max.y && a.max.y > b.min.y &&
          a.min.z < b.max.z && a.max.z > b.min.z;
+}
+
+/** Triangulate a convex solid's faces as fans, flat-shaded from the face normal. */
+function pushSolid(pos, nor, uv, solid) {
+  for (const f of solid.faces) {
+    const [nx, ny, nz] = f.n;
+    const a = solid.verts[f.idx[0]];
+    for (let i = 1; i + 1 < f.idx.length; i++) {
+      const b = solid.verts[f.idx[i]], c = solid.verts[f.idx[i + 1]];
+      for (const v of [a, b, c]) {
+        pos.push(v[0], v[1], v[2]);
+        nor.push(nx, ny, nz);
+      }
+      // uv is only used to keep box proportions readable; a solid gets a flat one
+      uv.push(0, 0, 1, 0, 1, 1);
+    }
+  }
 }
 
 function pushBox(pos, nor, uv, cx, cy, cz, sx, sy, sz) {

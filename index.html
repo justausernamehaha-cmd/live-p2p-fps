@@ -104,6 +104,11 @@
     <div id="keybinds"></div>
     <button id="resetbinds" type="button">RESET KEYS</button>
   </div>
+  <div class="ekeys keysonly designonly">
+    <b>Level designer<span>only while a design room is open</span></b>
+    <div id="designbinds"></div>
+    <button id="resetdesignbinds" type="button">RESET DESIGNER KEYS</button>
+  </div>
   <div class="erow">
     <span id="editshield">shielded while editing</span>
     <button id="resetlayout" type="button">RESET</button>
@@ -189,7 +194,9 @@
             <li>Click a surface, drag a rectangle, click, then pull a height</li>
             <li><kbd>Q</kbd> then <kbd>E</kbd> for a floating box between two corners</li>
             <li><kbd>Alt</kbd> frees the mouse &middot; <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+click selects</li>
-            <li><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>R</kbd> delete &middot; <kbd>G</kbd> grid snap</li>
+            <li><kbd>F</kbd> switches between boxes and ramps</li>
+            <li><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>T</kbd> delete &middot; <kbd>G</kbd> grid snap</li>
+            <li><kbd>R</kbd> turns the selection, or drag one of its three rings</li>
             <li><kbd>Tab</kbd> play the room you just built &middot; <kbd>H</kbd> key list</li>
           </ul>
         </div>
@@ -227,11 +234,13 @@
   <div id="dkeys">
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly &middot; <kbd>Shift</kbd> fast</div>
     <div><kbd>Space</kbd>/<kbd>C</kbd> straight up and down</div>
-    <div>click, drag, click, pull, click &mdash; a box</div>
-    <div><kbd>Q</kbd> then <kbd>E</kbd> floating box</div>
+    <div>click, drag, click, pull, click &mdash; a shape</div>
+    <div><kbd>F</kbd> box or ramp &middot; <kbd>Q</kbd> then <kbd>E</kbd> floating</div>
     <div><kbd>Alt</kbd> free the mouse (and use these buttons)</div>
     <div><kbd>Alt</kbd>+<kbd>Ctrl</kbd>+click select &middot; right click cancels</div>
-    <div><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>R</kbd> delete &middot; <kbd>G</kbd> snap</div>
+    <div><kbd>1</kbd>&hellip;<kbd>0</kbd> colour &middot; <kbd>T</kbd> delete &middot; <kbd>G</kbd> snap</div>
+    <div><kbd>R</kbd> turn 90&deg; (<kbd>Shift</kbd> 15&deg;) &middot; <kbd>X</kbd> next axis</div>
+    <div>or drag a ring to turn it freely</div>
     <div><kbd>Tab</kbd> playtest &middot; <kbd>H</kbd> hides this list</div>
   </div>
   <textarea id="dseed" rows="2" spellcheck="false" placeholder="the level seed appears here"></textarea>

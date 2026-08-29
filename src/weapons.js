@@ -21,19 +21,19 @@ export function spreadFor(weapon, moving, adsT) {
 export const WEAPONS = [
   {
     id: 0, name: 'Rifle', auto: true,
-    damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150,
+    damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150, killAward: 30,
     spread: 0, hipSpread: 0.09, recoil: 0.013, recoilYaw: 0.004,
     reloadTime: 2.0, range: 140, color: 0xffd08a, shakeScale: 1
   },
   {
     id: 1, name: 'Shotgun', auto: false,
-    damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42,
+    damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42, killAward: 6,
     spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // pattern stays even aimed
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2
   },
   {
     id: 2, name: 'Marksman', auto: false,
-    damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30,
+    damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30, killAward: 5,
     spread: 0, hipSpread: 0.12, recoil: 0.09, recoilYaw: 0.01,
     reloadTime: 3.0, range: 250, color: 0x8fd8ff, shakeScale: 2.8
   }
@@ -96,12 +96,13 @@ export class Loadout {
     return w;
   }
 
-  /** A kill refills the gun in hand to its full ammo capacity. Returns how many
-   *  rounds were actually gained, which is nothing if you were already full. */
+  /** A kill is worth exactly one magazine for the gun in hand — 30, 6 or 5 —
+   *  rather than the full refill it used to be. Returns how many rounds were
+   *  actually gained, which is less than that if it hit the reserve ceiling. */
   awardOnKill() {
     const w = this.weapon, a = this.ammo;
     const before = a.reserve;
-    a.reserve = w.reserve;
+    a.reserve = Math.min(w.reserve, a.reserve + w.killAward);
     return a.reserve - before;
   }
 

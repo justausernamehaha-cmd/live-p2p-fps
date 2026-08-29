@@ -32,7 +32,9 @@ await page.waitForTimeout(1500);
 await page.evaluate(() => {
   const g = window.game;
   window.__realBoxes = g.world.boxes;
+  window.__realSolids = g.world.solids;
   g.world.boxes = g.world.boxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+  g.world.solids = [];          // the ramps would deflect a run across the floor
 });
 
 const R = {};
@@ -160,7 +162,10 @@ R.standingDrop = await page.evaluate(async () => {
   return +Math.hypot(g.player.vel.x, g.player.vel.z).toFixed(2);
 });
 
-await page.evaluate(() => { window.game.world.boxes = window.__realBoxes; });
+await page.evaluate(() => {
+  window.game.world.boxes = window.__realBoxes;
+  window.game.world.solids = window.__realSolids;
+});
 
 // ------------------------------------- and the real arena still lets you hop
 R.onTheRealMap = await page.evaluate(async () => {

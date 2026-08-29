@@ -44,7 +44,7 @@ const open = async () => { await page.keyboard.press('Backquote'); await page.wa
 const close = async () => { await page.keyboard.press('Backquote'); await page.waitForTimeout(220); };
 
 // every row, as [label, [key labels]]
-const rows = () => page.evaluate(() => [...document.querySelectorAll('.bindrow')].map(r => [
+const rows = () => page.evaluate(() => [...document.querySelectorAll('#keybinds .bindrow')].map(r => [
   r.querySelector('.bindname').textContent,
   [...r.querySelectorAll('.bindkey')].map(b => b.textContent)
 ]));
@@ -88,9 +88,9 @@ R.settingsKeys = await keysOf('Open settings');
 R.menuKeys = await keysOf('Open menu');
 
 // ------------------------------------------------------- rebind forward to I
-await page.click('.bindrow[data-action=fwd] .bindkey');
+await page.click('#keybinds .bindrow[data-action=fwd] .bindkey');
 R.arming = await page.evaluate(() =>
-  document.querySelector('.bindrow:has(.arming)')?.dataset.action);
+  document.querySelector('#keybinds .bindrow:has(.arming)')?.dataset.action);
 await page.keyboard.press('KeyI');
 await page.waitForTimeout(150);
 R.afterRebind = await keysOf('Forward');
@@ -102,7 +102,7 @@ R.rebindWorks = { withI: await walks('KeyI'), withW: await walks('KeyW') };
 
 // ------------------------------------------ + adds a second key for the action
 await open();
-await page.click('.bindrow[data-action=fwd] .bindadd');
+await page.click('#keybinds .bindrow[data-action=fwd] .bindadd');
 await page.keyboard.press('KeyO');
 await page.waitForTimeout(150);
 R.afterAdd = await keysOf('Forward');
@@ -111,7 +111,7 @@ R.bothKeysWork = { withI: await walks('KeyI'), withO: await walks('KeyO') };
 
 // ------------------------------------- Backspace takes one key off, not the row
 await open();
-await page.click('.bindrow[data-action=fwd] .bindkey');   // the first one, I
+await page.click('#keybinds .bindrow[data-action=fwd] .bindkey');   // the first one, I
 await page.keyboard.press('Backspace');
 await page.waitForTimeout(150);
 R.afterRemove = await keysOf('Forward');
@@ -129,7 +129,7 @@ await page.waitForTimeout(1300);
 
 // ------------------------------------- Open settings is itself a binding now
 await open();
-await page.click('.bindrow[data-action=settings] .bindkey');
+await page.click('#keybinds .bindrow[data-action=settings] .bindkey');
 await page.keyboard.press('KeyU');
 await page.waitForTimeout(200);
 await page.keyboard.press('KeyU');                        // closes it, with the new key
@@ -153,6 +153,21 @@ R.afterReset = await page.evaluate(() => ({
   menu: window.game.input.binds.Escape
 }));
 R.forwardAfterReset = await keysOf('Forward');
+
+// ------------------------------- the designer has its own keyboard, hidden here
+R.designRowsPresent = await page.evaluate(() =>
+  [...document.querySelectorAll('#designbinds .bindrow')].map(r => r.dataset.action));
+R.designSectionHiddenInAMatch = await page.evaluate(() =>
+  getComputedStyle(document.querySelector('.designonly')).display === 'none');
+R.designDefaults = await page.evaluate(() => ({
+  del: window.game.input.designAction('KeyT'),
+  rotate: window.game.input.designAction('KeyR'),
+  shape: window.game.input.designAction('KeyF'),
+  // the same physical keys mean different things in a match, and must not collide
+  matchR: window.game.input.binds.KeyR,
+  matchF: window.game.input.binds.KeyF,
+  matchQ: window.game.input.binds.KeyQ
+}));
 
 // -------------------------------------------- hold/toggle now covers four actions
 R.modeRows = await page.evaluate(() =>
@@ -320,6 +335,12 @@ if (!R.pause.pointerFree) fail.push('the mouse is still captured on the pause sc
 if (!R.pause.worldStillMoving) fail.push('the world froze while paused');
 if (!R.menuButtonOpensSettings) fail.push('the menu SETTINGS button does not open the panel');
 if (!R.menuClosedBehindIt) fail.push('the menu stayed up behind the settings panel');
+if (R.designRowsPresent.length !== 13) fail.push('the designer key list is wrong: ' + R.designRowsPresent);
+if (!R.designSectionHiddenInAMatch) fail.push('the designer key section shows during a match');
+if (R.designDefaults.del !== 'ddelete') fail.push('T does not delete in the designer');
+if (R.designDefaults.rotate !== 'rotate') fail.push('R does not rotate in the designer');
+if (R.designDefaults.shape !== 'shape') fail.push('F does not switch shape in the designer');
+if (R.designDefaults.matchR !== 'reload' || R.designDefaults.matchQ !== 'lastweapon') fail.push('the designer map leaked into the match map');
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 
 console.log(JSON.stringify(R, null, 2));

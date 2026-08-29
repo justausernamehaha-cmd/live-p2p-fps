@@ -1,5 +1,6 @@
 import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
+import { capsulePush } from './solid.js';
 
 const RADIUS = 0.17;      // matches the rendered body half-width in remote.js
 const HEIGHT = 1.8;
@@ -49,6 +50,12 @@ const SPEED_CAP = 22;           // sanity limit, well above anything reachable b
 const MAX_STEP_DIST = 0.3;      // sub-step the movement so fast players cannot tunnel
 const STEP_SMOOTH_RATE = 5;     // m/s the view catches up after a step, i.e. a linear climb
 const STEP_SMOOTH_MAX = 1.0;
+// Push out of a box to just *clear* of its face, never to exactly touching.
+// Landing exactly on a face leaves floating point free to put the player a
+// fraction inside it, and the next axis resolved then sees a real overlap and
+// ejects them across the whole box: walk into a four-metre wall and you end up
+// standing on top of it. A millimetre of clearance costs nothing and cannot.
+const SKIN = 1e-3;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 const CROUCH_TIME = 0.3;        // seconds to fully crouch or stand, so it cannot flicker
 
@@ -367,7 +374,14 @@ export class Player {
         this._axis('y', -STEP_HEIGHT, boxes);     // settle onto the step
         const stepped = Math.hypot(this.pos.x - start.x, this.pos.z - start.z);
         const slid = Math.hypot(flat.x - start.x, flat.z - start.z);
-        if (stepped <= slid + 1e-4) {
+        // A step up may never gain more than a step. _axis() resolves an overlap
+        // by pushing clear of the whole box, so a horizontal push-out that lands
+        // a float's width inside a tall wall lets the settle above lift the
+        // player all the way to the top of it — walk into a four-metre wall and
+        // you would end up standing on it.
+        if (this.pos.y > start.y + STEP_HEIGHT + 1e-4) {
+          this.pos = flat;
+        } else if (stepped <= slid + 1e-4) {
           this.pos = flat;
         } else if (this.pos.y > start.y) {
           // took a step up: hold the view back by the height gained
@@ -398,6 +412,10 @@ export class Player {
       this.vel.y = 0;
     }
 
+    // ramps and turned boxes last: they are resolved by pushing out, so they
+    // have to see where the axis-aligned pass actually left the player
+    this._resolveSolids();
+
     // failsafe: never let a player leak out of the arena
     if (this.pos.y < -20) { this.pos.y = 10; this.vel.y = 0; }
   }
@@ -405,7 +423,63 @@ export class Player {
   _overlaps(boxes) {
     const a = this.aabb();
     for (const b of boxes) if (aabbOverlap(a, b)) return true;
+    return this._inSolid();
+  }
+
+  /** The player as the capsule solid.js resolves against: a vertical segment
+   *  inset by the radius at each end, so its lowest point is still the feet. */
+  _capsule(height = this.height) {
+    return [this.pos.x, this.pos.y + RADIUS, this.pos.z,
+            this.pos.x, this.pos.y + Math.max(height - RADIUS, RADIUS), this.pos.z];
+  }
+
+  _inSolid() {
+    const solids = this.world.solids;
+    if (!solids || !solids.length) return false;
+    const [ax, ay, az, bx, by, bz] = this._capsule();
+    for (const s of solids) if (capsulePush(ax, ay, az, bx, by, bz, RADIUS, s)) return true;
     return false;
+  }
+
+  /** Push out of every ramp and turned box the player is inside.
+   *
+   *  Resolution is along the face normal, except where that face is walkable —
+   *  there the push is straight up instead. Along-the-normal would work, but it
+   *  also nudges you a little downhill every frame gravity presses you into a
+   *  ramp, and standing still on a slope would slide. */
+  _resolveSolids() {
+    const solids = this.world.solids;
+    if (!solids || !solids.length) return;
+    for (let pass = 0; pass < 2; pass++) {
+      let moved = false;
+      for (const s of solids) {
+        const [ax, ay, az, bx, by, bz] = this._capsule();
+        const hit = capsulePush(ax, ay, az, bx, by, bz, RADIUS, s);
+        if (!hit) continue;
+        moved = true;
+        const n = hit.n;
+        if (n.ny > 0.5) {
+          this.pos.y += hit.depth / n.ny;
+          if (this.vel.y <= 0) {
+            this.onGround = true;
+            this.fellAt = Math.max(this.fellAt, -this.vel.y);
+            this.vel.y = 0;
+          }
+        } else {
+          this.pos.x += n.nx * hit.depth;
+          this.pos.y += n.ny * hit.depth;
+          this.pos.z += n.nz * hit.depth;
+          const into = this.vel.x * n.nx + this.vel.y * n.ny + this.vel.z * n.nz;
+          if (into < 0) {
+            this.vel.x -= n.nx * into;
+            this.vel.y -= n.ny * into;
+            this.vel.z -= n.nz * into;
+            if (Math.abs(n.ny) < 0.7) this.bumped = true;
+          }
+        }
+      }
+      if (!moved) break;      // a second pass only matters where two solids meet
+    }
   }
 
   /** move along one axis and push out of anything hit; returns true if blocked */
@@ -417,8 +491,8 @@ export class Player {
       const a = this.aabb();
       if (!aabbOverlap(a, b)) continue;
       blocked = true;
-      if (amount > 0) this.pos[axis] -= a.max[axis] - b.min[axis];
-      else this.pos[axis] += b.max[axis] - a.min[axis];
+      if (amount > 0) this.pos[axis] -= (a.max[axis] - b.min[axis]) + SKIN;
+      else this.pos[axis] += (b.max[axis] - a.min[axis]) + SKIN;
     }
     return blocked;
   }

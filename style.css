@@ -290,6 +290,13 @@ body.paused #hud{opacity:.35}
   background:transparent;color:var(--dim);font-size:11px;letter-spacing:.1em;font-weight:700}
 /* a phone has no keys to rebind */
 body.touch-ui .keysonly{display:none}
+/* the designer's own keyboard, shown only when there is a design room to use it in */
+.designonly{display:none}
+body.designing:not(.touch-ui) .designonly{display:flex}
+.ekeys>b span{text-transform:none;letter-spacing:0;font-size:10.5px;color:#61758f;font-weight:400}
+#designbinds{display:flex;flex-direction:column;gap:3px;max-height:30vh;overflow:auto;padding-right:2px}
+#resetdesignbinds{align-self:flex-start;padding:7px 12px;border-radius:7px;border:1px solid var(--line);
+  background:transparent;color:var(--dim);font-size:11px;letter-spacing:.1em;font-weight:700}
 /* the panel has grown a keyboard section, so let it use the height it needs */
 body:not(.touch-ui) #editpanel{width:min(94vw,458px);max-height:94vh;overflow:auto}
 

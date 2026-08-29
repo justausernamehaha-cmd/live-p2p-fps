@@ -39,7 +39,29 @@ export const TOGGLEABLE = [
   ['crouch', 'Crouch'], ['ads', 'Aim'], ['sprint', 'Sprint'], ['jump', 'Jump']
 ];
 
+// The level designer has its own keyboard entirely. Separate map, separate
+// storage: the two modes never run at once, so `R` can reload a rifle in a match
+// and rotate a ramp while building without either having to give way.
+export const DEFAULT_DESIGN_BINDS = {
+  ShiftLeft: 'fast', ShiftRight: 'fast',
+  Space: 'up', KeyC: 'down',
+  AltLeft: 'freemouse', AltRight: 'freemouse',
+  KeyQ: 'corner1', KeyE: 'corner2',
+  KeyF: 'shape', KeyR: 'rotate', KeyX: 'axis', KeyT: 'ddelete',
+  KeyG: 'snap', KeyH: 'keylist', Tab: 'playtest'
+};
+
+export const DESIGN_BINDABLE = [
+  ['fast', 'Fly fast'], ['up', 'Fly up'], ['down', 'Fly down'],
+  ['freemouse', 'Free the mouse'],
+  ['corner1', 'Floating box: corner A'], ['corner2', 'Floating box: corner B'],
+  ['shape', 'Box / ramp'], ['rotate', 'Rotate selection'],
+  ['axis', 'Next rotation axis'], ['ddelete', 'Delete selection'],
+  ['snap', 'Grid snap'], ['keylist', 'Hide the key list'], ['playtest', 'Playtest']
+];
+
 const BIND_KEY = 'pa.binds';
+const DESIGN_BIND_KEY = 'pa.designbinds';
 
 const LOOK_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
@@ -123,6 +145,7 @@ export class Input {
       for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
     } catch { /* nothing saved */ }
     this.binds = this._loadBinds();
+    this.designBinds = this._loadBinds(DESIGN_BIND_KEY, DEFAULT_DESIGN_BINDS);
     // set while another mode owns the pointer on purpose (the level designer
     // releases it with Alt); without it every click grabs the mouse straight back
     this.suspendLock = false;
@@ -479,13 +502,13 @@ export class Input {
   isToggle(action) { return this.toggleMode.has(action); }
 
   // ---------------------------------------------------------------- bindings
-  _loadBinds() {
+  _loadBinds(key = BIND_KEY, defaults = DEFAULT_BINDS) {
     try {
-      const saved = JSON.parse(localStorage.getItem(BIND_KEY));
+      const saved = JSON.parse(localStorage.getItem(key));
       if (saved && typeof saved === 'object') {
         // only keep pairs that still mean something, so an old save cannot
         // bind a key to an action the game no longer has
-        const actions = new Set(Object.values(DEFAULT_BINDS));
+        const actions = new Set(Object.values(defaults));
         const out = {};
         for (const [code, action] of Object.entries(saved)) {
           if (typeof code === 'string' && actions.has(action)) out[code] = action;
@@ -493,17 +516,23 @@ export class Input {
         if (Object.keys(out).length) return out;
       }
     } catch { /* nothing saved, or unreadable */ }
-    return { ...DEFAULT_BINDS };
+    return { ...defaults };
   }
 
-  _saveBinds() {
-    try { localStorage.setItem(BIND_KEY, JSON.stringify(this.binds)); } catch { /* private mode */ }
+  _saveBinds(design = false) {
+    const key = design ? DESIGN_BIND_KEY : BIND_KEY;
+    const map = design ? this.designBinds : this.binds;
+    try { localStorage.setItem(key, JSON.stringify(map)); } catch { /* private mode */ }
   }
 
-  /** Every key currently bound to an action. */
-  keysFor(action) {
-    return Object.keys(this.binds).filter(code => this.binds[code] === action);
+  /** Every key currently bound to an action, in either map. */
+  keysFor(action, design = false) {
+    const map = design ? this.designBinds : this.binds;
+    return Object.keys(map).filter(code => map[code] === action);
   }
+
+  /** What the level designer should do about this key, if anything. */
+  designAction(code) { return this.designBinds[code]; }
 
   /** Point a key at an action. `replacing` is the key being changed, if this is
    *  an edit rather than an addition — an action may hold as many keys as the
@@ -512,31 +541,38 @@ export class Input {
    *
    *  Escape is refused: the browser owns it (it is how you get the mouse back,
    *  and how the rebinding prompt is cancelled), so binding it would be a lie. */
-  bind(action, code, replacing = null) {
+  bind(action, code, replacing = null, design = false) {
     if (!code || code === 'Escape') return false;
-    delete this.binds[code];
-    if (replacing && replacing !== code) delete this.binds[replacing];
-    this.binds[code] = action;
+    const map = design ? this.designBinds : this.binds;
+    delete map[code];
+    if (replacing && replacing !== code) delete map[replacing];
+    map[code] = action;
     // a rebind mid-game must not leave the old key stuck down
     this.held.delete(action);
     this.toggled.delete(action);
     this._recalcKeys();
-    this._saveBinds();
+    this._saveBinds(design);
     return true;
   }
 
   /** Take one key off an action, leaving its other keys alone. */
-  unbind(action, code) {
-    if (this.binds[code] !== action) return false;
-    delete this.binds[code];
+  unbind(action, code, design = false) {
+    const map = design ? this.designBinds : this.binds;
+    if (map[code] !== action) return false;
+    delete map[code];
     this.held.delete(action);
     this.toggled.delete(action);
     this._recalcKeys();
-    this._saveBinds();
+    this._saveBinds(design);
     return true;
   }
 
-  resetBinds() {
+  resetBinds(design = false) {
+    if (design) {
+      this.designBinds = { ...DEFAULT_DESIGN_BINDS };
+      this._saveBinds(true);
+      return;
+    }
     this.binds = { ...DEFAULT_BINDS };
     this.held.clear();
     this.toggled.clear();

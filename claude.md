@@ -40,8 +40,31 @@ against the live site.
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
 | `settings.mjs` | rebinding and stacking keys, latchable actions, 3s/3s protection, pause overlay |
 | `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed |
+| `slopes.mjs` | ramps are walkable and solid; a turned box collides where it was turned to |
+| `solid.mjs` | the convex layer, in node — no browser, no server, about a second |
 
 ## Things worth not rediscovering
+
+- **Pushing out of a box to *exactly* touching lets you climb walls.** `_axis()`
+  resolves an overlap by moving the player clear of the whole box. Land exactly
+  on a face and floating point is free to leave you a fraction inside it; the
+  next axis resolved then sees a real overlap and ejects you across the box's
+  full height. Walking into a four-metre wall put the player on top of it,
+  intermittently — it depended on the last bit of a float. A millimetre of skin
+  on every push-out fixes it and costs nothing. This was latent long before
+  ramps; the designer just made it easy to build a wall tall enough to notice.
+- **Euler angles are not unique.** Two quarter turns about Y come back out of
+  `eulerFromMatrix` as `(pi, 0, pi)`, which is the same rotation written
+  differently. Never assert on the angles — assert on the footprint they
+  produce.
+- **A wedge's bounding-box centre lies exactly on its own ramp plane**, so it
+  cannot be used to decide which way that face points: the test comes out zero
+  and the normal is left pointing inward. The mean of the vertices is strictly
+  inside every convex shape and can.
+- **A ramp's extents are in its own frame, not the world's.** The wedge is
+  defined climbing along its local +x and then turned into place, so a drag has
+  to be handed over permuted. Storing the world extents and rotating afterwards
+  turned a nine-metre run into a half-metre one nine metres wide.
 
 - **Bunny hopping worked because of a bug, and fixing the bug on its own capped
   it at walking pace.** Ground contact was decided by the last collision
@@ -94,16 +117,21 @@ down:
   reads as `Esc` and answers with the pause menu. Guarded: `onAction('pause')`
   returns early while `design.mouseFree`.
 - `` ` `` was **already** the settings panel, which is exactly the panel the key
-  rebinding went into, so it stayed. `=` is bound as an alias.
-- `G` (grid snap) and `H` (hide the key list) are new and unused elsewhere.
+  rebinding went into, so it stayed. `=` was briefly an alias and has been
+  removed at the user's request.
+- The designer now has its own bind map entirely (`pa.designbinds`), so none of
+  the above is a collision any more — it is just two keyboards for two modes.
+  `R` reloads in a match and turns a ramp while building; delete moved to `T` to
+  make room for it.
 
 ## Ideas, not built
 
 - **Peers seeing edits live.** The designer is deliberately single-player: a
   seed is how a level travels. Sharing edits would need an authority for
   conflicts, which this game does not have anywhere else either.
-- **More than boxes.** Ramps and cylinders would break the "everything is an
-  axis-aligned box" assumption that makes collision and hitscan trivial and
-  identical on every peer. It is load-bearing, not laziness.
+- **Curves.** Ramps and free rotation are built — they became convex solids in
+  `src/solid.js`, with axis-aligned boxes keeping their own faster exact path.
+  Anything round would need a different representation again, and the convex
+  half-space push-out would stop being the right tool.
 - **A level browser.** Seeds are pasteable but not discoverable; there is no
   server to list them on.

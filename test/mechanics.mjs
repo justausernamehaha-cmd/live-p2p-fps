@@ -107,7 +107,9 @@ const R = await page.evaluate(async () => {
   // The arena has no runway long enough for this, so the level is temporarily
   // reduced to its floor. This measures the air physics, not the map.
   const realBoxes = g.world.boxes;
+  const realSolids = g.world.solids;
   g.world.boxes = realBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+  g.world.solids = [];          // the ramps would deflect a run across the floor
   park(0, 0.3, 0, 0);
   await sleep(400);
   keys('fwd', 'right', 'jump');
@@ -139,6 +141,7 @@ const R = await page.evaluate(async () => {
   out.bhop.straightLinePeak = +straightPeak.toFixed(2);
   out.bhop.straightLineGainsNothing = straightPeak < 6.4;
   g.world.boxes = realBoxes;
+  g.world.solids = realSolids;
   await sleep(100);
 
   // ---- aiming ----

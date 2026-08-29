@@ -165,10 +165,10 @@ class Game {
     this.layout = new Layout();
     this.layout.isToggle = a => this.input.isToggle(a);
     this.layout.onMode = (action, toggle) => this.input.setToggleMode(action, toggle);
-    this.layout.keysFor = a => this.input.keysFor(a);
-    this.layout.onBind = (action, code, replacing) => this.input.bind(action, code, replacing);
-    this.layout.onUnbind = (action, code) => this.input.unbind(action, code);
-    this.layout.onResetBinds = () => this.input.resetBinds();
+    this.layout.keysFor = (a, design) => this.input.keysFor(a, design);
+    this.layout.onBind = (a, code, replacing, design) => this.input.bind(a, code, replacing, design);
+    this.layout.onUnbind = (a, code, design) => this.input.unbind(a, code, design);
+    this.layout.onResetBinds = design => this.input.resetBinds(design);
     this.layout.showModes();
     this.layout.showBinds();
     document.getElementById('donelayout').addEventListener('click', () => this._endEdit());
@@ -426,7 +426,7 @@ class Game {
       this.audio.kill();
       this.hud.hitmarker(true);
       const gained = this.loadout.awardOnKill();
-      if (gained) this.hud.feed(`+${gained} ${escapeHtml(this.loadout.weapon.name.toLowerCase())} ammo &mdash; full`, 'chat');
+      if (gained) this.hud.feed(`+${gained} ${escapeHtml(this.loadout.weapon.name.toLowerCase())} ammo`, 'chat');
     } else if (this.remotes.has(m.by)) {
       this.remotes.get(m.by).kills++;
     }

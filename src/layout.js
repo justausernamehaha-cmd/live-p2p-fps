@@ -1,5 +1,5 @@
 import { clamp } from './util.js';
-import { BINDABLE, TOGGLEABLE } from './input.js';
+import { BINDABLE, TOGGLEABLE, DESIGN_BINDABLE } from './input.js';
 
 // Lets a phone player drag the on-screen buttons around and resize them, because
 // no single fixed layout suits every hand and every screen. Positions are stored
@@ -33,7 +33,36 @@ export class Layout {
     document.getElementById('resetlayout').addEventListener('click', () => this.reset());
 
     this._buildModeRows();
-    this._buildKeyRows();
+    this._buildKeyRows('keybinds', BINDABLE, false);
+    this._buildKeyRows('designbinds', DESIGN_BINDABLE, true);
+    document.getElementById('resetbinds').addEventListener('click', () => {
+      this._capturing = null;
+      this.onResetBinds?.(false);
+      this.showBinds();
+    });
+    document.getElementById('resetdesignbinds').addEventListener('click', () => {
+      this._capturing = null;
+      this.onResetBinds?.(true);
+      this.showBinds();
+    });
+    // One capture listener for both lists. It sits on the window in the capture
+    // phase so it beats the game's own key handling: while a row is armed, the
+    // next key is a binding and nothing else — including the key that opens
+    // this panel, and including the designer's own keys.
+    addEventListener('keydown', e => {
+      const cap = this._capturing;
+      if (!cap) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this._capturing = null;
+      if (e.code === 'Escape') { /* cancelled; Escape is the browser's */ }
+      else if ((e.code === 'Backspace' || e.code === 'Delete') && cap.replacing) {
+        this.onUnbind?.(cap.action, cap.replacing, cap.design);
+      } else {
+        this.onBind?.(cap.action, e.code, cap.replacing, cap.design);
+      }
+      this.showBinds();
+    }, true);
 
     for (const el of this.buttons) this._bindDrag(el);
     this.apply();
@@ -72,11 +101,11 @@ export class Layout {
 
   /** The keyboard half of the panel: one row per action, one button per key
    *  bound to it, and a `+` that adds another. */
-  _buildKeyRows() {
-    const wrap = document.getElementById('keybinds');
+  _buildKeyRows(hostId, list, design) {
+    const wrap = document.getElementById(hostId);
     wrap.innerHTML = '';
-    this.keyRows = new Map();
-    for (const [action, label] of BINDABLE) {
+    this.keyRows = this.keyRows || new Map();
+    for (const [action, label] of list) {
       const row = document.createElement('div');
       row.className = 'bindrow';
       row.dataset.action = action;
@@ -87,35 +116,13 @@ export class Layout {
       keys.className = 'bindkeys';
       row.append(name, keys);
       wrap.appendChild(row);
-      this.keyRows.set(action, keys);
+      this.keyRows.set((design ? 'design:' : '') + action, { host: keys, action, design });
     }
-    document.getElementById('resetbinds').addEventListener('click', () => {
-      this._capturing = null;
-      this.onResetBinds?.();
-      this.showBinds();
-    });
-    // The capture listener sits on the window in the capture phase so it beats
-    // the game's own key handling: while a row is armed, the next key is a
-    // binding and nothing else — including the key that opens this panel.
-    addEventListener('keydown', e => {
-      const cap = this._capturing;
-      if (!cap) return;
-      e.preventDefault();
-      e.stopPropagation();
-      this._capturing = null;
-      if (e.code === 'Escape') { /* cancelled; Escape is the browser's */ }
-      else if ((e.code === 'Backspace' || e.code === 'Delete') && cap.replacing) {
-        this.onUnbind?.(cap.action, cap.replacing);
-      } else {
-        this.onBind?.(cap.action, e.code, cap.replacing);
-      }
-      this.showBinds();
-    }, true);
   }
 
   /** Arm a row. `replacing` is the key being changed, or null to add one. */
-  _capture(action, replacing) {
-    this._capturing = { action, replacing };
+  _capture(action, replacing, design) {
+    this._capturing = { action, replacing, design };
     this.showBinds();
   }
 
@@ -123,14 +130,15 @@ export class Layout {
   showBinds() {
     if (!this.keyRows) return;
     const cap = this._capturing;
-    for (const [action, host] of this.keyRows) {
+    for (const { host, action, design } of this.keyRows.values()) {
       host.innerHTML = '';
-      const keys = this.keysFor?.(action) ?? [];
+      const mine = !!cap && cap.action === action && !!cap.design === !!design;
+      const keys = this.keysFor?.(action, design) ?? [];
       for (const code of keys) {
-        const armed = !!cap && cap.action === action && cap.replacing === code;
+        const armed = mine && cap.replacing === code;
         host.appendChild(this._keyButton(
           armed ? 'press a key…' : keyLabel(code), 'bindkey', armed,
-          () => this._capture(action, code)));
+          () => this._capture(action, code, design)));
       }
       if (!keys.length) {
         const none = document.createElement('span');
@@ -138,9 +146,9 @@ export class Layout {
         none.textContent = '—';
         host.appendChild(none);
       }
-      const adding = !!cap && cap.action === action && cap.replacing === null;
+      const adding = mine && cap.replacing === null;
       const plus = this._keyButton(adding ? 'press a key…' : '+', 'bindadd', adding,
-                                   () => this._capture(action, null));
+                                   () => this._capture(action, null, design));
       plus.title = 'add another key for this action';
       host.appendChild(plus);
     }

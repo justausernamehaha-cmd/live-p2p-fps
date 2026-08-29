@@ -198,7 +198,7 @@ R.editing = await page.evaluate(async () => {
   const zeroIsTenth = target.c === 9;
 
   const n = d.level.boxes.length;
-  key('KeyR');
+  key('KeyT');                                 // delete moved off R, which now turns things
   const deleted = d.level.boxes.length === n - 1;
   const goneFromWorld = !g.world.boxes.some(w => w.src === target);
 
@@ -208,7 +208,7 @@ R.editing = await page.evaluate(async () => {
   key('Digit3');
   const floorColoured = floor.c === 2;
   const before = d.level.shell.length;
-  key('KeyR');
+  key('KeyT');
   return {
     colouredTo, worldColour, zeroIsTenth, deleted, goneFromWorld, floorColoured,
     floorSurvived: d.level.shell.length === before && d.level.shell.includes(floor),
@@ -355,7 +355,7 @@ if (!R.floating.aheadOfEye) fail.push('the Q/E corner was the eye, not the reach
 if (R.editing.colouredTo !== 5) fail.push('6 did not set the sixth colour');
 if (R.editing.worldColour !== 0xc7443f) fail.push('the colour never reached the mesh');
 if (!R.editing.zeroIsTenth) fail.push('0 is not the tenth colour');
-if (!R.editing.deleted || !R.editing.goneFromWorld) fail.push('R did not delete the selection');
+if (!R.editing.deleted || !R.editing.goneFromWorld) fail.push('T did not delete the selection');
 if (!R.editing.floorColoured) fail.push('the floor could not be coloured');
 if (!R.editing.floorSurvived) fail.push('the floor was deleted, and it must not be');
 if (!R.editing.removeRefusedByLevel) fail.push('Level.remove will delete the floor if anything asks it to');

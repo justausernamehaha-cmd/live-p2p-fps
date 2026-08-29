@@ -1,4 +1,5 @@
 import { clamp } from './util.js';
+import { SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
 
 // A level is data, not code: a room size plus a list of axis-aligned boxes. That
 // is the whole format, and it is all the designer ever produces. The built-in
@@ -30,7 +31,8 @@ export const MIN_H = 4, MAX_H = 60;
 export const MAX_BOXES = 800;
 
 const UNIT = 20;              // coordinates are stored in twentieths of a metre
-const MAGIC = 'PA1';
+const ROT = 1000;             // rotations in milliradians: 0.06 degrees, plenty
+const MAGIC = 'PA2';          // PA1 had no shape or rotation; it still decodes
 
 // The six shell pieces, in the order they are stored. The floor's top face is
 // y = 0, so a player standing on it has the same feet height as in the arena.
@@ -65,7 +67,8 @@ export class Level {
       kind: SHELL_KINDS[i],
       locked: true,                  // colourable, never deletable
       x0: d[0], y0: d[1], z0: d[2], x1: d[3], y1: d[4], z1: d[5],
-      c: clamp((c && c[i]) ?? SHELL_DEFAULT_C[i], 0, 9) | 0
+      c: clamp((c && c[i]) ?? SHELL_DEFAULT_C[i], 0, 9) | 0,
+      shape: SHAPE_BOX, rx: 0, ry: 0, rz: 0
     }));
   }
 
@@ -85,14 +88,18 @@ export class Level {
            b.y1 > -SHELL_T - 0.01 && b.y0 < this.h + SHELL_T + 0.01;
   }
 
-  /** Add a box from two opposite corners. Returns it, or null if degenerate. */
-  add(a, b, colorIndex) {
+  /** Add a box from two opposite corners. Returns it, or null if degenerate.
+   *  `shape` picks a full box or a wedge; `rot` is the Euler triple it is turned
+   *  by about its own centre. */
+  add(a, b, colorIndex, shape = SHAPE_BOX, rot = null) {
     if (this.boxes.length >= MAX_BOXES) return null;
     const box = {
       id: 'b' + (this._nextId++),
       x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), z0: Math.min(a.z, b.z),
       x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y), z1: Math.max(a.z, b.z),
-      c: clamp(colorIndex | 0, 0, 9)
+      c: clamp(colorIndex | 0, 0, 9),
+      shape: shape === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
+      rx: rot ? rot[0] : 0, ry: rot ? rot[1] : 0, rz: rot ? rot[2] : 0
     };
     // a zero-thickness box is invisible and unselectable, so give it the grid
     for (const [lo, hi] of [['x0', 'x1'], ['y0', 'y1'], ['z0', 'z1']]) {
@@ -103,9 +110,22 @@ export class Level {
     return box;
   }
 
-  /** Keep a box inside the shell, so nothing can be built where it cannot be reached. */
+  /** Keep a box inside the shell, so nothing can be built where it cannot be
+   *  reached. A turned box is clamped by its centre instead: squeezing its
+   *  extents would change the shape rather than move it. */
   clampToRoom(box) {
     const hw = this.w / 2, hl = this.l / 2;
+    if (box.rx || box.ry || box.rz) {
+      const shift = (lo, hi, limit) => {
+        const c = (lo + hi) / 2;
+        return clamp(c, -limit, limit) - c;
+      };
+      const dx = shift(box.x0, box.x1, hw);
+      const dz = shift(box.z0, box.z1, hl);
+      box.x0 += dx; box.x1 += dx;
+      box.z0 += dz; box.z1 += dz;
+      return box;
+    }
     box.x0 = clamp(box.x0, -hw, hw); box.x1 = clamp(box.x1, -hw, hw);
     box.z0 = clamp(box.z0, -hl, hl); box.z1 = clamp(box.z1, -hl, hl);
     box.y0 = clamp(box.y0, -SHELL_T, this.h); box.y1 = clamp(box.y1, -SHELL_T, this.h);
@@ -122,16 +142,12 @@ export class Level {
 
   all() { return [...this.shell, ...this.boxes]; }
 
-  /** The shape world.js consumes: min/max plus a resolved colour. `src` links
-   *  a rendered box back to the level entry that produced it, which is how a
+  /** What world.js consumes: the level's entries with a resolved colour. It
+   *  decides which are plain AABBs and which need the convex path. `src` links
+   *  anything rendered back to the level entry that produced it, which is how a
    *  click in the designer turns into a selection. */
   worldBoxes() {
-    return this.all().map(b => ({
-      min: { x: b.x0, y: b.y0, z: b.z0 },
-      max: { x: b.x1, y: b.y1, z: b.z1 },
-      color: COLORS[b.c] ?? COLORS[0],
-      src: b
-    }));
+    return this.all().map(b => ({ ...b, color: COLORS[b.c] ?? COLORS[0], src: b }));
   }
 
   /** Eight points on a ring, each dropped onto whatever is under it. */
@@ -152,7 +168,8 @@ export class Level {
     const shell = this.shell.map(b => b.c.toString(36)).join('');
     const boxes = this.boxes.map(b =>
       [b.x0, b.y0, b.z0, b.x1, b.y1, b.z1].map(v => enc(v * UNIT)).join(',') +
-      ',' + b.c.toString(36)).join(';');
+      ',' + b.c.toString(36) + ',' + (b.shape || 0).toString(36) + ',' +
+      [b.rx || 0, b.ry || 0, b.rz || 0].map(v => enc(v * ROT)).join(',')).join(';');
     const body = `${dims}-${shell}-${boxes}`;
     return `${MAGIC}-${body}-${fnv(body).toString(36)}`;
   }
@@ -162,7 +179,9 @@ export class Level {
     const s = String(text || '').replace(/\s+/g, '').replace(/^["']|["']$/g, '');
     if (!s) throw new Error('empty seed');
     const parts = s.split('-');
-    if (parts.length !== 5 || parts[0] !== MAGIC) {
+    // PA1 seeds had neither a shape nor a rotation. They still load: their boxes
+    // are all upright boxes, which is what those four fields would say anyway.
+    if (parts.length !== 5 || (parts[0] !== MAGIC && parts[0] !== 'PA1')) {
       throw new Error('that does not look like a level seed');
     }
     const [, dims, shellStr, boxStr, sum] = parts;
@@ -182,13 +201,17 @@ export class Level {
       if (entries.length > MAX_BOXES) throw new Error(`too many boxes (${entries.length})`);
       for (const e of entries) {
         const f = e.split(',');
-        if (f.length !== 7) throw new Error('bad box in the seed');
+        if (f.length !== 7 && f.length !== 11) throw new Error('bad box in the seed');
         const n = f.slice(0, 6).map(v => dec(v) / UNIT);
         if (n.some(v => !Number.isFinite(v))) throw new Error('bad box in the seed');
+        const r = f.length === 11 ? f.slice(8, 11).map(v => dec(v) / ROT) : [0, 0, 0];
+        if (r.some(v => !Number.isFinite(v))) throw new Error('bad rotation in the seed');
         level.boxes.push(level.clampToRoom({
           id: 'b' + (level._nextId++),
           x0: n[0], y0: n[1], z0: n[2], x1: n[3], y1: n[4], z1: n[5],
-          c: clamp(parseInt(f[6], 36) || 0, 0, 9)
+          c: clamp(parseInt(f[6], 36) || 0, 0, 9),
+          shape: f.length === 11 && parseInt(f[7], 36) === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
+          rx: r[0], ry: r[1], rz: r[2]
         }));
       }
     }
@@ -211,6 +234,8 @@ function dropOnto(x, z, boxes, roomH) {
   }
   return { x, y: top + 0.05, z };
 }
+
+export { SHAPE_BOX, SHAPE_SLOPE };
 
 // Zig-zag so a negative coordinate still encodes as base 36 with no sign
 // character, which keeps the whole seed safe in a URL fragment.

@@ -27,7 +27,9 @@ const results = await page.evaluate(async ({ YAWS, KEYS }) => {
   const out = [];
   const sleep = ms => new Promise(f => setTimeout(f, ms));
   const realBoxes = g.world.boxes;
+  const realSolids = g.world.solids;
   g.world.boxes = realBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
+  g.world.solids = [];          // the ramps would deflect a run across the floor
   for (const deg of YAWS) {
     for (const code of Object.keys(KEYS)) {
       const yaw = deg * Math.PI / 180;
@@ -58,6 +60,7 @@ const results = await page.evaluate(async ({ YAWS, KEYS }) => {
     }
   }
   g.world.boxes = realBoxes;
+  g.world.solids = realSolids;
   return out;
 }, { YAWS, KEYS });
 
