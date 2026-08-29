@@ -32,7 +32,14 @@ export const MAX_BOXES = 800;
 
 const UNIT = 20;              // coordinates are stored in twentieths of a metre
 const ROT = 1000;             // rotations in milliradians: 0.06 degrees, plenty
-const MAGIC = 'PA2';          // PA1 had no shape or rotation; it still decodes
+const MAGIC = 'PA3';          // PA1 had no shape or rotation, PA2 no movement
+const OLD_MAGIC = ['PA1', 'PA2'];
+
+// A moving platform travels between where it was built and one other point, at
+// a constant speed, turning round at each end and going back. The spec gave no
+// timing, so there is one speed and it loops for ever.
+export const MOVE_SPEED = 3;      // m/s
+const MIN_MOVE = 0.25;     // shorter than this and it is not a journey
 
 // The six shell pieces, in the order they are stored. The floor's top face is
 // y = 0, so a player standing on it has the same feet height as in the arena.
@@ -99,7 +106,8 @@ export class Level {
       x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y), z1: Math.max(a.z, b.z),
       c: clamp(colorIndex | 0, 0, 9),
       shape: shape === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
-      rx: rot ? rot[0] : 0, ry: rot ? rot[1] : 0, rz: rot ? rot[2] : 0
+      rx: rot ? rot[0] : 0, ry: rot ? rot[1] : 0, rz: rot ? rot[2] : 0,
+      mv: null              // {x,y,z,sp}: where its centre travels to, and how fast
     };
     // a zero-thickness box is invisible and unselectable, so give it the grid
     for (const [lo, hi] of [['x0', 'x1'], ['y0', 'y1'], ['z0', 'z1']]) {
@@ -130,6 +138,29 @@ export class Level {
     box.z0 = clamp(box.z0, -hl, hl); box.z1 = clamp(box.z1, -hl, hl);
     box.y0 = clamp(box.y0, -SHELL_T, this.h); box.y1 = clamp(box.y1, -SHELL_T, this.h);
     return box;
+  }
+
+  /** Make a box travel to `end` and back, or stop it travelling.
+   *
+   *  The box keeps the position it was built at — that is the start of the run,
+   *  and what the seed stores — and `mv` is the far end of it. What travels is
+   *  the box's own middle, so aiming at a point puts the *centre* there rather
+   *  than a corner, which is what a person pointing at a spot means.
+   *
+   *  Returns the box on success, or null when the two points are the same place
+   *  and there would be nothing to watch. */
+  setMove(box, end, speed = MOVE_SPEED) {
+    if (!box || box.locked) return null;
+    if (!end) { box.mv = null; return box; }
+    const c = this.centreOf(box);
+    const dist = Math.hypot(end.x - c.x, end.y - c.y, end.z - c.z);
+    if (dist < MIN_MOVE) { box.mv = null; return null; }
+    box.mv = { x: end.x, y: end.y, z: end.z, sp: clamp(speed, 0.2, 20) };
+    return box;
+  }
+
+  centreOf(b) {
+    return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: (b.z0 + b.z1) / 2 };
   }
 
   remove(box) {
@@ -166,10 +197,14 @@ export class Level {
   encode() {
     const dims = [this.w, this.l, this.h].map(v => enc(v * UNIT)).join(',');
     const shell = this.shell.map(b => b.c.toString(36)).join('');
+    // A speed of zero is what says "this one does not move" — the end point
+    // cannot, since the origin is a perfectly good place to travel to.
     const boxes = this.boxes.map(b =>
       [b.x0, b.y0, b.z0, b.x1, b.y1, b.z1].map(v => enc(v * UNIT)).join(',') +
       ',' + b.c.toString(36) + ',' + (b.shape || 0).toString(36) + ',' +
-      [b.rx || 0, b.ry || 0, b.rz || 0].map(v => enc(v * ROT)).join(',')).join(';');
+      [b.rx || 0, b.ry || 0, b.rz || 0].map(v => enc(v * ROT)).join(',') + ',' +
+      [b.mv ? b.mv.x : 0, b.mv ? b.mv.y : 0, b.mv ? b.mv.z : 0, b.mv ? b.mv.sp : 0]
+        .map(v => enc(v * UNIT)).join(',')).join(';');
     const body = `${dims}-${shell}-${boxes}`;
     return `${MAGIC}-${body}-${fnv(body).toString(36)}`;
   }
@@ -179,9 +214,10 @@ export class Level {
     const s = String(text || '').replace(/\s+/g, '').replace(/^["']|["']$/g, '');
     if (!s) throw new Error('empty seed');
     const parts = s.split('-');
-    // PA1 seeds had neither a shape nor a rotation. They still load: their boxes
-    // are all upright boxes, which is what those four fields would say anyway.
-    if (parts.length !== 5 || (parts[0] !== MAGIC && parts[0] !== 'PA1')) {
+    // PA1 seeds had neither a shape nor a rotation, and PA2 had no movement.
+    // They still load: their boxes are upright, still boxes, and standing still,
+    // which is exactly what the missing fields would have said.
+    if (parts.length !== 5 || (parts[0] !== MAGIC && !OLD_MAGIC.includes(parts[0]))) {
       throw new Error('that does not look like a level seed');
     }
     const [, dims, shellStr, boxStr, sum] = parts;
@@ -201,17 +237,22 @@ export class Level {
       if (entries.length > MAX_BOXES) throw new Error(`too many boxes (${entries.length})`);
       for (const e of entries) {
         const f = e.split(',');
-        if (f.length !== 7 && f.length !== 11) throw new Error('bad box in the seed');
+        if (f.length !== 7 && f.length !== 11 && f.length !== 15) {
+          throw new Error('bad box in the seed');
+        }
         const n = f.slice(0, 6).map(v => dec(v) / UNIT);
         if (n.some(v => !Number.isFinite(v))) throw new Error('bad box in the seed');
-        const r = f.length === 11 ? f.slice(8, 11).map(v => dec(v) / ROT) : [0, 0, 0];
+        const r = f.length >= 11 ? f.slice(8, 11).map(v => dec(v) / ROT) : [0, 0, 0];
         if (r.some(v => !Number.isFinite(v))) throw new Error('bad rotation in the seed');
+        const m = f.length === 15 ? f.slice(11, 15).map(v => dec(v) / UNIT) : [0, 0, 0, 0];
+        if (m.some(v => !Number.isFinite(v))) throw new Error('bad movement in the seed');
         level.boxes.push(level.clampToRoom({
           id: 'b' + (level._nextId++),
           x0: n[0], y0: n[1], z0: n[2], x1: n[3], y1: n[4], z1: n[5],
           c: clamp(parseInt(f[6], 36) || 0, 0, 9),
-          shape: f.length === 11 && parseInt(f[7], 36) === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
-          rx: r[0], ry: r[1], rz: r[2]
+          shape: f.length >= 11 && parseInt(f[7], 36) === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
+          rx: r[0], ry: r[1], rz: r[2],
+          mv: m[3] > 0 ? { x: m[0], y: m[1], z: m[2], sp: clamp(m[3], 0.2, 20) } : null
         }));
       }
     }

@@ -186,3 +186,16 @@ export function capsulePush(ax, ay, az, bx, by, bz, radius, solid) {
   }
   return best;
 }
+
+/** Slide a built solid bodily through space. A moving platform is rebuilt every
+ *  frame otherwise, and rebuilding is where all the cost is: the vertices, the
+ *  bounds and the pivot simply shift, and a plane's normal is untouched while
+ *  its offset moves by the component of the shift along it. */
+export function translateSolid(s, dx, dy, dz) {
+  for (const v of s.verts) { v[0] += dx; v[1] += dy; v[2] += dz; }
+  for (const p of s.planes) p.d += p.nx * dx + p.ny * dy + p.nz * dz;
+  s.min.x += dx; s.min.y += dy; s.min.z += dz;
+  s.max.x += dx; s.max.y += dy; s.max.z += dz;
+  s.centre.x += dx; s.centre.y += dy; s.centre.z += dz;
+  return s;
+}

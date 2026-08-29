@@ -81,7 +81,10 @@ await open();
 
 // -------------------------------------------------------------- the key rows
 R.rows = await rows();
-await must(R.rows.length === 16, 'expected 16 key rows, got ' + R.rows.length);
+// 17 rows since the portal gun arrived and brought a Weapon 4 with it
+await must(R.rows.length === 17, 'expected 17 key rows, got ' + R.rows.length);
+R.weapon4Keys = await keysOf('Weapon 4 (portal gun)');
+await must(R.weapon4Keys.length >= 1, 'the portal gun has no key: ' + JSON.stringify(R.weapon4Keys));
 R.forwardKeys = await keysOf('Forward');
 R.sprintKeys = await keysOf('Sprint');
 R.settingsKeys = await keysOf('Open settings');
@@ -160,7 +163,10 @@ R.designRowsPresent = await page.evaluate(() =>
 R.designSectionHiddenInAMatch = await page.evaluate(() =>
   getComputedStyle(document.querySelector('.designonly')).display === 'none');
 R.designDefaults = await page.evaluate(() => ({
-  del: window.game.input.designAction('KeyT'),
+  // T moves things now and Delete deletes them, since a platform needs a key and
+  // "the key called Delete deletes" beats anything else that was free
+  platform: window.game.input.designAction('KeyT'),
+  del: window.game.input.designAction('Delete'),
   rotate: window.game.input.designAction('KeyR'),
   shape: window.game.input.designAction('KeyF'),
   // the same physical keys mean different things in a match, and must not collide
@@ -373,9 +379,10 @@ if (!R.pause.pointerFree) fail.push('the mouse is still captured on the pause sc
 if (!R.pause.worldStillMoving) fail.push('the world froze while paused');
 if (!R.menuButtonOpensSettings) fail.push('the menu SETTINGS button does not open the panel');
 if (!R.menuClosedBehindIt) fail.push('the menu stayed up behind the settings panel');
-if (R.designRowsPresent.length !== 13) fail.push('the designer key list is wrong: ' + R.designRowsPresent);
+if (R.designRowsPresent.length !== 14) fail.push('the designer key list is wrong: ' + R.designRowsPresent);
 if (!R.designSectionHiddenInAMatch) fail.push('the designer key section shows during a match');
-if (R.designDefaults.del !== 'ddelete') fail.push('T does not delete in the designer');
+if (R.designDefaults.del !== 'ddelete') fail.push('Delete does not delete in the designer');
+if (R.designDefaults.platform !== 'platform') fail.push('T does not make a moving platform: ' + R.designDefaults.platform);
 if (R.designDefaults.rotate !== 'rotate') fail.push('R does not rotate in the designer');
 if (R.designDefaults.shape !== 'shape') fail.push('F does not switch shape in the designer');
 if (R.designDefaults.matchR !== 'reload' || R.designDefaults.matchQ !== 'lastweapon') fail.push('the designer map leaked into the match map');

@@ -11,8 +11,13 @@ const ACCURACY = { ads: 1, standing: 0.95, moving: 0.90 };
 export const ADS_ZOOM = 1.25;
 export const ADS_TIME = 0.4;      // seconds to raise or lower the sights
 
-/** Cone half-angle in radians for the current stance. */
+/** Cone half-angle in radians for the current stance.
+ *
+ *  A gun marked `perfect` is exempt from all of it: the portal gun places a
+ *  portal exactly where it is pointed, standing, sprinting or mid-hop, because
+ *  a portal that lands a foot off is not a near miss, it is the wrong wall. */
 export function spreadFor(weapon, moving, adsT) {
+  if (weapon.perfect) return 0;
   const hipAcc = moving ? ACCURACY.moving : ACCURACY.standing;
   const acc = hipAcc + (ACCURACY.ads - hipAcc) * adsT;
   return weapon.spread + weapon.hipSpread * (1 - acc);
@@ -36,6 +41,20 @@ export const WEAPONS = [
     damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30, killAward: 5,
     spread: 0, hipSpread: 0.12, recoil: 0.09, recoilYaw: 0.01,
     reloadTime: 3.0, range: 250, color: 0x8fd8ff, shakeScale: 2.8
+  },
+  {
+    // The portal gun. Same rifle in the hand, and that is deliberate — only the
+    // coloured brick on top says otherwise, blue on the left and orange on the
+    // right. It does no damage, never runs out and never misses, and its two
+    // triggers are two colours rather than fire and aim.
+    id: 3, name: 'Portal Gun', auto: false,
+    damage: 0, pellets: 1, interval: 0.32, mag: 0, reserve: 0, killAward: 0,
+    spread: 0, hipSpread: 0, recoil: 0.006, recoilYaw: 0.001,
+    reloadTime: 0, range: 220, color: 0x7fd4ff, shakeScale: 0.5,
+    perfect: true,     // no cone, in any stance
+    noAds: true,       // right click is the second trigger, not the sights
+    infinite: true,    // no magazine, nothing to reload
+    portal: true
   }
 ];
 
@@ -65,6 +84,7 @@ export class Loadout {
 
   startReload(t) {
     const w = this.weapon, a = this.ammo;
+    if (w.infinite) return false;
     if (a.reloadEnd || a.mag >= w.mag || a.reserve <= 0) return false;
     a.reloadEnd = t + w.reloadTime;
     return true;
@@ -72,6 +92,7 @@ export class Loadout {
 
   update(t) {
     const w = this.weapon, a = this.ammo;
+    if (w.infinite) return false;
     if (a.reloadEnd && t >= a.reloadEnd) {
       const need = Math.min(w.mag - a.mag, a.reserve);
       a.mag += need;
@@ -88,11 +109,22 @@ export class Loadout {
     const w = this.weapon, a = this.ammo;
     if (!triggerHeld) { this.firedThisTrigger = false; return null; }
     if (!w.auto && this.firedThisTrigger && !triggerPressed) return null;
-    if (t < this.nextShot || a.reloadEnd || a.mag <= 0) return null;
+    if (t < this.nextShot) return null;
+    if (!w.infinite && (a.reloadEnd || a.mag <= 0)) return null;
 
-    a.mag--;
+    if (!w.infinite) a.mag--;
     this.nextShot = t + w.interval;
     this.firedThisTrigger = true;
+    return w;
+  }
+
+  /** The portal gun's two triggers are two colours, not fire and aim, so they
+   *  cannot share `firedThisTrigger` — holding one down would lock the other
+   *  out. They share only the interval, which is all that needs sharing. */
+  tryPortalFire(t, pressed) {
+    const w = this.weapon;
+    if (!pressed || !w.portal || t < this.nextShot) return null;
+    this.nextShot = t + w.interval;
     return w;
   }
 
@@ -101,6 +133,7 @@ export class Loadout {
    *  actually gained, which is less than that if it hit the reserve ceiling. */
   awardOnKill() {
     const w = this.weapon, a = this.ammo;
+    if (w.infinite) return 0;
     const before = a.reserve;
     a.reserve = Math.min(w.reserve, a.reserve + w.killAward);
     return a.reserve - before;

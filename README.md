@@ -39,7 +39,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Crouch | `Ctrl` or `C` | `CROUCH` |
 | Sprint | `Shift` | `SPRINT`, or push the stick to its edge |
 | Reload | `R` | `RELOAD` |
-| Weapons | `1` `2` `3`, wheel, `Q` | `WEAPON` |
+| Weapons | `1` `2` `3` `4`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
@@ -106,7 +106,8 @@ box is the world — a ghost cannot leave it, and nothing can be built outside i
 | Select anything | `Alt` + `Ctrl` + click — floor, walls and ceiling included |
 | Colour it | `1` … `0`, ten colours (`0` is the tenth, not a reset) |
 | Turn it | `R` by 90°, `Shift`+`R` by 15°, about the axis `X` selects — **or drag one of its three rings** |
-| Delete it | `T` — the floor, walls and ceiling cannot be deleted |
+| Delete it | `Delete` — the floor, walls and ceiling cannot be deleted |
+| Make it travel | `T` sets the far end to the marker &middot; `Shift`+`T` stops it |
 | Grid snap | `G` toggles 0.5 m snapping |
 | Cancel | right click, or `Esc` |
 | Play what you built | `Tab` — and `Tab` again to go back to building |
@@ -156,6 +157,55 @@ There is no server, so every player in the room needs the same seed — but
 
 The level autosaves to `localStorage` while you build, and `CONTINUE THE SAVED
 LEVEL` picks it back up.
+
+## The portal gun
+
+The fourth weapon. It is the rifle in the hand — same body, same barrel — except
+for the coloured brick on top, which is **two halves**: the left one is the
+colour of your left-click portal and the right one the colour of your right.
+
+* **Left click** fires one mouth, **right click** the other. There is no aiming
+  down sights with it, because the right button is already the second trigger.
+* **It never misses.** Accuracy is 100% standing, running, mid-hop, whatever —
+  a portal that lands a foot off is not a near miss, it is the wrong wall.
+* It never runs out and never reloads.
+* The shot is a small ball, not a hitscan ray. You can watch it fly.
+
+**One pair each.** Firing a third of the same colour replaces the older one.
+
+A portal is an oval, a player tall and two wide, and it goes on any surface with
+room for the whole of it — walls, floors, ceilings, ramps, the side of a moving
+platform. Shot into a corner it **slides to the nearest place it fits** rather
+than being refused. Shot at something too small it **explodes and is gone**: the
+end of a cover wall is one metre thick and a portal is 1.36 wide, so that wall
+takes one on its face and never on its edge.
+
+Anyone can use anyone's portals, which is why the colours matter. With one
+player they are blue and orange. As soon as anybody else is in the room every
+player is given a **different random pair**, re-rolled on every page refresh, and
+no two mouths in the room are ever a similar colour. Nobody hands those out:
+each player announces one random number when they join and every machine folds
+the same set together, so all of them reach the same answer with no authority
+and no negotiation.
+
+Walking in is meant to be easy — any part of your body through the mouth is you
+through it — and you **keep everything you had**. Your speed is turned into the
+exit's direction, not scrubbed, so a long drop into a portal on the floor comes
+out of a wall as a long flat run. Your view is turned with it.
+
+## Moving platforms
+
+Four of them in the arena: two lifts and two shuttles. They travel between two
+points at a constant speed and turn round at each end, for ever. Stand on one and
+it carries you; step off and you keep only what you were doing yourself. A portal
+put on one **rides along with it**, mouth and all.
+
+In the level designer, select an object and press **`T`**: where it is now
+becomes the start of its run and the white marker three metres in front of you
+becomes the far end, with the object's own middle travelling between them. The
+run is drawn as a line while it is selected. **`Shift`+`T`** stops it again.
+
+`T` used to be the designer's delete key; delete is now on **`Delete`**.
 
 ## Movement
 
@@ -209,6 +259,7 @@ every step.
 | Aiming (right click / `AIM`) | 100%, moving or still |
 | Standing hipfire | 95% |
 | Moving hipfire | 90% |
+| Portal gun | 100%, always, in every stance |
 
 Aiming raises 1.25× sights over 0.4 s, holds the gun perfectly still, and draws
 the crosshair in. The crosshair never blooms — accuracy is a function of stance,
@@ -287,7 +338,9 @@ node test/designer.mjs
 node test/settings.mjs
 node test/momentum.mjs
 node test/slopes.mjs
+node test/portals.mjs
 node test/solid.mjs      # no browser and no server: the fastest one
+node test/portal.mjs     # the other one that needs neither
 ```
 
 `test/designer.mjs` is the one that matters for the designer, because it refuses
@@ -305,8 +358,18 @@ counting take-offs over two seconds with nothing held down.
 speed a second later, and the fall bonus by the difference between a short drop
 and a long one from the same standing start.
 
-`test/solid.mjs` is the only suite that needs neither a browser nor a server, so
-it runs in about a second and is worth running first. `test/slopes.mjs` is its
+`test/solid.mjs` and `test/portal.mjs` are the two suites that need neither a
+browser nor a server, so they run in about a second each and are worth running
+first. `test/portal.mjs` is where the portal arithmetic is proved — that a mouth
+only goes where the whole of it fits, that a near miss *slides* to the nearest
+place it does, that going through one keeps every bit of the momentum that went
+in, and that the colour agreement reaches the same answer on every machine
+whatever order the players arrive in. `test/portals.mjs` is its other half and
+proves the same things to the *player*, in a browser: it walks into a mouth and
+checks where the body came out, drops one through a floor portal and checks the
+fall was paid out as speed on the far side, and rides a platform to check it
+carries whoever is standing on it. Every claim there has a negative control next
+to it — the same walk with the portals taken away has to end somewhere else. `test/slopes.mjs` is its
 other half: it proves the geometry means something to the *player*, by walking up
 a ramp onto the platform and by checking that a turned wall blocks along the axis
 it was turned onto and no longer blocks the one it left.
@@ -338,7 +401,9 @@ src/level.js    a level as data: room size, shapes, colours, and the seed string
 src/designer.js the level designer — ghost flight, the tools, rotation, playtest
 src/player.js   local movement, collision, step-up, crouch
 src/input.js    keyboard + mouse + touch, combined
-src/weapons.js  three weapons and their ammo state
+src/weapons.js  four weapons and their ammo state
+src/portal.js   portals as geometry: fitting, traversal, colours (no three.js)
+src/portalgun.js the portal gun, the ball it fires, and how a portal is drawn
 src/remote.js   remote player rendering, interpolation, hitboxes
 src/net.js      Trystero room and the message actions
 src/effects.js  tracers, impacts, muzzle flash, viewmodel
@@ -353,6 +418,9 @@ instead of sitting black.
 ## Tuning
 
 * `src/weapons.js` — damage, fire rate, spread, recoil, magazine sizes.
+* `src/portal.js` — the size of a portal, how forgiving its mouth is, and how
+  far outside it you are put on the way out.
+* `src/level.js` — `MOVE_SPEED`, how fast every moving platform travels.
 * `src/player.js` — movement constants at the top (speed, gravity, jump, step
   height), including the fall gravity multiplier and how much of a fall is paid
   out as speed. Stair rise in `world.js` must stay under `STEP_HEIGHT`.

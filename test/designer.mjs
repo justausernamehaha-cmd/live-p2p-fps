@@ -197,8 +197,24 @@ R.editing = await page.evaluate(async () => {
   key('Digit0');                               // 0 is the tenth colour, not a reset
   const zeroIsTenth = target.c === 9;
 
+  // T makes a selection travel now: where it is becomes the start of the run and
+  // the marker three metres ahead becomes the far end, with the box's own middle
+  // going between them. Shift+T stops it again.
+  const n0 = d.level.boxes.length;
+  key('KeyT');
+  const travels = !!target.mv && target.mv.sp > 0;
+  const runIsRealDistance = travels && Math.hypot(
+    target.mv.x - d.level.centreOf(target).x,
+    target.mv.y - d.level.centreOf(target).y,
+    target.mv.z - d.level.centreOf(target).z) > 0.25;
+  const madeAMover = g.world.movers.some(m => m.src === target);
+  dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyT', shiftKey: true, bubbles: true }));
+  const stopped = target.mv === null;
+  const noMoverLeft = !g.world.movers.some(m => m.src === target);
+  const stillThere = d.level.boxes.length === n0;
+
   const n = d.level.boxes.length;
-  key('KeyT');                                 // delete moved off R, which now turns things
+  key('Delete');                               // delete moved off T, which now moves things
   const deleted = d.level.boxes.length === n - 1;
   const goneFromWorld = !g.world.boxes.some(w => w.src === target);
 
@@ -208,9 +224,12 @@ R.editing = await page.evaluate(async () => {
   key('Digit3');
   const floorColoured = floor.c === 2;
   const before = d.level.shell.length;
-  key('KeyT');
+  key('Delete');
+  const floorCannotTravel = (key('KeyT'), floor.mv === undefined || floor.mv === null);
   return {
     colouredTo, worldColour, zeroIsTenth, deleted, goneFromWorld, floorColoured,
+    travels, runIsRealDistance, madeAMover, stopped, noMoverLeft, stillThere,
+    floorCannotTravel,
     floorSurvived: d.level.shell.length === before && d.level.shell.includes(floor),
     // and the level itself refuses, not only the key handler above it
     removeRefusedByLevel: d.level.remove(floor) === false && d.level.shell.includes(floor)
@@ -355,7 +374,13 @@ if (!R.floating.aheadOfEye) fail.push('the Q/E corner was the eye, not the reach
 if (R.editing.colouredTo !== 5) fail.push('6 did not set the sixth colour');
 if (R.editing.worldColour !== 0xc7443f) fail.push('the colour never reached the mesh');
 if (!R.editing.zeroIsTenth) fail.push('0 is not the tenth colour');
-if (!R.editing.deleted || !R.editing.goneFromWorld) fail.push('T did not delete the selection');
+if (!R.editing.deleted || !R.editing.goneFromWorld) fail.push('Delete did not delete the selection');
+if (!R.editing.travels) fail.push('T did not make the selection travel');
+if (!R.editing.runIsRealDistance) fail.push('T set a run going nowhere: ' + JSON.stringify(R.editing));
+if (!R.editing.madeAMover) fail.push('the world never learned the box moves');
+if (!R.editing.stopped || !R.editing.noMoverLeft) fail.push('Shift+T did not stop it travelling');
+if (!R.editing.stillThere) fail.push('T deleted the box instead of moving it');
+if (!R.editing.floorCannotTravel) fail.push('the floor was made to travel, and it must not be');
 if (!R.editing.floorColoured) fail.push('the floor could not be coloured');
 if (!R.editing.floorSurvived) fail.push('the floor was deleted, and it must not be');
 if (!R.editing.removeRefusedByLevel) fail.push('Level.remove will delete the floor if anything asks it to');

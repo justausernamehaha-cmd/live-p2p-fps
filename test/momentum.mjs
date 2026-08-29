@@ -186,6 +186,72 @@ R.onTheRealMap = await page.evaluate(async () => {
   return { hops, speed: +Math.hypot(g.player.vel.x, g.player.vel.z).toFixed(2) };
 });
 
+// ------------------------------- a ramp onto a ledge must not rob a hop chain
+// The centre platform's ramps end flush against a 2.5 m plate, but "flush" is
+// only true at the very top: a metre short of it the ramp is a few centimetres
+// below the plate's edge. A hop that meets that lip while still *rising* used to
+// be refused a step up — the step-up was gated on being grounded or falling —
+// and eighteen metres a second stopped dead against six centimetres of nothing.
+// It depended on where in the hop's arc you arrived, which is why it happened
+// "sometimes". Swept across speeds and arc phases so it cannot come back.
+R.rampLip = await page.evaluate(async () => {
+  const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
+  const keys = (...on) => {
+    g.input.held.clear();
+    for (const k of on) g.input.held.add(k);
+    g.input._recalcKeys();
+  };
+  const speed = () => Math.hypot(g.player.vel.x, g.player.vel.z);
+  const runs = [];
+  // the west ramp climbs +x from x=-19 to the plate's edge at x=-14
+  for (const sp of [9, 12, 15, 18]) {
+    for (const z of [0, 3, 5]) {
+      for (const y of [0.3, 0.9, 1.6]) {
+        for (const vy of [0, -4, -9]) {
+          g.player.pos = { x: -21.5, y, z };
+          g.player.vel = { x: sp, y: vy, z: 0 };
+          g.player.yaw = -Math.PI / 2; g.player.pitch = 0;
+          g.player.crouchT = 0; g.player.stepSmooth = 0;
+          g.player.onGround = false; g.player.bumped = false;
+          keys('fwd', 'jump');
+          let lowest = 99, reached = false, gapWhenStopped = null;
+          for (let i = 0; i < 26 && g.player.pos.x < -11; i++) {
+            await sleep(16);
+            if (g.player.pos.x > -18.5) reached = true;
+            if (!reached) continue;
+            const sp2 = speed();
+            if (sp2 < lowest) {
+              lowest = sp2;
+              // How far below the plate's top the body was when it lost its
+              // speed. This is what separates the bug from honest collision: a
+              // 2.5 m wall is allowed to stop you, a lip inside the step height
+              // is not, and only the second one is a fault.
+              gapWhenStopped = 2.5 - g.player.pos.y;
+            }
+          }
+          keys();
+          if (reached) {
+            runs.push({ sp, z, y, vy, kept: +lowest.toFixed(2),
+                        gap: gapWhenStopped === null ? null : +gapWhenStopped.toFixed(2) });
+          }
+        }
+      }
+    }
+  }
+  // Anything that arrives at a walking pace or better has to leave at one — but
+  // only where what stopped it was small enough to step over. The bar is a walk
+  // rather than the speed it came in at, because a ramp is a hill and a hill
+  // legitimately costs something. STEP_HEIGHT is 0.55.
+  const robbed = runs.filter(r => r.kept < 6 && r.gap !== null && r.gap <= 0.55);
+  const walled = runs.filter(r => r.kept < 6 && (r.gap === null || r.gap > 0.55));
+  return {
+    tried: runs.length, robbed: robbed.length, stoppedByRealWall: walled.length,
+    worst: robbed.sort((a, b) => a.kept - b.kept).slice(0, 5),
+    wallExamples: walled.slice(0, 3),
+    madeIt: runs.filter(r => r.kept >= 6).length
+  };
+});
+
 // -------------------------------------------------------------------- verdict
 // Four seconds of held jump is roughly 8-10 hops; anything under 6 means hops
 // are being eaten. `missed` counts samples that found the player still standing
@@ -202,6 +268,10 @@ if (!R.fallPaysOut.taller) fail.push('a long fall was worth no more speed than a
 if (!R.fallPaysOut.capped) fail.push('the fall bonus broke the speed cap: ' + JSON.stringify(R.fallPaysOut));
 if (R.standingDrop > 0.5) fail.push('dropping while standing still flung the player: ' + R.standingDrop);
 if (R.onTheRealMap.hops < 4) fail.push('the chain does not work on the real arena: ' + JSON.stringify(R.onTheRealMap));
+if (!R.rampLip.tried) fail.push('the ramp sweep never reached the ramp: ' + JSON.stringify(R.rampLip));
+if (R.rampLip.robbed) fail.push(`${R.rampLip.robbed} of ${R.rampLip.tried} runs up the ramp were stopped by a lip inside the step height: ` + JSON.stringify(R.rampLip.worst));
+// and the sweep has to be doing something, or "nothing was robbed" is vacuous
+if (R.rampLip.madeIt < R.rampLip.tried * 0.5) fail.push('most runs never kept their speed at all, so the sweep is not measuring what it claims: ' + JSON.stringify(R.rampLip));
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 
 console.log(JSON.stringify(R, null, 2));

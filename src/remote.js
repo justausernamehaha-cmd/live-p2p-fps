@@ -25,6 +25,7 @@ export class RemotePlayer {
     this.lastSeen = now();
     this.flash = 0;
     this.spawnSeq = -1;
+    this.portalRandom = 0;  // their contribution to everybody's portal colours
     this.settling = true;   // hide until we have real snapshots at the current spawn
     this.shielded = false;
 

@@ -39,9 +39,11 @@ against the live site.
 | `map.mjs` | every place you can stand lets you stand up |
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
 | `settings.mjs` | rebinding and stacking keys, latchable actions, the 3s protection window, pause overlay |
-| `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed |
+| `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed, a ramp's lip does not rob a chain |
 | `slopes.mjs` | ramps are walkable and solid; a turned box collides where it was turned to |
 | `solid.mjs` | the convex layer, in node — no browser, no server, about a second |
+| `portal.mjs` | portal fitting, sliding, refusal, the traversal map, colour agreement, platform seeds — also node-only |
+| `portals.mjs` | the same claims proved to the *player*: walking in, falling through, riding a platform |
 
 ## Things worth not rediscovering
 
@@ -124,104 +126,82 @@ down:
   `R` reloads in a match and turns a ramp while building; delete moved to `T` to
   make room for it.
 
-# Asked for, not built yet: portal gun and moving platforms
+## Portals and moving platforms — built 2026-08-30
 
-Specced 2026-08-29 at 21:15, deliberately not started — the user was out of
-token budget and is picking it up in a fresh session. **Nothing of this exists in
-the code.** They said explicitly: do not ask questions, guess where it is
-ambiguous, and they will correct anything they do not like.
+Both shipped. What is worth not rediscovering:
 
-## The portal gun
+- **The erosion loop must read its edges from the original face.** `fitPortal`
+  slides a portal to the nearest place it fits by eroding the face polygon by the
+  portal's bounding box — offset every edge inward, clip, and whatever survives is
+  every legal centre. Reading those edges out of the polygon *as it is being
+  clipped* walks a moving target: after the first cut you are offsetting edges the
+  erosion itself created and most of the real ones are never applied. It looked
+  right and put portals half off surfaces a centimetre too small. `test/portal.mjs`
+  catches it two ways.
+- **An exact fit is decided by the last bit of a float**, so the fit carries half
+  a millimetre of slack. Without it a surface built to precisely a portal's size
+  refuses it about half the time.
+- **`_axis()` ejects across the whole box when it did not cause the overlap.**
+  A portal exit that lands four millimetres inside the floor is not something the
+  player walked into, so backing out along the direction of travel is meaningless
+  — and the arena floor is 120 m wide, so the eject threw the player out of the
+  world. `_unstick()` resolves along the *shallowest* axis instead. Moving
+  platforms need the same thing for the same reason: a platform can arrive
+  underneath someone.
+- **Pushing out along the exit normal alone cannot fix a body inside the floor.**
+  That was the first attempt and it silently shoved the player 0.96 m sideways
+  (eight passes of 0.12) while leaving them stuck.
+- **A portal on the floor is entered by the feet and nothing else**, so the
+  crossing samples have to include the feet and the head, not just the middle of
+  the body. With the lowest sample at a quarter height, the floor stopped the
+  body while the sample was still a foot above the mouth and a floor portal could
+  never be entered at all.
+- **A 2 m crate is big enough for a portal** (the oval is 1.36 x 1.8). What is too
+  small is the *end* of a cover wall — one metre thick. Worth knowing before
+  writing a test that assumes otherwise.
+- **Colours cannot be derived from the id**, because they have to differ on every
+  refresh, and there is no authority to hand them out. Each player announces one
+  random number in `hello`; every peer sorts by id, folds the sum into a shared
+  rotation, and spreads the first hues over *half* the circle so that a pair
+  (h, h+180) can never collide with another player's. Solo is blue and orange
+  exactly as asked.
+- **Platforms are parked while the designer's ghost is flying.** A box that
+  wanders off cannot be aimed at, and the seed stores the start of the run.
+- **A platform cannot be in the merged mesh.** `_mesh()` merges everything of one
+  colour into a single BufferGeometry; a piece of that cannot walk off on its own,
+  so each platform gets its own mesh and its own transform.
+- `links()` is cached. Its caller is `_moveStep()`, which at hop speed runs eight
+  times a frame — rebuilding the array there allocated ~500 throwaway arrays a
+  second to answer a question that only changes when somebody fires.
 
-- A **fourth weapon** in the loadout, so it is reachable with the wheel and with
-  a number key. `src/weapons.js` currently has three; `Digit1`/`2`/`3` are bound,
-  so a fourth needs a `weapon4` action and a binding.
-- Identical to the Rifle **except** the viewmodel's coloured top brick, which is
-  **blue on the left and orange on the right**. The brick is the accent block in
-  `ViewModel` (`src/effects.js`).
-- **No aiming.** Right click is the second fire, not ADS — and
-  `_syncMouseButtons` maps mouse button bit 2 to `ads` globally, so this needs a
-  per-weapon override rather than a change to the input layer.
-- **Accuracy is perfect in every stance.** `spreadFor()` must return 0 for it
-  regardless of movement or `adsT`.
-- Left click fires a **blue** portal, right click an **orange** one.
-- The shot is a **small perfect ball travelling toward where you look**, not
-  hitscan. So it needs a projectile with a visible mesh, unlike every other
-  weapon here.
+## The ramp lip, fixed 2026-08-30
 
-## The portals
+Bunny-hopping onto a ramp sometimes stopped you dead, and "sometimes" was the
+tell. The step-up in `_moveStep()` was gated on `onGround || vel.y <= 0`. Run up
+a ramp and the hop that carries you off the top is still **rising** when your feet
+meet the few centimetres of lip where the ramp meets the plate — so no step, and
+eighteen metres a second against six centimetres of nothing. Whether it bit
+depended on where in the arc you arrived, which is why it felt random.
 
-- **One pair per person.** Firing a third replaces the older of that colour.
-- With several players, **each gets a different random colour pair**, re-rolled
-  on every page refresh. No two players' portals may look the same or similar —
-  `PLAYER_COLORS` in `util.js` already solves this shape of problem by sorting
-  the room's ids, but "different every refresh" means it cannot be derived from
-  the id alone, so it has to be announced. `hello`/`onHello` in `net.js` is the
-  place.
-- A portal is an **oval**, one player tall and two players wide.
-- It can go on **any surface with enough room**. If the shot lands near a corner
-  but the surface could still hold the whole oval, it **slides to the nearest
-  spot that fits**. If the surface is too small, the portal **explodes and
-  disappears** instead.
-- Standing near one, you **step in easily** — the mouth should be forgiving, not
-  a thin trigger plane.
-- You **keep all your momentum**, rotated into the exit's direction. Note
-  `SPEED_CAP = 22` in `player.js` will clamp a big fling; that is a tuning call,
-  not a bug.
-- Traversal must still work when **the surface under the portal is moving**,
-  which is what the platforms below are for.
+The gate is gone entirely. It reaches nowhere new: `STEP_HEIGHT` is 0.55 m and a
+rising player is already mid-jump with over a metre of climb in hand, so this only
+mounts a ledge they were going over anyway instead of scraping up its face, and
+there is no ratchet because you cannot jump again in mid-air. An intermediate
+version bounded the step by the arc the jump had left; it fixed most of it and
+left six cases where the player arrived near the apex with the arc already spent.
+Blunt beat nuanced.
 
-## Moving platforms
-
-- Some in the **default arena**.
-- In the designer: select an object and press **`T`** to set its **end point** to
-  the point in front of you; where it already is becomes the **start point**, and
-  the object's own middle is what travels between them.
-- `T` is currently the designer's delete key — that will have to move. The
-  designer has its own bind map (`pa.designbinds`, `DESIGN_BINDABLE` in
-  `input.js`), so it is a one-line default change plus a new row.
-
-## What is already in place, and what is in the way
-
-- `src/solid.js` exists: convex solids with plane-based raycasting and a capsule
-  push-out. A portal on a turned surface or a ramp will need its plane, which
-  `world.pick()` already returns for solids.
-- **Hitscan is cheap to recurse.** `rayAABB` and `rayConvex` both take a ray, so
-  shooting *through* a portal is close to free — but damage is authoritative on
-  the shooter, so both machines have to agree where the portals are.
-- **`_mesh()` merges every box into one BufferGeometry per colour.** There is no
-  per-object handle, so a portal cannot be cut out of a wall this way. A portal
-  is a hole in a solid, and collision and hitscan both assume solid boxes — this
-  is the hard part, and it is surgery on the code `movement.mjs`, `mechanics.mjs`
-  and `map.mjs` exist to protect.
-- **`_move()` already sub-steps** because a 0.6 m wall is thinner than one frame
-  at hop speed. Portal crossing has that problem worse: the traversal has to
-  happen at the crossing point inside a sub-step, or a fling tunnels past the
-  mouth.
-- **`remote.js` interpolates peers from a buffer**, so a teleport needs a
-  sequence number in the 20 Hz state packet or peers see a smear across the map
-  instead of a jump.
-- A moving platform breaks the standing assumption that world geometry is
-  static: `world.boxes` is rebuilt wholesale by `refresh()`, and a player
-  standing on a platform needs to be carried by it.
-
-## Guesses to make rather than questions to ask
-
-The user asked not to be asked. Where the spec is silent, these are the readings
-to take, and to say out loud in the report so they can be corrected:
-
-- See-through portals were not asked for. Build **traversal first** — walk in
-  one, come out the other with momentum. That is most of what makes it feel
-  right and needs no render target.
-- "A player tall and double players wide" = 1.8 m by 1.36 m (twice the 0.68 m
-  player width), as an oval.
-- The ball travels fast enough to read as a shot, not a lob, and is not affected
-  by gravity.
-- Platforms move back and forth between the two points at a constant speed and
-  loop, since the spec gives no timing.
+`test/momentum.mjs` sweeps 108 approaches (four speeds x three lateral offsets x
+three heights x three vertical velocities). It separates a lip from a wall by how
+far below the plate's top the body was when it lost its speed: inside
+`STEP_HEIGHT` is a fault, a 2.5 m wall is allowed to stop you. Watched go red at
+19 of 108 with the gate restored, green at 0 of 108 with it gone.
 
 ## Ideas, not built
 
+- **See-through portals.** Traversal was built first and deliberately: it is most
+  of what makes them feel right and needs no render target. Looking through one
+  would.
 - **Peers seeing edits live.** The designer is deliberately single-player: a
   seed is how a level travels. Sharing edits would need an authority for
   conflicts, which this game does not have anywhere else either.

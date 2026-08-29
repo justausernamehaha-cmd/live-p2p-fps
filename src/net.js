@@ -65,10 +65,17 @@ export class Net {
     this.aHit = act('ht', (d, id) => this.h.onHit?.(id, d));
     this.aDied = act('dd', (d, id) => this.h.onDied?.(id, d));
     this.aChat = act('ch', (d, id) => this.h.onChat?.(id, d));
+    // Portals are two messages, not one. `pb` is the ball leaving the barrel, so
+    // everybody watches the same thing fly; `pt` is where it ended up, which is
+    // authoritative because the shooter's own level geometry decided it. Sending
+    // only the ball would make every peer re-derive the landing, and two peers
+    // that disagreed by a millimetre would have portals in different places.
+    this.aPortalBall = act('pb', (d, id) => this.h.onPortalBall?.(id, d));
+    this.aPortal = act('pt', (d, id) => this.h.onPortal?.(id, d));
 
     this.room.onPeerJoin = id => {
       this.h.onJoin?.(id);
-      this.aHello.send({ name: this.profile.name }, { target: id });
+      this.aHello.send({ name: this.profile.name, pr: this.profile.pr }, { target: id });
     };
     this.room.onPeerLeave = id => {
       this.pings.delete(id);
@@ -124,9 +131,33 @@ export class Net {
     this._send(this.aHit, { dmg: Math.round(damage), head: head ? 1 : 0 }, { target: peerId });
   }
 
+  /** A portal ball, so the shot is visible on every screen. */
+  portalBall(from, dir, side) {
+    this._send(this.aPortalBall, {
+      x: round2(from.x), y: round2(from.y), z: round2(from.z),
+      dx: round2(dir.x), dy: round2(dir.y), dz: round2(dir.z),
+      s: side
+    });
+  }
+
+  /** Where a portal actually ended up. The mover index is how a portal stuck to
+   *  a moving platform names that platform: every peer builds the same level in
+   *  the same order, so the index means the same thing everywhere without any
+   *  of them having to agree about it first. */
+  portal(side, p) {
+    this._send(this.aPortal, {
+      s: side,
+      x: round2(p.c.x), y: round2(p.c.y), z: round2(p.c.z),
+      nx: round2(p.n.x), ny: round2(p.n.y), nz: round2(p.n.z),
+      ux: round2(p.u.x), uy: round2(p.u.y), uz: round2(p.u.z),
+      vx: round2(p.v.x), vy: round2(p.v.y), vz: round2(p.v.z),
+      m: p.mover
+    });
+  }
+
   died(killerId) { this._send(this.aDied, { by: killerId || '' }); }
   chat(text) { this._send(this.aChat, { t: String(text).slice(0, 120) }); }
-  hello() { this._send(this.aHello, { name: this.profile.name }); }
+  hello() { this._send(this.aHello, { name: this.profile.name, pr: this.profile.pr }); }
 
   leave() {
     clearInterval(this._pingTimer);

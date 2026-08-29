@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { makeSolid, rayConvex, isAxisAligned, SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
+import { makeSolid, rayConvex, isAxisAligned, translateSolid, SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
 
 // Almost everything here is an axis-aligned box, which keeps collision and
 // hitscan trivial and identical on every peer. The exceptions — ramps, and
@@ -14,10 +14,6 @@ import { makeSolid, rayConvex, isAxisAligned, SHAPE_BOX, SHAPE_SLOPE } from './s
 const S = 2;
 const ARENA = 60 * S;  // floor is ARENA x ARENA, centred on the origin
 const WALL_H = 9;
-// Ramps replaced the stairs, but the pitch is still expressed as a rise per
-// half-metre of run, so the climb is the same as the steps it grew out of.
-const STEP = 0.5;
-
 const PALETTE = {
   floor: 0x3d4757,
   wall: 0x4c586f,
@@ -33,6 +29,7 @@ export class World {
     this.parts = [];       // every piece, before it is sorted into the two below
     this.boxes = [];       // {min:{x,y,z}, max:{x,y,z}} — the axis-aligned ones
     this.solids = [];      // convex solids — ramps, and anything turned
+    this.movers = [];      // the subset of both that travels; see updateMovers()
     this.spawns = [];
     this.level = null;
     this.group = new THREE.Group();
@@ -63,19 +60,89 @@ export class World {
   _split() {
     this.boxes = [];
     this.solids = [];
+    this.movers = [];
     for (const p of this.parts) {
+      let shape;
       if (isAxisAligned(p)) {
-        this.boxes.push({
+        shape = {
           min: { x: p.x0, y: p.y0, z: p.z0 },
           max: { x: p.x1, y: p.y1, z: p.z1 },
           color: p.color, src: p.src || p
-        });
+        };
+        this.boxes.push(shape);
       } else {
-        const s = makeSolid(p);
-        s.src = p.src || p;
-        this.solids.push(s);
+        shape = makeSolid(p);
+        shape.src = p.src || p;
+        this.solids.push(shape);
+      }
+      // The order of this list is the order of `parts`, which every peer builds
+      // from the same seed — so a platform's index is a name for it that needs
+      // no negotiation. A portal stuck to one travels by quoting that index.
+      const mv = p.mv || (p.src && p.src.mv);
+      if (mv && mv.sp > 0) {
+        const p0 = centreOf(shape);
+        const dist = Math.hypot(mv.x - p0.x, mv.y - p0.y, mv.z - p0.z);
+        if (dist > 1e-4) {
+          shape.mover = this.movers.length;
+          this.movers.push({
+            index: this.movers.length, shape, src: p.src || p,
+            p0, p1: { x: mv.x, y: mv.y, z: mv.z },
+            sp: mv.sp, dist, at: 0, dir: 1,
+            delta: { x: 0, y: 0, z: 0 }, mesh: null
+          });
+        }
       }
     }
+  }
+
+  /** Walk every platform along its run and drag its collision shape with it.
+   *
+   *  A moving platform is the first thing in this game that breaks the standing
+   *  assumption that world geometry never changes, so it is deliberately the
+   *  smallest possible break: the shape is *translated*, never rebuilt, and
+   *  `delta` records what it moved this frame so a player standing on top and a
+   *  portal stuck to its face can both be carried by exactly the same amount. */
+  updateMovers(dt) {
+    if (!this.movers.length) return;
+    for (const m of this.movers) {
+      m.at += (m.sp / m.dist) * m.dir * dt;
+      // ping-pong: reflect off each end rather than wrapping, so it comes back
+      while (m.at > 1 || m.at < 0) {
+        if (m.at > 1) { m.at = 2 - m.at; m.dir = -1; }
+        if (m.at < 0) { m.at = -m.at; m.dir = 1; }
+      }
+      const want = {
+        x: m.p0.x + (m.p1.x - m.p0.x) * m.at,
+        y: m.p0.y + (m.p1.y - m.p0.y) * m.at,
+        z: m.p0.z + (m.p1.z - m.p0.z) * m.at
+      };
+      const at = centreOf(m.shape);
+      const dx = want.x - at.x, dy = want.y - at.y, dz = want.z - at.z;
+      m.delta.x = dx; m.delta.y = dy; m.delta.z = dz;
+      if (m.shape.planes) translateSolid(m.shape, dx, dy, dz);
+      else {
+        m.shape.min.x += dx; m.shape.min.y += dy; m.shape.min.z += dz;
+        m.shape.max.x += dx; m.shape.max.y += dy; m.shape.max.z += dz;
+      }
+      if (m.mesh) {
+        m.mesh.position.set(want.x - m.bake.x, want.y - m.bake.y, want.z - m.bake.z);
+      }
+    }
+  }
+
+  /** The platform a player is standing on, if any. Their feet have to be within
+   *  a hand's breadth of its top and inside its footprint — the same test for a
+   *  ramp uses its bounding box, which is close enough to carry someone. */
+  moverUnder(pos, radius = 0.17) {
+    for (const m of this.movers) {
+      const s = m.shape;
+      const min = s.min, max = s.max;
+      if (pos.x + radius < min.x || pos.x - radius > max.x) continue;
+      if (pos.z + radius < min.z || pos.z - radius > max.z) continue;
+      if (pos.y > max.y + 0.12 || pos.y < max.y - 0.4) continue;
+      return m;
+    }
+    return null;
   }
 
   /** Re-derive the meshes from `boxes`. Cheap enough to call on every edit. */
@@ -178,6 +245,24 @@ export class World {
       this.add(sx * 35, 2, sz * 33, 2, 2, 2, PALETTE.block);
     }
 
+    // ---- moving platforms ----
+    // Placed where they are worth riding rather than where they are easiest to
+    // put: two lifts that reach somewhere you otherwise have to walk round to,
+    // and two shuttles high enough to cross the map on. Each starts flush with
+    // whatever is under it, so nothing here is a 0.5 m crawlspace that
+    // test/map.mjs would rightly call a trap.
+    const lift = this.add(36, 0, 47, 4, 0.5, 4, PALETTE.accent);
+    lift.mv = { x: 36, y: 3.75, z: 47, sp: 2.2 };         // up to the bunker roof
+
+    const tower = this.add(0, 0, -50, 5, 0.5, 5, PALETTE.accent);
+    tower.mv = { x: 0, y: 5.75, z: -50, sp: 2.6 };        // a long way up, and back
+
+    const shuttle = this.add(-30, 4, 44, 8, 0.5, 4, PALETTE.accent2);
+    shuttle.mv = { x: 30, y: 4.25, z: 44, sp: 5 };        // along the far edge
+
+    const crossing = this.add(52, 5, -30, 5, 0.5, 5, PALETTE.accent2);
+    crossing.mv = { x: 52, y: 5.25, z: 30, sp: 4.5 };     // over the east flank
+
     // ---- scattered crates: repositioned, but still crate-sized ----
     const crates = [
       [8, 18], [10, 20], [8.6, 19.2, 2], [-8, -18], [-10, -20], [-8.6, -19.2, 2],
@@ -193,8 +278,13 @@ export class World {
       if (!byColor.has(c)) byColor.set(c, { boxes: [], solids: [] });
       return byColor.get(c);
     };
-    for (const b of this.boxes) bucket(b.color).boxes.push(b);
-    for (const s of this.solids) bucket(s.color).solids.push(s);
+    // A platform cannot be merged in with everything else its colour: the merge
+    // is what makes the level one draw call, and one draw call cannot have a
+    // piece of itself walk off. Each gets its own mesh and its own transform,
+    // which is a handful of extra calls for a handful of platforms.
+    for (const b of this.boxes) if (b.mover === undefined) bucket(b.color).boxes.push(b);
+    for (const s of this.solids) if (s.mover === undefined) bucket(s.color).solids.push(s);
+    for (const m of this.movers) m.mesh = this._moverMesh(m);
 
     // one merged BufferGeometry per colour keeps the draw-call count in single digits
     for (const [color, list] of byColor) {
@@ -222,6 +312,31 @@ export class World {
     grid.material.transparent = true;
     grid.material.opacity = 0.25;
     this.group.add(grid);
+  }
+
+  /** One platform, drawn at its own starting place and moved by its transform.
+   *  The geometry is baked in world coordinates exactly like the merged mesh, so
+   *  `position` is the offset from where it began rather than where it is. */
+  _moverMesh(m) {
+    const positions = [], normals = [], uvs = [];
+    const s = m.shape;
+    if (s.planes) pushSolid(positions, normals, uvs, s);
+    else {
+      const sx = s.max.x - s.min.x, sy = s.max.y - s.min.y, sz = s.max.z - s.min.z;
+      pushBox(positions, normals, uvs,
+        s.min.x + sx / 2, s.min.y + sy / 2, s.min.z + sz / 2, sx, sy, sz);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color }));
+    // the geometry was baked wherever the shape currently is, which after a
+    // reload is not necessarily the start of its run
+    m.bake = centreOf(s);
+    mesh.position.set(0, 0, 0);
+    this.group.add(mesh);
+    return mesh;
   }
 
   randomSpawn() {
@@ -257,7 +372,9 @@ export class World {
       const h = rayConvex(origin, dir, s, maxDist);
       if (!h || h.inside || h.t > maxDist) continue;
       if (!best || h.t < best.t) {
-        best = { box: s, solid: s, t: h.t, axis: -1, sign: 1, plane: h.n };
+        // `face` is what a portal needs: the plane alone says which way the
+        // surface points, not where its edges are.
+        best = { box: s, solid: s, t: h.t, axis: -1, sign: 1, plane: h.n, face: h.face };
       }
     }
     if (best) {
@@ -272,6 +389,18 @@ export class World {
 }
 
 const AXES = ['x', 'y', 'z'];
+
+/** The middle of either kind of shape. A solid keeps its own pivot; a box is
+ *  halfway between its corners. Both agree with Level.centreOf(), which is what
+ *  makes a platform's run mean the same thing in the designer and in the world. */
+export function centreOf(shape) {
+  if (shape.centre) return { x: shape.centre.x, y: shape.centre.y, z: shape.centre.z };
+  return {
+    x: (shape.min.x + shape.max.x) / 2,
+    y: (shape.min.y + shape.max.y) / 2,
+    z: (shape.min.z + shape.max.z) / 2
+  };
+}
 
 /** Slab intersection that also reports the entry face: `axis` is 0/1/2 and
  *  `sign` is -1 for the low face and +1 for the high one. Null if it misses,

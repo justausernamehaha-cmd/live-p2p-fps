@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Level, COLORS, COLOR_NAMES, GRID, MIN_W, MAX_W, MIN_H, MAX_H, MAX_BOXES } from './level.js';
+import { Level, COLORS, COLOR_NAMES, GRID, MAX_BOXES, MOVE_SPEED } from './level.js';
 import { SHAPE_BOX, SHAPE_SLOPE, eulerMatrix, eulerFromMatrix, matMul, axisMatrix } from './solid.js';
 import { clamp, cssColor, now } from './util.js';
 
@@ -461,7 +461,7 @@ export class Designer {
     if (this.selected) {
       this._say(this.selected.locked
         ? `selected the ${this.selected.kind} — colour it, but it cannot be deleted`
-        : 'selected — 1–0 colours it, T deletes it, R turns it');
+        : 'selected — 1–0 colours it, R turns it, T makes it travel, Delete removes it');
     }
   }
 
@@ -475,6 +475,35 @@ export class Designer {
     } else {
       this._say(`new boxes are ${COLOR_NAMES[i]}`);
     }
+  }
+
+  /** Make the selection travel. Where it is now is the start of the run and the
+   *  point three metres in front of the eye — the same white marker Q and E use,
+   *  so it is something you can see rather than something you guess — is the far
+   *  end. What travels is the object's own middle, which is what pointing at a
+   *  spot and saying "go there" means.
+   *
+   *  Pressing it again re-aims the run; with shift held it stops entirely. */
+  _platform(clear) {
+    const b = this.selected;
+    if (!b) { this._say('nothing selected — Alt+Ctrl+click an object first'); return; }
+    if (b.locked) { this._say('the floor, walls and ceiling cannot travel'); return; }
+    if (clear) {
+      if (!b.mv) { this._say('that one was not moving anyway'); return; }
+      this.level.setMove(b, null);
+      this._changed();
+      this._say('it stays put now');
+      return;
+    }
+    const end = { ...this.reachPoint };
+    if (!this.level.setMove(b, end, MOVE_SPEED)) {
+      this._say('that is where it already is — aim further off and press T again');
+      return;
+    }
+    const c = this.level.centreOf(b);
+    const d = Math.hypot(end.x - c.x, end.y - c.y, end.z - c.z);
+    this._changed();
+    this._say(`travelling ${fmt(d)} m at ${MOVE_SPEED} m/s · Shift+T stops it`, 3500);
   }
 
   _delete() {
@@ -515,6 +544,9 @@ export class Designer {
       this.pos.y = clamp(this.pos.y, MARGIN, L.h - MARGIN);
       this.ghost = true;
       this.stage = 'idle';
+      // park every platform back at the start of its run: a box that is not
+      // where it was built cannot be aimed at, and the seed stores the start
+      this.game.world.syncLevel();
       this._say('building', 2000);
     }
     this._setBodyMode();
@@ -583,6 +615,7 @@ export class Designer {
         case 'corner1': e.preventDefault(); this._corner('q'); return;
         case 'corner2': e.preventDefault(); this._corner('e'); return;
         case 'ddelete': e.preventDefault(); this._delete(); return;
+        case 'platform': e.preventDefault(); this._platform(e.shiftKey); return;
         case 'shape': e.preventDefault(); this._cycleShape(); return;
         case 'axis': e.preventDefault(); this._cycleAxis(); return;
         case 'rotate':
@@ -640,8 +673,20 @@ export class Designer {
     this.reachMark = edgeBox(0xffffff);
     this.cornerMark = edgeBox(0x8bf03a);
     this.hoverMark = edgeBox(0x7f8ea8);
+    // where a moving platform is headed: the far end of the run, and the line
+    // it travels along. A platform is parked while you build, so without these
+    // there would be nothing on screen to say it moves at all.
+    this.moveMark = edgeBox(0xffd93b);
+    this.moveLine = new THREE.Line(
+      new THREE.BufferGeometry().setAttribute(
+        'position', new THREE.Float32BufferAttribute(new Float32Array(6), 3)),
+      new THREE.LineBasicMaterial({ color: 0xffd93b, depthTest: false, transparent: true, opacity: 0.9 })
+    );
+    this.moveLine.renderOrder = 6;
+    this.moveLine.frustumCulled = false;
+    this.overlay.add(this.moveLine);
     for (const o of [this.ghostBox, this.ghostEdges, this.selEdges,
-                     this.reachMark, this.cornerMark, this.hoverMark]) {
+                     this.reachMark, this.cornerMark, this.hoverMark, this.moveMark]) {
       o.visible = false;
       this.overlay.add(o);
     }
@@ -681,6 +726,18 @@ export class Designer {
 
     this.selEdges.visible = !!this.selected;
     if (this.selected) placeOriented(this.selEdges, this.selected, 0.03);
+
+    const mv = this.selected && this.selected.mv;
+    this.moveMark.visible = !!mv;
+    this.moveLine.visible = !!mv;
+    if (mv) {
+      const c = this.level.centreOf(this.selected);
+      place(this.moveMark, sub(mv, 0.3), add(mv, 0.3));
+      const pos = this.moveLine.geometry.attributes.position;
+      pos.setXYZ(0, c.x, c.y, c.z);
+      pos.setXYZ(1, mv.x, mv.y, mv.z);
+      pos.needsUpdate = true;
+    }
 
     // the gizmo: only on something that can actually be turned
     const gizmo = this.selected && !this.selected.locked;
@@ -778,7 +835,7 @@ export class Designer {
       ? (sel.locked ? sel.kind
           : `${sel.shape === SHAPE_SLOPE ? 'ramp' : 'box'} ` +
             `${fmt(sel.x1 - sel.x0)}×${fmt(sel.y1 - sel.y0)}×${fmt(sel.z1 - sel.z0)}`) +
-        ' · ' + COLOR_NAMES[sel.c]
+        ' · ' + COLOR_NAMES[sel.c] + (sel.mv ? ' · moving' : '')
       : 'nothing selected';
 
     $('dstats').textContent =

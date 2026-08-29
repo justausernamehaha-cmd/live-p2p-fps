@@ -12,7 +12,7 @@ export const DEFAULT_BINDS = {
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
   KeyF: 'fire',                       // keyboard-only fallback when there is no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
-  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3',
+  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3', Digit4: 'weapon4',
   Backquote: 'settings', Escape: 'menu'
 };
 
@@ -29,6 +29,7 @@ export const BINDABLE = [
   ['jump', 'Jump'], ['sprint', 'Sprint'], ['crouch', 'Crouch'],
   ['fire', 'Fire'], ['reload', 'Reload'], ['lastweapon', 'Last weapon'],
   ['weapon1', 'Weapon 1'], ['weapon2', 'Weapon 2'], ['weapon3', 'Weapon 3'],
+  ['weapon4', 'Weapon 4 (portal gun)'],
   ['score', 'Scoreboard'], ['settings', 'Open settings'], ['menu', 'Open menu']
 ];
 
@@ -47,7 +48,10 @@ export const DEFAULT_DESIGN_BINDS = {
   Space: 'up', KeyC: 'down',
   AltLeft: 'freemouse', AltRight: 'freemouse',
   KeyQ: 'corner1', KeyE: 'corner2',
-  KeyF: 'shape', KeyR: 'rotate', KeyX: 'axis', KeyT: 'ddelete',
+  KeyF: 'shape', KeyR: 'rotate', KeyX: 'axis',
+  // T is the platform key now, so delete moved onto the key that is called
+  // Delete. Nothing about the old binding was worth keeping over that.
+  KeyT: 'platform', Delete: 'ddelete',
   KeyG: 'snap', KeyH: 'keylist', Tab: 'playtest'
 };
 
@@ -57,6 +61,7 @@ export const DESIGN_BINDABLE = [
   ['corner1', 'Floating box: corner A'], ['corner2', 'Floating box: corner B'],
   ['shape', 'Box / ramp'], ['rotate', 'Rotate selection'],
   ['axis', 'Next rotation axis'], ['ddelete', 'Delete selection'],
+  ['platform', 'Make it a moving platform'],
   ['snap', 'Grid snap'], ['keylist', 'Hide the key list'], ['playtest', 'Playtest']
 ];
 
@@ -513,10 +518,27 @@ export class Input {
         for (const [code, action] of Object.entries(saved)) {
           if (typeof code === 'string' && actions.has(action)) out[code] = action;
         }
-        if (Object.keys(out).length) return out;
+        if (Object.keys(out).length) return this._fillGaps(out, defaults);
       }
     } catch { /* nothing saved, or unreadable */ }
     return { ...defaults };
+  }
+
+  /** Give any action the save has never heard of its default key.
+   *
+   *  Without this, adding an action strands it: a returning player's map is kept
+   *  verbatim, so the portal gun would have had no number key and the platform
+   *  tool no key at all for anybody who had ever opened the settings panel. Only
+   *  actions with no key *at all* are filled, and only onto a key nothing else
+   *  is using, so a map somebody has arranged is never rearranged for them. */
+  _fillGaps(map, defaults) {
+    const bound = new Set(Object.values(map));
+    for (const [code, action] of Object.entries(defaults)) {
+      if (bound.has(action) || map[code]) continue;
+      map[code] = action;
+      bound.add(action);
+    }
+    return map;
   }
 
   _saveBinds(design = false) {

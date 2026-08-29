@@ -10,6 +10,7 @@ import { Layout } from './layout.js';
 import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
 import { Designer } from './designer.js';
 import { Audio } from './audio.js';
+import { PortalField } from './portalgun.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
@@ -62,6 +63,7 @@ class Game {
     window.__paStarted = true;
     window.game = this;          // handy in the console; also what the test harness pokes at
     window.__spreadFor = spreadFor;
+    window.__WEAPONS = WEAPONS;  // test/portals.mjs compares the guns against each other
     window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
     window.__selfId = getSelfId;
     window.__Level = Level;      // test/designer.mjs decodes seeds with it
@@ -110,6 +112,9 @@ class Game {
     this.loadout = new Loadout();
     this.effects = new Effects(this.scene, this.camera, this.vmScene);
     this.viewmodel = new ViewModel(this.vmScene);
+    this.portals = new PortalField(this.scene, this.effects);
+    this.portals.onPlaced = (side, p) => this.net?.portal(side, p);
+    this.player.portals = this.portals;
 
     addEventListener('resize', () => this._resize());
     addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
@@ -307,7 +312,8 @@ class Game {
     this.remotes.clear();
     try {
       await initNet(this.strategy);
-      this.net = new Net(room, { name: this.name || 'player' }, this._netHandlers());
+      this.net = new Net(room, { name: this.name || 'player', pr: this.portals.myRandom },
+                         this._netHandlers());
     } catch (err) {
       console.error(err);   // reported properly if they press CONNECT
     }
@@ -317,12 +323,21 @@ class Game {
     return {
       onJoin: id => this._peerJoin(id),
       onLeave: id => this._peerLeave(id),
-      onHello: (id, m) => this._remote(id).setName(String(m.name || '').slice(0, 14)),
+      onHello: (id, m) => {
+        const r = this._remote(id);
+        r.setName(String(m.name || '').slice(0, 14));
+        r.portalRandom = num(m.pr, 0);
+        this._recolour();
+      },
       onState: (id, s) => this._remote(id).onState(s),
       onShot: (id, m) => this._remoteShot(id, m),
       onHit: (id, m) => this._takeHit(id, m),
       onDied: (id, m) => this._someoneDied(id, m),
       onChat: (id, m) => this._chatIn(id, m),
+      onPortalBall: (id, m) => this.portals.fire(
+        id, { x: num(m.x), y: num(m.y), z: num(m.z) },
+        { x: num(m.dx), y: num(m.dy), z: num(m.dz) }, m.s === 'b' ? 'b' : 'a', true),
+      onPortal: (id, m) => this._remotePortal(id, m),
       onPing: (id, rtt) => { const r = this.remotes.get(id); if (r) r.ping = rtt; },
       onJoinError: e => this.hud.feed('signalling error: ' + escapeHtml(e.error || ''), 'chat')
     };
@@ -340,7 +355,7 @@ class Game {
       await initNet(strategy);
       if (!this.net || this.net.roomCode !== room) {
         this.net?.leave();
-        this.net = new Net(room, { name }, this._netHandlers());
+        this.net = new Net(room, { name, pr: this.portals.myRandom }, this._netHandlers());
       } else {
         this.net.profile.name = name;    // already connected from the pre-join
         this.net.hello();
@@ -376,6 +391,9 @@ class Game {
     const r = this.remotes.get(id);
     if (r) { this.hud.feed(`<b>${escapeHtml(r.name)}</b> left`, 'chat'); r.dispose(); }
     this.remotes.delete(id);
+    // their portals go with them: a mouth nobody owns is a mouth nobody can
+    // replace, and it would sit on the wall for the rest of the match
+    this.portals.forget(id);
     this._recolour();
   }
 
@@ -395,6 +413,26 @@ class Game {
     const ids = [getSelfId(), ...this.remotes.keys()];
     this.myColor = PLAYER_COLORS[colorIndexFor(getSelfId(), ids)];
     for (const [id, r] of this.remotes) r.setColor(PLAYER_COLORS[colorIndexFor(id, ids)]);
+
+    // Portal colours are agreed the same way, but they cannot be derived from
+    // the id alone: they have to be different on every refresh, so each player
+    // announces one random number and everybody folds the same set together.
+    this.portals.setSelfId(getSelfId());
+    this.portals.recolour([
+      { id: this.portals.selfId, r: this.portals.myRandom },
+      ...[...this.remotes].map(([id, r]) => ({ id, r: r.portalRandom || 0 }))
+    ]);
+    this._paintGun();
+  }
+
+  _remotePortal(id, m) {
+    const v = (a, b, c) => ({ x: num(m[a]), y: num(m[b]), z: num(m[c]) });
+    const n = v('nx', 'ny', 'nz');
+    if (!Math.hypot(n.x, n.y, n.z)) return;      // a peer sending nonsense
+    this.portals.place(id, m.s === 'b' ? 'b' : 'a', {
+      c: v('x', 'y', 'z'), n, u: v('ux', 'uy', 'uz'), v: v('vx', 'vy', 'vz'),
+      mover: num(m.m, -1)
+    });
   }
 
   _remoteShot(id, m) {
@@ -505,6 +543,7 @@ class Game {
 
     this.room = 'level design';
     this.seed = '';
+    this.portals.clear();      // a new level's walls are not the old level's
     this.running = true;
     this.menuOpen = false;
     this.design = this.design || new Designer(this);
@@ -519,6 +558,7 @@ class Game {
     if (!this.design) return;
     this.design.stop();
     this.design = null;
+    this.portals.clear();
     this.running = false;
     this.world.setLevel(null);
     this.player.spawn(this.world.randomSpawn());
@@ -592,11 +632,22 @@ class Game {
   _switch(changed) {
     if (!changed) return;
     this.viewmodel.setWeapon(this.loadout.index);
+    this._paintGun();
+  }
+
+  /** The portal gun's brick wears the player's own pair — blue on the left and
+   *  orange on the right on your own, until somebody else joins and everybody's
+   *  colours are re-agreed. Every other gun keeps the brick it has always had. */
+  _paintGun() {
+    if (!this.loadout.weapon.portal) return;
+    const c = this.portals.myColors();
+    this.viewmodel.setAccents(c.a, c.b);
   }
 
   _fire(t, input) {
     const p = this.player;
     if (!p.alive || this.shielded) return;
+    if (this.loadout.weapon.portal) return this._firePortal(t, input);
     const w = this.loadout.tryFire(t, input.down('fire'), input.pressed('fire'));
     if (!w) return;
 
@@ -660,6 +711,28 @@ class Game {
     }
   }
 
+  /** The portal gun. Two triggers, two colours, and a ball rather than a ray.
+   *
+   *  The ball leaves from the eye along the aim line rather than from the muzzle,
+   *  which is what makes it land exactly on the crosshair; it is invisible for
+   *  its first stride so it still looks like it came out of the gun. */
+  _firePortal(t, input) {
+    const p = this.player;
+    for (const [action, side] of [['fire', 'a'], ['ads', 'b']]) {
+      const w = this.loadout.tryPortalFire(t, input.pressed(action));
+      if (!w) continue;
+      const eye = { x: p.pos.x, y: p.eyeY + p.bob, z: p.pos.z };
+      const dir = this._aimDirection();
+      this.portals.fire(this.portals.selfId, eye, dir, side);
+      this.effects.muzzle(w.shakeScale);
+      this.viewmodel.fire(w.shakeScale);
+      this.audio.shot(0, 0);
+      p.addRecoil(w.recoil, 0);
+      this.net?.portalBall(eye, dir, side);
+      return;                      // one portal a frame, whatever is held
+    }
+  }
+
   _aimDirection() {
     const p = this.player;
     const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
@@ -688,12 +761,19 @@ class Game {
     const dt = Math.min(0.05, this._last ? t - this._last : 0.016);
     this._last = t;
 
+    // The level moves before anybody in it does: a platform's position this
+    // frame is what the player's collision, the portals stuck to it and the
+    // hitscan all have to agree on. Platforms are parked while the designer's
+    // ghost is flying — a box that wanders off mid-edit cannot be built with.
+    if (this.running && !this.design?.ghost) this.world.updateMovers(dt);
+
     // remote players are advanced first so their hitboxes match the pixels
     for (const r of this.remotes.values()) r.update(dt);
 
     if (this.running) this._tick(t, dt);
 
     this.effects.update(dt);
+    this.portals.update(dt, this.world);
     this.hud.update(dt);
 
     const r = this.renderer;
@@ -729,13 +809,16 @@ class Game {
     if (input.pressed('weapon1')) this._switch(this.loadout.switchTo(0, t));
     if (input.pressed('weapon2')) this._switch(this.loadout.switchTo(1, t));
     if (input.pressed('weapon3')) this._switch(this.loadout.switchTo(2, t));
+    if (input.pressed('weapon4')) this._switch(this.loadout.switchTo(3, t));
     if (input.pressed('weaponnext')) this._switch(this.loadout.cycle(1, t));
     if (input.pressed('weaponprev')) this._switch(this.loadout.cycle(-1, t));
     if (input.pressed('lastweapon')) this._switch(this.loadout.swapLast(t));
     if (input.pressed('reload') && this.loadout.startReload(t)) this.audio.reload();
 
-    // sights come up and go down at a constant rate
-    const wantAds = input.down('ads');
+    // sights come up and go down at a constant rate. The portal gun has none:
+    // its right button is the orange trigger, so aiming with it would both zoom
+    // and fire, which is two things one button must not do.
+    const wantAds = input.down('ads') && !this.loadout.weapon.noAds;
     this.adsT = clamp(this.adsT + (wantAds ? dt : -dt) / ADS_TIME, 0, 1);
     this.hud.ads(this.adsT > 0.5);
 
@@ -837,7 +920,8 @@ class Game {
     }
 
     const a = this.loadout.ammo, w = this.loadout.weapon;
-    this.hud.setAmmo(w.name, a.mag, a.reserve, this.loadout.reloading);
+    if (w.infinite) this.hud.setAmmo(w.name, '\u221e', '', false);
+    else this.hud.setAmmo(w.name, a.mag, a.reserve, this.loadout.reloading);
     this.hud.setHealth(this.player.hp);
 
     // Tab is the playtest switch in a design room, not the scoreboard
