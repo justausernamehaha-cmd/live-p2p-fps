@@ -45,13 +45,20 @@ same one. All three are public infrastructure that only carries the handshake.
 | Menu | `Esc` | `MENU` |
 | Input debug overlay | `F3` | — |
 | Fullscreen | F11 | button, top right |
-| Settings, key bindings | `` ` `` or `=` | `LAYOUT`, above the player count |
+| Settings, key bindings | `` ` `` | `LAYOUT`, or `SETTINGS & KEYS` in the menu |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
 
-**Every key can be rebound** from that panel: click the key beside an action and
-press the one you want. It takes the key off whatever else had it, so nothing
-ends up bound twice, and `RESET KEYS` puts the defaults back. The map lives in
-`localStorage`, so it survives a reload.
+**Every key can be rebound** from that panel, including **Open settings** and
+**Open menu** themselves. Click a key to change it, press **+** to give an action
+a *second* key, and press `Backspace` while a key is armed to take just that one
+away. A key is taken off whatever else had it, so nothing ends up bound twice,
+`Esc` cancels a rebind, and `RESET KEYS` puts the defaults back. The map lives in
+`localStorage`, so it survives a reload. Because the settings key can itself be
+rebound (or removed), the pause menu carries a `SETTINGS & KEYS` button that
+cannot be.
+
+`Esc` also opens the menu whatever `Open menu` is bound to: the browser gives up
+the pointer lock on `Esc` no matter what the page wants, and the menu follows.
 
 Crouch, aim, **sprint and jump** can each be set to **hold** or **toggle** in the
 same panel. On a keyboard all four rows are simply there; on a touch layout the
@@ -146,6 +153,21 @@ forward. Crouching takes 0.3 s each way so it cannot be flickered, and stairs ar
 climbed as a straight line — the body steps up instantly for collision, the view
 follows at a constant rate.
 
+### Momentum
+
+Three rules hold the movement together, and all three are measured by
+`test/momentum.mjs`:
+
+* **A frame that ends in a jump keeps the velocity it arrived with.** Snapping it
+  back to the keys at walking pace is what a hop chain must never do, so above
+  half a walk the ground rules are skipped entirely on a jumping frame. Below
+  that there is nothing to preserve and direct control still applies.
+* **Stop hopping and you bleed back down.** Carrying more than a walk while still
+  pressing a direction steers and drags; letting go stops you outright.
+* **Falling is heavier than rising**, and a drop worth more than 12 m/s of impact
+  is paid out as ground speed — up to 8 m/s of it, along the way you are already
+  going. Height is worth momentum, which is the same bargain the hop chain makes.
+
 ## Shooting
 
 | | accuracy |
@@ -226,6 +248,7 @@ node test/holdtoggle.mjs
 node test/map.mjs
 node test/designer.mjs
 node test/settings.mjs
+node test/momentum.mjs
 ```
 
 `test/designer.mjs` is the one that matters for the designer, because it refuses
@@ -236,8 +259,12 @@ and standing on the level there. Every one of its assertions has been watched go
 red with the bug reintroduced.
 
 `test/settings.mjs` proves a rebound key by moving the player with it and by the
-old key going dead, and a latched jump by counting take-offs over two seconds
-with nothing held down.
+old key going dead, a second key by both of them working, and a latched jump by
+counting take-offs over two seconds with nothing held down.
+
+`test/momentum.mjs` counts hops by the player leaving the floor, friction by the
+speed a second later, and the fall bonus by the difference between a short drop
+and a long one from the same standing start.
 
 `test/map.mjs` scans the whole arena floor and asserts that every place you can
 stand lets you stand *up*. That is the fault hand-checking missed the first
@@ -281,7 +308,8 @@ instead of sitting black.
 
 * `src/weapons.js` — damage, fire rate, spread, recoil, magazine sizes.
 * `src/player.js` — movement constants at the top (speed, gravity, jump, step
-  height). Stair rise in `world.js` must stay under `STEP_HEIGHT`.
+  height), including the fall gravity multiplier and how much of a fall is paid
+  out as speed. Stair rise in `world.js` must stay under `STEP_HEIGHT`.
 * `src/world.js` — the arena. `add(cx, y, cz, w, h, d, colour)` places a box by
   its centre in x/z and its *bottom* in y; `stairs()` builds a walkable flight.
 * `src/remote.js` — `INTERP_DELAY` trades smoothness against how far in the

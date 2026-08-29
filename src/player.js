@@ -33,6 +33,15 @@ export const AIR = {
   accel: 55,                    // how hard the strafe pulls
   cap: 1.2                      // m/s of "wished" speed the air grants
 };
+// Falling is heavier than rising. Gravity is one number for the jump arc, which
+// makes a hop feel floaty at the top and mushy on the way down; multiplying it
+// while descending keeps the take-off and adds weight to the drop.
+const FALL_GRAVITY = 1.4;
+// A long fall is worth speed. Below this impact nothing is paid out, which keeps
+// ordinary hops (they land at about 9 m/s) and stair descents out of it.
+const FALL_MIN = 12;
+const FALL_TO_SPEED = 0.35;     // of the impact above FALL_MIN
+const FALL_SPEED_MAX = 8;       // m/s one landing may ever add
 const GROUND_FRICTION = 5;      // stopping friction, only when you stop asking to move
 const GROUND_DRAG = 0.35;       // the slow bleed on carried speed while still running
 const GROUND_STEER = 9;         // how fast carried momentum can be turned, magnitude kept
@@ -55,6 +64,7 @@ export class Player {
     this.crouchT = 0;          // 0 standing, 1 crouched; animated, not snapped
     this.sprintLatch = false;
     this.onGround = false;
+    this.fellAt = 0;           // impact speed of the landing that just happened
     this.hp = 100;
     this.alive = true;
     this.kills = 0;
@@ -155,20 +165,30 @@ export class Player {
     const wishLen = Math.hypot(wish.x, wish.y);   // already clamped to <= 1
     const speed = Math.hypot(this.vel.x, this.vel.z);
 
-    if (this.onGround) {
+    // A frame that ends in a jump keeps the velocity it arrived with, and pays no
+    // friction at all. That is the whole of a hop chain: the alignment a strafe
+    // jumper builds in the air must survive the instant of ground contact, and
+    // snapping the velocity back to the keys at walk speed would erase it every
+    // single hop. Below half a walk there is nothing worth preserving, so direct
+    // control still gets you moving from a standstill.
+    //
+    // This used to happen by accident. Ground contact was decided by the last
+    // collision sub-step, so at speed the landing frame reported onGround false
+    // and the whole block below was skipped — the chain worked *because* of a
+    // bug, and fixing that bug on its own capped hopping at walking pace.
+    const keepMomentum = wantJump && speed > maxSpeed * 0.5;
+
+    if (this.onGround && !keepMomentum) {
       if (speed <= maxSpeed + 0.05) {
         // direct control: you go exactly where you press, at once
         this.vel.x = wx * maxSpeed;
         this.vel.z = wz * maxSpeed;
-      } else if (wishLen > 0.02 && !wantJump) {
+      } else if (wishLen > 0.02) {
         // Carrying more than a walk — off a hop chain, a heavy landing, a run
         // down some stairs. Touching the ground must not confiscate that, so the
         // magnitude is kept and only the direction is steered, bleeding at
         // GROUND_DRAG rather than stopping friction.
         //
-        // A frame that ends in a jump skips this branch entirely: steering the
-        // velocity toward the keys would undo the alignment a strafe jumper just
-        // built, which is exactly what a hop chain is made of.
         const k = Math.min(1, GROUND_STEER * dt);
         const nx = this.vel.x + (wx * speed - this.vel.x) * k;
         const nz = this.vel.z + (wz * speed - this.vel.z) * k;
@@ -178,7 +198,7 @@ export class Player {
         const drop = Math.max(0, 1 - GROUND_DRAG * dt);
         this.vel.x *= drop;
         this.vel.z *= drop;
-      } else if (!wantJump) {
+      } else {
         // you stopped asking to move, so stop
         const drop = Math.max(0, 1 - GROUND_FRICTION * dt);
         this.vel.x *= drop;
@@ -225,16 +245,29 @@ export class Player {
       this.onGround = false;
     }
 
-    const after = Math.hypot(this.vel.x, this.vel.z);
-    if (after > SPEED_CAP) {
-      this.vel.x *= SPEED_CAP / after;
-      this.vel.z *= SPEED_CAP / after;
+    this._capSpeed();
+
+    this.vel.y -= GRAVITY * (this.vel.y < 0 ? FALL_GRAVITY : 1) * dt;
+    if (this.vel.y < -80) this.vel.y = -80;
+
+    this.fellAt = 0;
+    this._move(dt);
+
+    // A landing off a real drop is paid out as ground speed, along the way you
+    // are already going — or, from a standing drop, along the keys. Height is
+    // worth momentum, which is the same bargain the hop chain makes.
+    if (this.fellAt > FALL_MIN) {
+      const gain = Math.min(FALL_SPEED_MAX, (this.fellAt - FALL_MIN) * FALL_TO_SPEED);
+      const sp = Math.hypot(this.vel.x, this.vel.z);
+      let dx, dz;
+      if (sp > 0.5) { dx = this.vel.x / sp; dz = this.vel.z / sp; }
+      else if (wishLen > 0.02) { dx = wx; dz = wz; }
+      else { dx = dz = 0; }     // dropped straight down standing still: nothing
+      this.vel.x += dx * gain;
+      this.vel.z += dz * gain;
     }
 
-    this.vel.y -= GRAVITY * dt;
-    if (this.vel.y < -60) this.vel.y = -60;
-
-    this._move(dt);
+    this._capSpeed();
 
     // Hitting something ends a hop chain: whatever you had built collapses back
     // to the speed you can run at. Landings and stairs do not trigger this —
@@ -255,6 +288,14 @@ export class Player {
       this.bob = Math.sin(this.bobPhase) * 0.035 * Math.min(1, groundSpeed / WALK);
     } else {
       this.bob *= Math.exp(-8 * dt);
+    }
+  }
+
+  _capSpeed() {
+    const sp = Math.hypot(this.vel.x, this.vel.z);
+    if (sp > SPEED_CAP) {
+      this.vel.x *= SPEED_CAP / sp;
+      this.vel.z *= SPEED_CAP / sp;
     }
   }
 
@@ -283,7 +324,22 @@ export class Player {
     // would step further than that and pass straight through it.
     const far = Math.max(Math.abs(this.vel.x), Math.abs(this.vel.y), Math.abs(this.vel.z)) * dt;
     const steps = Math.min(8, Math.max(1, Math.ceil(far / MAX_STEP_DIST)));
-    for (let i = 0; i < steps; i++) this._moveStep(dt / steps);
+
+    // Ground contact is a property of the frame, not of the last sub-step.
+    //
+    // This is the bug that made a hop chain drop jumps at speed. Landing in an
+    // early sub-step set onGround, and the next sub-step cleared it again: with
+    // vel.y already zeroed, its vertical move was zero, and _axis() reports a
+    // zero move as "not blocked". So the faster you went the more sub-steps ran
+    // and the more landings were thrown away — you were standing on the floor
+    // with onGround false, which loses the jump *and* skips ground friction
+    // entirely, so nothing ever slowed you down either.
+    let grounded = false;
+    for (let i = 0; i < steps; i++) {
+      this._moveStep(dt / steps);
+      grounded = grounded || this.onGround;
+    }
+    this.onGround = grounded;
   }
 
   _moveStep(dt) {
@@ -335,7 +391,10 @@ export class Player {
     // vertical
     this.onGround = false;
     if (this._axis('y', this.vel.y * dt, boxes)) {
-      if (this.vel.y <= 0) this.onGround = true;
+      if (this.vel.y <= 0) {
+        this.onGround = true;
+        this.fellAt = Math.max(this.fellAt, -this.vel.y);   // read before it is zeroed
+      }
       this.vel.y = 0;
     }
 

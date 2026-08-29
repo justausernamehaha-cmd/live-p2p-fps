@@ -271,21 +271,27 @@ body.paused #hud{opacity:.35}
 .ekeys>b{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
   display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 #bindhint{text-transform:none;letter-spacing:0;font-size:10.5px;color:#61758f;font-weight:400}
-#keybinds{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;max-height:34vh;overflow:auto}
+/* One column: a row can now hold several keys plus the + that adds one, and two
+   columns left no room for any of them. */
+#keybinds{display:flex;flex-direction:column;gap:3px;max-height:38vh;overflow:auto;padding-right:2px}
 .bindrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
-.bindrow span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bindkey{min-width:62px;padding:4px 8px;border-radius:5px;border:1px solid var(--line);
+.bindname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bindkeys{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.bindkey{min-width:56px;padding:4px 8px;border-radius:5px;border:1px solid var(--line);
   border-bottom-width:2px;background:#0b1119;color:var(--text);font:inherit;font-size:11px}
 .bindkey:hover{border-color:var(--accent2)}
-.bindkey.arming{border-color:var(--accent);color:var(--accent);background:#ff8a3d1a}
-.bindkey.unbound{color:var(--bad)}
+.bindkey.arming,.bindadd.arming{border-color:var(--accent);color:var(--accent);background:#ff8a3d1a}
+.bindnone{color:var(--bad);padding:0 6px}
+.bindadd{width:24px;padding:4px 0;border-radius:5px;border:1px dashed var(--line);
+  background:transparent;color:var(--dim);font:inherit;font-size:12px;line-height:1}
+.bindadd:hover{border-color:var(--accent2);color:var(--text);border-style:solid}
+.bindadd.arming{min-width:88px;width:auto;padding:4px 8px;border-style:solid}
 #resetbinds{align-self:flex-start;padding:7px 12px;border-radius:7px;border:1px solid var(--line);
   background:transparent;color:var(--dim);font-size:11px;letter-spacing:.1em;font-weight:700}
 /* a phone has no keys to rebind */
 body.touch-ui .keysonly{display:none}
-@media (max-width:560px){#keybinds{grid-template-columns:1fr}}
 /* the panel has grown a keyboard section, so let it use the height it needs */
-body:not(.touch-ui) #editpanel{width:min(92vw,430px);max-height:92vh;overflow:auto}
+body:not(.touch-ui) #editpanel{width:min(94vw,458px);max-height:94vh;overflow:auto}
 
 /* ---------------- level designer ---------------- */
 #designsetup{position:fixed;inset:0;display:grid;place-items:center;z-index:22;padding:16px;

@@ -306,6 +306,24 @@ const later = await page.evaluate(() => ({
   stillFireLocked: performance.now() < window.game.fireLockUntil
 }));
 
-console.log(JSON.stringify({ ...R, edit: { ...editing, ...blocked }, onExit: after, after3s: later }, null, 2));
+const out = { ...R, edit: { ...editing, ...blocked }, onExit: after, after3s: later };
+console.log(JSON.stringify(out, null, 2));
 console.log('page errors:', errs.length ? errs : 'none');
+
+// This file was measurement only for a long time, and printing is not testing:
+// a change that capped bunny hopping at walking pace passed it in silence. The
+// numbers that carry a rule now carry an assertion too.
+const fail = [];
+const b = out.bhop || {};
+if (!(b.peak > 8.5)) fail.push('bunny hopping does not build speed: peak ' + b.peak);
+if (!b.straightLineGainsNothing) fail.push('hopping in a straight line built speed, and it must not: ' + b.straightLinePeak);
+if (!(out.edit && out.edit.shielded)) fail.push('the editor does not shield');
+if (out.edit && out.edit.hpAfter !== out.edit.hpBefore) fail.push('damage got through the editing shield');
+if (!(out.onExit && Math.abs(out.onExit.shieldLeft - 3) < 0.4)) fail.push('the shield tail is not 3s: ' + out.onExit?.shieldLeft);
+if (!(out.onExit && Math.abs(out.onExit.fireLockedFor - 3) < 0.4)) fail.push('the weapon lock is not 3s: ' + out.onExit?.fireLockedFor);
+if (!(out.after3s && out.after3s.shieldExpired)) fail.push('the shield outlasted 3s');
+if (out.after3s && out.after3s.stillFireLocked) fail.push('the weapon lock outlasted 3s');
+if (errs.length) fail.push('page errors: ' + errs.join(' | '));
+if (fail.length) { console.log('FAIL: ' + fail.join('\n      ')); await browser.close(); process.exit(1); }
+console.log('PASS');
 await browser.close();

@@ -16,7 +16,7 @@ import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } f
 const STATE_HZ = 20;
 const RESPAWN_TIME = 3;
 const EDIT_SHIELD_TAIL = 3000;   // ms of protection carried out of the layout editor
-const EDIT_FIRE_LOCK = 5000;     // ms before the gun works again after editing
+const EDIT_FIRE_LOCK = 3000;     // ms before the gun works again after editing
 // The one room code that opens the level designer instead of a match. Matched
 // before the code is normalised, so `level design` and `level-design` both work.
 const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
@@ -158,6 +158,7 @@ class Game {
       else if (a === 'scoreoff') this.scoreVisible = false;
       else if (a === 'weapon') this._switch(this.loadout.cycle(1, now() / 1000));
       else if (a === 'menu') this._pause();
+      else if (a === 'settings') { if (this.editing) this._endEdit(); else this._startEdit(); }
       else if (a === 'layout') this._startEdit();
     };
 
@@ -165,7 +166,8 @@ class Game {
     this.layout.isToggle = a => this.input.isToggle(a);
     this.layout.onMode = (action, toggle) => this.input.setToggleMode(action, toggle);
     this.layout.keysFor = a => this.input.keysFor(a);
-    this.layout.onBind = (action, code) => this.input.bind(action, code);
+    this.layout.onBind = (action, code, replacing) => this.input.bind(action, code, replacing);
+    this.layout.onUnbind = (action, code) => this.input.unbind(action, code);
     this.layout.onResetBinds = () => this.input.resetBinds();
     this.layout.showModes();
     this.layout.showBinds();
@@ -187,13 +189,6 @@ class Game {
     // "it did something strange" can be answered with numbers
     addEventListener('keydown', e => {
       if (e.code === 'F3') { e.preventDefault(); this.showDebug = !this.showDebug; }
-    });
-
-    addEventListener('keydown', e => {
-      if ((e.code !== 'Backquote' && e.code !== 'Equal') || isTyping(e) || this.hud.chatOpen) return;
-      e.preventDefault();
-      if (this.editing) this._endEdit();
-      else this._startEdit();
     });
 
     const fsbtn = document.getElementById('fsbtn');
@@ -271,6 +266,14 @@ class Game {
         playBtn.textContent = 'RESUME';
         shareBtn.classList.remove('hidden');
       });
+    };
+
+    // Open settings is itself a binding now, so it can be unbound. This button
+    // is the way back in when it has been.
+    document.getElementById('menusettings').onclick = () => {
+      if (!this.running) return;
+      this._resume();
+      this._startEdit();
     };
 
     shareBtn.onclick = async () => {

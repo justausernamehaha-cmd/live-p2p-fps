@@ -70,59 +70,89 @@ export class Layout {
     this.modeButtons = [...wrap.querySelectorAll('.modes button')];
   }
 
-  /** The keyboard half of the panel: one row per action, click to rebind. */
+  /** The keyboard half of the panel: one row per action, one button per key
+   *  bound to it, and a `+` that adds another. */
   _buildKeyRows() {
     const wrap = document.getElementById('keybinds');
     wrap.innerHTML = '';
-    this.keyButtons = new Map();
+    this.keyRows = new Map();
     for (const [action, label] of BINDABLE) {
       const row = document.createElement('div');
       row.className = 'bindrow';
+      row.dataset.action = action;
       const name = document.createElement('span');
+      name.className = 'bindname';
       name.textContent = label;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'bindkey';
-      btn.addEventListener('click', () => this._capture(action, btn));
-      row.append(name, btn);
+      const keys = document.createElement('span');
+      keys.className = 'bindkeys';
+      row.append(name, keys);
       wrap.appendChild(row);
-      this.keyButtons.set(action, btn);
+      this.keyRows.set(action, keys);
     }
     document.getElementById('resetbinds').addEventListener('click', () => {
+      this._capturing = null;
       this.onResetBinds?.();
       this.showBinds();
     });
     // The capture listener sits on the window in the capture phase so it beats
     // the game's own key handling: while a row is armed, the next key is a
-    // binding and nothing else.
+    // binding and nothing else — including the key that opens this panel.
     addEventListener('keydown', e => {
-      if (!this._capturing) return;
+      const cap = this._capturing;
+      if (!cap) return;
       e.preventDefault();
       e.stopPropagation();
-      const action = this._capturing;
       this._capturing = null;
-      if (e.code !== 'Escape') this.onBind?.(action, e.code);
+      if (e.code === 'Escape') { /* cancelled; Escape is the browser's */ }
+      else if ((e.code === 'Backspace' || e.code === 'Delete') && cap.replacing) {
+        this.onUnbind?.(cap.action, cap.replacing);
+      } else {
+        this.onBind?.(cap.action, e.code, cap.replacing);
+      }
       this.showBinds();
     }, true);
   }
 
-  _capture(action, btn) {
-    this._capturing = action;
+  /** Arm a row. `replacing` is the key being changed, or null to add one. */
+  _capture(action, replacing) {
+    this._capturing = { action, replacing };
     this.showBinds();
-    btn.classList.add('arming');
-    btn.textContent = 'press a key…';
   }
 
   /** Paint every key row from whatever the input layer is actually using. */
   showBinds() {
-    if (!this.keyButtons) return;
-    for (const [action, btn] of this.keyButtons) {
-      btn.classList.toggle('arming', this._capturing === action);
-      if (this._capturing === action) { btn.textContent = 'press a key…'; continue; }
+    if (!this.keyRows) return;
+    const cap = this._capturing;
+    for (const [action, host] of this.keyRows) {
+      host.innerHTML = '';
       const keys = this.keysFor?.(action) ?? [];
-      btn.textContent = keys.length ? keys.map(keyLabel).join(' / ') : '—';
-      btn.classList.toggle('unbound', keys.length === 0);
+      for (const code of keys) {
+        const armed = !!cap && cap.action === action && cap.replacing === code;
+        host.appendChild(this._keyButton(
+          armed ? 'press a key…' : keyLabel(code), 'bindkey', armed,
+          () => this._capture(action, code)));
+      }
+      if (!keys.length) {
+        const none = document.createElement('span');
+        none.className = 'bindnone';
+        none.textContent = '—';
+        host.appendChild(none);
+      }
+      const adding = !!cap && cap.action === action && cap.replacing === null;
+      const plus = this._keyButton(adding ? 'press a key…' : '+', 'bindadd', adding,
+                                   () => this._capture(action, null));
+      plus.title = 'add another key for this action';
+      host.appendChild(plus);
     }
+  }
+
+  _keyButton(text, cls, armed, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls + (armed ? ' arming' : '');
+    b.textContent = text;
+    b.addEventListener('click', onClick);
+    return b;
   }
 
   _load() {
@@ -269,7 +299,7 @@ export function keyLabel(code) {
     return (m[1] === 'Control' ? 'Ctrl' : m[1]) + ' ' + (m[2] === 'Left' ? 'L' : 'R');
   }
   return ({
-    Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backquote: '`', Equal: '=',
+    Space: 'Space', Tab: 'Tab', Enter: 'Enter', Backquote: '`', Equal: '=', Escape: 'Esc',
     Minus: '-', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
     CapsLock: 'Caps', Backspace: 'Bksp', Slash: '/', Semicolon: ';', Quote: "'",
     BracketLeft: '[', BracketRight: ']', Comma: ',', Period: '.', Backslash: '\\'

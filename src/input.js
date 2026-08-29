@@ -12,8 +12,15 @@ export const DEFAULT_BINDS = {
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
   KeyF: 'fire',                       // keyboard-only fallback when there is no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
-  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3'
+  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3',
+  Backquote: 'settings', Escape: 'menu'
 };
+
+// These open something rather than holding something down, so they fire once on
+// the press and never enter the held set. Escape additionally opens the menu by
+// way of losing the pointer lock, which the browser does on its own — rebinding
+// `menu` adds a key, it cannot take Escape away.
+const UI_ACTIONS = new Set(['settings', 'menu']);
 
 // Shown in the settings panel, in this order. Anything not listed here is still
 // bindable in principle but has no row, which keeps the panel to one screen.
@@ -22,7 +29,7 @@ export const BINDABLE = [
   ['jump', 'Jump'], ['sprint', 'Sprint'], ['crouch', 'Crouch'],
   ['fire', 'Fire'], ['reload', 'Reload'], ['lastweapon', 'Last weapon'],
   ['weapon1', 'Weapon 1'], ['weapon2', 'Weapon 2'], ['weapon3', 'Weapon 3'],
-  ['score', 'Scoreboard']
+  ['score', 'Scoreboard'], ['settings', 'Open settings'], ['menu', 'Open menu']
 ];
 
 // Actions that can be held or latched. Sprint and jump are here because on a
@@ -165,7 +172,8 @@ export class Input {
         this.keyboardSeen = true;
         this.onKeyboardDetected?.();
       }
-      if (a) this.press(a);
+      if (a && UI_ACTIONS.has(a)) this.onAction?.(a);
+      else if (a) this.press(a);
       if (e.code in LOOK_KEYS) this.held.add('look' + e.code);
       this._recalcKeys();
     });
@@ -178,7 +186,7 @@ export class Input {
     // field in between, which is one click into the chat box away.
     addEventListener('keyup', e => {
       const a = this.binds[e.code];
-      if (a) this.release(a);
+      if (a && !UI_ACTIONS.has(a)) this.release(a);
       if (e.code in LOOK_KEYS) this.held.delete('look' + e.code);
       this._recalcKeys();
     });
@@ -497,15 +505,30 @@ export class Input {
     return Object.keys(this.binds).filter(code => this.binds[code] === action);
   }
 
-  /** Point one key at one action, taking that key off whatever else had it and
-   *  clearing the action's old keys — one row in the panel, one key. */
-  bind(action, code) {
+  /** Point a key at an action. `replacing` is the key being changed, if this is
+   *  an edit rather than an addition — an action may hold as many keys as the
+   *  player adds with `+`. The code is taken off whatever else had it either
+   *  way, so no key ever drives two actions at once.
+   *
+   *  Escape is refused: the browser owns it (it is how you get the mouse back,
+   *  and how the rebinding prompt is cancelled), so binding it would be a lie. */
+  bind(action, code, replacing = null) {
     if (!code || code === 'Escape') return false;
-    for (const c of Object.keys(this.binds)) {
-      if (this.binds[c] === action || c === code) delete this.binds[c];
-    }
+    delete this.binds[code];
+    if (replacing && replacing !== code) delete this.binds[replacing];
     this.binds[code] = action;
     // a rebind mid-game must not leave the old key stuck down
+    this.held.delete(action);
+    this.toggled.delete(action);
+    this._recalcKeys();
+    this._saveBinds();
+    return true;
+  }
+
+  /** Take one key off an action, leaving its other keys alone. */
+  unbind(action, code) {
+    if (this.binds[code] !== action) return false;
+    delete this.binds[code];
     this.held.delete(action);
     this.toggled.delete(action);
     this._recalcKeys();

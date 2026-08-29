@@ -38,9 +38,23 @@ against the live site.
 | `holdtoggle.mjs` | crouch and aim in hold or toggle mode |
 | `map.mjs` | every place you can stand lets you stand up |
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
-| `settings.mjs` | rebinding, four latchable actions, sprint button, pause overlay |
+| `settings.mjs` | rebinding and stacking keys, latchable actions, 3s/3s protection, pause overlay |
+| `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed |
 
 ## Things worth not rediscovering
+
+- **Bunny hopping worked because of a bug, and fixing the bug on its own capped
+  it at walking pace.** Ground contact was decided by the last collision
+  sub-step; at speed the landing frame reported `onGround` false, which skipped
+  the ground rules and preserved the chain's velocity by accident. Deciding
+  ground contact per *frame* is correct — it is what made hops reliable and
+  friction run at all — but it has to come with an explicit rule that a frame
+  ending in a jump keeps its velocity, or the chain is reset to walk speed on
+  every landing. Measured: peak 9.92 before, 6.22 after the half fix, 9.94 after
+  the whole one.
+- **`test/mechanics.mjs` had no assertions for months.** It printed beautiful
+  numbers and would have shipped the above in silence. It asserts now; a suite
+  that cannot fail is not a suite.
 
 - **A large `backdrop-filter` over the canvas costs a third of the frame rate,
   and keeps costing it after the element is hidden.** Growing `#editpanel` to fit
