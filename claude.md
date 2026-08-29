@@ -38,7 +38,7 @@ against the live site.
 | `holdtoggle.mjs` | crouch and aim in hold or toggle mode |
 | `map.mjs` | every place you can stand lets you stand up |
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
-| `settings.mjs` | rebinding and stacking keys, latchable actions, 3s/3s protection, pause overlay |
+| `settings.mjs` | rebinding and stacking keys, latchable actions, the 3s protection window, pause overlay |
 | `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed |
 | `slopes.mjs` | ramps are walkable and solid; a turned box collides where it was turned to |
 | `solid.mjs` | the convex layer, in node — no browser, no server, about a second |

@@ -45,7 +45,7 @@ const R = await page.evaluate(async () => {
   out.afterRightDown = state();
   down(0, 3); await sleep(50);
   out.thenLeftDown = state();
-  g.loadout.state[g.loadout.index].mag = 30; g.fireLockUntil = 0;
+  g.loadout.state[g.loadout.index].mag = 30; g.protectedUntil = 0;
   const mag = g.loadout.ammo.mag;
   await sleep(300);
   out.roundsFiredWhileAiming = mag - g.loadout.ammo.mag;
@@ -70,7 +70,7 @@ const R = await page.evaluate(async () => {
   await reset();
   down(2, 2); await sleep(40);
   down(0, 3); await sleep(40);
-  g.loadout.state[g.loadout.index].mag = 30; g.fireLockUntil = 0;
+  g.loadout.state[g.loadout.index].mag = 30; g.protectedUntil = 0;
   const magBeforeStray = g.loadout.ammo.mag;
   // the mask-transition guard only syncs when the mask *changes*, so seed it
   // with the true state or the stray events below are never even looked at

@@ -230,30 +230,65 @@ R.sprintButton = await page.evaluate(async () => {
            inTouchPad: !!el.closest('#tbuttons') };
 });
 
-// -------------------------------- leaving the panel shields and locks for 3s each
+// ----------------- leaving the panel gives one 3s window, not two of anything
+// The point of merging them is that the shield and the weapon lock are the same
+// state, so the test is: while it holds you cannot be hurt *and* cannot fire,
+// and when it ends both come back together. Firing is checked by whether a
+// round actually left the magazine, not by reading a timestamp.
 R.protection = await page.evaluate(async () => {
   const g = window.game;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const tryToFire = () => {
+    g.loadout.state[g.loadout.index].reloadEnd = 0;
+    g.loadout.state[g.loadout.index].mag = 30;
+    g.loadout.nextShot = 0;
+    g.input.held.add('fire');
+    g.input.justPressed.add('fire');
+    g._fire(performance.now() / 1000, g.input);
+    g.input.held.delete('fire');
+    g.input.justPressed.delete('fire');
+    return g.loadout.state[g.loadout.index].mag < 30;
+  };
+
   g.input.setToggleMode('jump', false);
   g._startEdit();
-  await new Promise(f => setTimeout(f, 150));
+  await sleep(150);
   const shieldedWhileEditing = g.shielded;
   const hp = g.player.hp;
   g._takeHit('someone', { dmg: 90 });
   const damageIgnored = g.player.hp === hp;
   g._endEdit();
-  await new Promise(f => setTimeout(f, 100));
+  await sleep(100);
   const t = performance.now();
+  const hp2 = g.player.hp;
+  g._takeHit('someone', { dmg: 90 });
   return {
     shieldedWhileEditing, damageIgnored,
-    shieldLeft: +((g.shieldUntil - t) / 1000).toFixed(1),
-    lockLeft: +((g.fireLockUntil - t) / 1000).toFixed(1)
+    protectedFor: +((g.protectedUntil - t) / 1000).toFixed(1),
+    stillShielded: g.shielded,
+    damageStillIgnored: g.player.hp === hp2,
+    firedWhileProtected: tryToFire(),
+    // one field, not two: there is no second timer left to disagree with it
+    hasOnlyOneTimer: g.shieldUntil === undefined && g.fireLockUntil === undefined
   };
 });
 await page.waitForTimeout(3100);
-R.protectionGone = await page.evaluate(() => ({
-  shielded: window.game.shielded,
-  fireLocked: performance.now() < window.game.fireLockUntil
-}));
+R.protectionGone = await page.evaluate(() => {
+  const g = window.game;
+  g.loadout.state[g.loadout.index].reloadEnd = 0;
+  g.loadout.state[g.loadout.index].mag = 30;
+  g.loadout.nextShot = 0;
+  g.input.held.add('fire');
+  g.input.justPressed.add('fire');
+  g._fire(performance.now() / 1000, g.input);
+  g.input.held.delete('fire');
+  g.input.justPressed.delete('fire');
+  return {
+    shielded: g.shielded,
+    timerPassed: performance.now() >= g.protectedUntil,
+    firedAfterwards: g.loadout.state[g.loadout.index].mag < 30
+  };
+});
 
 // ----------------------------------------------------- pause draws over the game
 R.pause = await page.evaluate(async () => {
@@ -324,9 +359,12 @@ if (!R.sprintButton.inTouchPad) fail.push('the sprint button is not on the touch
 if (!R.sprintButton.whileDown) fail.push('the sprint button does not press sprint');
 if (R.sprintButton.afterUp) fail.push('the sprint button stayed down after release');
 if (!R.protection.shieldedWhileEditing || !R.protection.damageIgnored) fail.push('the editing shield does not block damage');
-if (Math.abs(R.protection.shieldLeft - 3) > 0.3) fail.push('the shield is not 3s: ' + R.protection.shieldLeft);
-if (Math.abs(R.protection.lockLeft - 3) > 0.3) fail.push('the weapon lock is not 3s: ' + R.protection.lockLeft);
-if (R.protectionGone.shielded || R.protectionGone.fireLocked) fail.push('shield or weapon lock outlasted 3s: ' + JSON.stringify(R.protectionGone));
+if (Math.abs(R.protection.protectedFor - 3) > 0.3) fail.push('protection is not 3s: ' + R.protection.protectedFor);
+if (!R.protection.stillShielded || !R.protection.damageStillIgnored) fail.push('damage got through the tail of the shield');
+if (R.protection.firedWhileProtected) fail.push('the gun fired while still shielded — the two are meant to be one state');
+if (!R.protection.hasOnlyOneTimer) fail.push('there is still a second timer: ' + JSON.stringify(R.protection));
+if (R.protectionGone.shielded || !R.protectionGone.timerPassed) fail.push('protection outlasted 3s: ' + JSON.stringify(R.protectionGone));
+if (!R.protectionGone.firedAfterwards) fail.push('the gun never came back after protection ended: ' + JSON.stringify(R.protectionGone));
 if (!R.pause.menuShown || !R.pause.isOverlay || !R.pause.bodyPaused) fail.push('pause did not open as an overlay');
 if (!R.pause.blurred) fail.push('the paused view is not blurred');
 if (!R.pause.seeThrough) fail.push('the pause screen is opaque, so the game is not behind it');
@@ -346,5 +384,5 @@ if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 console.log(JSON.stringify(R, null, 2));
 console.log('page errors:', errs.length ? errs : 'none');
 if (fail.length) { console.log('FAIL: ' + fail.join('\n      ')); await browser.close(); process.exit(1); }
-console.log('PASS — keys rebind, stack and clear; four actions latch; 3s/3s protection; pause floats over the game');
+console.log('PASS — keys rebind, stack and clear; four actions latch; one 3s protection window; pause floats over the game');
 await browser.close();

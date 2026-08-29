@@ -71,6 +71,11 @@ once and the hops keep coming, leaving both thumbs for the stick and the aim.
 `Esc` **pauses over the game rather than instead of it** — the match stays on
 screen behind a blur, the pointer is released, and the panel is there to use.
 
+Opening the settings panel **shields you and locks your gun**, and both carry on
+for three seconds after you close it. That is one window, not two: you cannot be
+shot while sorting your keys out, and you cannot edit your way into a free shot
+either.
+
 On a phone, **turn the device sideways**. Portrait works, and the camera widens
 its field of view to compensate, but landscape is far better to play in.
 
@@ -313,7 +318,7 @@ time: a rooftop with walkable ground underneath and 0.7m of headroom traps a
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
 camera is looking, at nine different yaws. `test/mechanics.mjs` measures the
-movement feel and the protection rules — ground control, latched sprint, the
+movement feel and the protection rule — ground control, latched sprint, the
 crouch animation, stair smoothing, bunny-hop speed gain, aiming, and the layout
 editor's shield. It exists because the movement basis
 was once mirrored in z: W and S inverted when facing along z, A and D inverted

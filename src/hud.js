@@ -104,12 +104,11 @@ export class Hud {
   ads(on) { this._set('ads', !!on, v => this.el.crosshair.classList.toggle('ads', v)); }
 
   /** Local-only readout: nobody else can see that you are shielded. */
-  protection(text, locked) {
+  protection(text) {
     this._set('prot', text, v => {
       this.el.protection.classList.toggle('hidden', !v);
       this.el.protection.textContent = v || '';
     });
-    this._set('protlock', !!locked, v => this.el.protection.classList.toggle('locked', v));
   }
 
   feed(html, cls = '') {

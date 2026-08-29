@@ -250,7 +250,6 @@ body:not(.touch-ui) .touchonly{display:none}
 #protection{position:absolute;left:50%;top:62%;transform:translateX(-50%);
   text-align:center;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--accent2);text-shadow:0 2px 6px #000;white-space:pre-line;line-height:1.7}
-#protection.locked{color:var(--accent)}
 
 
 /* ---------------- paused over the game ---------------- */

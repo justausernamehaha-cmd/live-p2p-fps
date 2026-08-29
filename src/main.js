@@ -15,8 +15,11 @@ import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } f
 
 const STATE_HZ = 20;
 const RESPAWN_TIME = 3;
-const EDIT_SHIELD_TAIL = 3000;   // ms of protection carried out of the layout editor
-const EDIT_FIRE_LOCK = 3000;     // ms before the gun works again after editing
+// One timer, not two. The shield and the weapon lock always ran for the same
+// three seconds and always started together, so keeping them apart only made it
+// possible for them to disagree — and gave the player two numbers to read where
+// there was one thing happening.
+const EDIT_PROTECTION = 3000;    // ms carried out of the settings panel
 // The one room code that opens the level designer instead of a match. Matched
 // before the code is normalised, so `level design` and `level-design` both work.
 const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
@@ -45,8 +48,9 @@ class Game {
     this.deathAt = 0;
     this.editing = false;
     this.design = null;        // the level designer, while a design room is open
-    this.shieldUntil = 0;      // ms timestamps; while shielded, incoming damage is ignored
-    this.fireLockUntil = 0;
+    // ms timestamp; until it passes, incoming damage is ignored and the gun
+    // does not fire. You cannot be shot while editing, and you cannot shoot.
+    this.protectedUntil = 0;
     this.adsT = 0;             // 0 hipfire, 1 fully aimed; 0.4s each way
 
     this._initThree();
@@ -543,14 +547,16 @@ class Game {
     this.editing = false;
     this.input.editMode = false;
     this.layout.exit();
-    // the shield does not vanish the instant the panel closes, but it does not
-    // linger either: three seconds to get to cover, five before the gun works
-    this.shieldUntil = now() + EDIT_SHIELD_TAIL;
-    this.fireLockUntil = now() + EDIT_FIRE_LOCK;
+    // protection does not vanish the instant the panel closes, but it does not
+    // linger either: three seconds to get to cover, and the gun is dead for
+    // exactly as long, so nobody can edit their way into a free shot
+    this.protectedUntil = now() + EDIT_PROTECTION;
     this._relock();
   }
 
-  get shielded() { return this.editing || now() < this.shieldUntil; }
+  /** True while incoming damage is ignored — and, for the same window, while
+   *  the gun will not fire. The two are one state. */
+  get shielded() { return this.editing || now() < this.protectedUntil; }
 
   async _toggleFullscreen() {
     try {
@@ -590,7 +596,7 @@ class Game {
 
   _fire(t, input) {
     const p = this.player;
-    if (!p.alive || now() < this.fireLockUntil) return;
+    if (!p.alive || this.shielded) return;
     const w = this.loadout.tryFire(t, input.down('fire'), input.pressed('fire'));
     if (!w) return;
 
@@ -819,19 +825,15 @@ class Game {
 
     // shield and fire lock are only ever shown to the player they apply to
     const t = now();
-    const shieldLeft = this.editing ? Infinity : (this.shieldUntil - t) / 1000;
-    const lockLeft = (this.fireLockUntil - t) / 1000;
+    const left = (this.protectedUntil - t) / 1000;
     if (this.design) {
-      this.hud.protection('', false);     // nobody to be shielded from in here
+      this.hud.protection('');            // nobody to be shielded from in here
     } else if (this.editing) {
-      this.hud.protection('shielded while editing', false);
-    } else if (lockLeft > 0 || shieldLeft > 0) {
-      const parts = [];
-      if (shieldLeft > 0) parts.push(`shielded ${shieldLeft.toFixed(1)}s`);
-      if (lockLeft > 0) parts.push(`weapon locked ${lockLeft.toFixed(1)}s`);
-      this.hud.protection(parts.join('\n'), lockLeft > 0 && shieldLeft <= 0);
+      this.hud.protection('shielded while editing\nweapon locked');
+    } else if (left > 0) {
+      this.hud.protection(`shielded · weapon locked ${left.toFixed(1)}s`);
     } else {
-      this.hud.protection('', false);
+      this.hud.protection('');
     }
 
     const a = this.loadout.ammo, w = this.loadout.weapon;

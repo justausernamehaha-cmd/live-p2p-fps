@@ -300,13 +300,12 @@ await page.click('#donelayout');
 await page.waitForTimeout(300);
 const after = await page.evaluate(() => ({
   stillShielded: window.game.shielded,
-  fireLockedFor: +((window.game.fireLockUntil - performance.now()) / 1000).toFixed(1),
-  shieldLeft: +((window.game.shieldUntil - performance.now()) / 1000).toFixed(1)
+  protectedFor: +((window.game.protectedUntil - performance.now()) / 1000).toFixed(1)
 }));
 await page.waitForTimeout(3200);
 const later = await page.evaluate(() => ({
-  shieldExpired: !window.game.shielded,
-  stillFireLocked: performance.now() < window.game.fireLockUntil
+  protectionExpired: !window.game.shielded,
+  timerPassed: performance.now() >= window.game.protectedUntil
 }));
 
 const out = { ...R, edit: { ...editing, ...blocked }, onExit: after, after3s: later };
@@ -322,10 +321,9 @@ if (!(b.peak > 8.5)) fail.push('bunny hopping does not build speed: peak ' + b.p
 if (!b.straightLineGainsNothing) fail.push('hopping in a straight line built speed, and it must not: ' + b.straightLinePeak);
 if (!(out.edit && out.edit.shielded)) fail.push('the editor does not shield');
 if (out.edit && out.edit.hpAfter !== out.edit.hpBefore) fail.push('damage got through the editing shield');
-if (!(out.onExit && Math.abs(out.onExit.shieldLeft - 3) < 0.4)) fail.push('the shield tail is not 3s: ' + out.onExit?.shieldLeft);
-if (!(out.onExit && Math.abs(out.onExit.fireLockedFor - 3) < 0.4)) fail.push('the weapon lock is not 3s: ' + out.onExit?.fireLockedFor);
-if (!(out.after3s && out.after3s.shieldExpired)) fail.push('the shield outlasted 3s');
-if (out.after3s && out.after3s.stillFireLocked) fail.push('the weapon lock outlasted 3s');
+if (!(out.onExit && Math.abs(out.onExit.protectedFor - 3) < 0.4)) fail.push('protection is not 3s: ' + out.onExit?.protectedFor);
+if (!(out.after3s && out.after3s.protectionExpired)) fail.push('protection outlasted 3s');
+if (!(out.after3s && out.after3s.timerPassed)) fail.push('the protection timer outlasted 3s');
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 if (fail.length) { console.log('FAIL: ' + fail.join('\n      ')); await browser.close(); process.exit(1); }
 console.log('PASS');
