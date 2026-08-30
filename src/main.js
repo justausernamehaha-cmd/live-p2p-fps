@@ -11,6 +11,7 @@ import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
 import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
+import { portalMap } from './portal.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
@@ -27,6 +28,9 @@ const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
 // Stands in for a killer that is not a player. Peers read it out of the same
 // death message a real kill uses, so the killfeed needs no second channel.
 const CRUSHED_BY = '#platform';
+// How many mouths one shot may go through. Two is enough for every shape a pair
+// of portals can make, and it bounds a pathological loop.
+const SHOT_PORTALS = 2;
 const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
                   (navigator.maxTouchPoints > 1 && !matchMedia('(pointer:fine)').matches);
 
@@ -208,18 +212,24 @@ class Game {
     // silently.
     const kblock = document.getElementById('kblock');
     const kblockVal = document.getElementById('kblockval');
+    // Says what is actually true, not what was asked for. Keyboard lock needs
+    // the API, element fullscreen, and a granted request; short of all three the
+    // browser still owns Ctrl+W and the panel should not pretend otherwise.
     const showKblock = () => {
-      kblockVal.textContent = kblock.checked
-        ? (document.fullscreenElement ? 'shortcuts blocked' : 'goes fullscreen')
-        : 'browser keeps them';
+      kblockVal.textContent = !kblock.checked ? 'browser keeps them'
+        : !navigator.keyboard?.lock ? 'this browser cannot'
+        : this.input.shortcutsBlocked ? 'blocked'
+        : 'click the game to arm';
     };
+    this._showKblock = showKblock;
     kblock.checked = this.input.wantFullscreenLock;
     showKblock();
     kblock.addEventListener('change', () => {
       this.input.setFullscreenLock(kblock.checked);
       showKblock();
     });
-    document.addEventListener('fullscreenchange', showKblock);
+    document.addEventListener('fullscreenchange', () => setTimeout(showKblock, 60));
+    document.addEventListener('pointerlockchange', () => setTimeout(showKblock, 60));
 
     // F3 shows exactly what the input layer thinks is happening, so a report of
     // "it did something strange" can be answered with numbers
@@ -706,6 +716,7 @@ class Game {
 
     const damageByPeer = new Map();
     let endPoint = null;
+    let tracerPath = null;
 
     for (let i = 0; i < w.pellets; i++) {
       const dir = base.clone();
@@ -716,8 +727,9 @@ class Game {
         dir.normalize();
       }
       const hit = this._raycast(eye, dir, w.range);
-      const end = eye.clone().addScaledVector(dir, hit.dist);
+      const end = hit.end;
       if (!endPoint) endPoint = end;
+      if (!tracerPath) tracerPath = hit.points;
 
       if (hit.player && !hit.player.shielded) {
         const dmg = w.damage * (hit.head ? HEADSHOT_MULT : 1);
@@ -728,15 +740,17 @@ class Game {
       } else if (hit.dist < w.range) {
         this.effects.impact(end, dir);
       }
-      if (w.pellets > 1) this.effects.tracer(muzzle, end, w.color);
+      if (w.pellets > 1) this._drawTracer(muzzle, hit.points, w.color);
     }
 
-    if (w.pellets === 1) this.effects.tracer(muzzle, endPoint, w.color);
+    if (w.pellets === 1) this._drawTracer(muzzle, tracerPath, w.color);
     this.effects.muzzle(w.shakeScale);
     this.viewmodel.fire(w.shakeScale);
     this.audio.shot(w.id, 0);
     p.addRecoil(w.recoil, (Math.random() - 0.5) * w.recoilYaw * 2);
-    this.net?.shot(muzzle, endPoint, w.id);
+    // peers get the first leg only: past a portal the line would cut across the
+    // map, and a tracer through a wall reads as a bug rather than as a portal
+    this.net?.shot(muzzle, (tracerPath && tracerPath[1]) || endPoint, w.id);
 
     let killed = false;
     for (const [id, e] of damageByPeer) {
@@ -774,6 +788,15 @@ class Game {
     }
   }
 
+  /** One tracer per leg of the path, the first starting at the gun's own muzzle
+   *  rather than at the eye. */
+  _drawTracer(muzzle, points, color) {
+    if (!points || points.length < 2) return;
+    for (let i = 0; i + 1 < points.length; i += 2) {
+      this.effects.tracer(i === 0 ? muzzle : points[i], points[i + 1], color);
+    }
+  }
+
   _aimDirection() {
     const p = this.player;
     const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
@@ -785,14 +808,44 @@ class Game {
     ).normalize();
   }
 
+  /** Trace a shot, through any portals it meets on the way.
+   *
+   *  Returns where it ended and who it hit, plus `points` — the corners of the
+   *  path it actually took, so the tracer can be drawn bent instead of passing
+   *  straight through a wall. `dist` is the whole distance travelled, which is
+   *  what the weapon's range is spent on. */
   _raycast(origin, dir, range) {
-    let dist = this.world.raycast(origin, dir, range);
-    let best = { dist, player: null, head: false };
-    for (const r of this.remotes.values()) {
-      const h = r.raycast(origin, dir, best.dist);
-      if (h && h.dist < best.dist) best = { dist: h.dist, player: r, head: h.head };
+    const points = [origin.clone()];
+    let o = origin.clone(), d = dir.clone(), left = range, travelled = 0;
+
+    for (let hop = 0; ; hop++) {
+      let seg = { dist: this.world.raycast(o, d, left), player: null, head: false };
+      for (const r of this.remotes.values()) {
+        const h = r.raycast(o, d, seg.dist);
+        if (h && h.dist < seg.dist) seg = { dist: h.dist, player: r, head: h.head };
+      }
+
+      // a mouth in the way, before anything solid or anybody standing there
+      const gate = hop < SHOT_PORTALS ? this.portals.rayHit(o, d, seg.dist) : null;
+      if (gate) {
+        const at = o.clone().addScaledVector(d, gate.t);
+        const map = portalMap(gate.from, gate.to);
+        const out = map.point(at), nd = map.dir(d);
+        points.push(at);
+        travelled += gate.t;
+        left -= gate.t;
+        d = new THREE.Vector3(nd.x, nd.y, nd.z).normalize();
+        // step off the exit's own plane, or the ray leaves through the face it
+        // just arrived at and the shot stops dead in the wall it came out of
+        o = new THREE.Vector3(out.x, out.y, out.z).addScaledVector(d, 0.02);
+        points.push(o.clone());
+        if (left > 0.01) continue;
+      }
+
+      const end = o.clone().addScaledVector(d, seg.dist);
+      points.push(end);
+      return { dist: travelled + seg.dist, player: seg.player, head: seg.head, end, points };
     }
-    return best;
   }
 
   // ------------------------------------------------------------------- loop
@@ -950,6 +1003,8 @@ class Game {
           `stick     x=${i.stick.x.toFixed(2)} y=${i.stick.y.toFixed(2)}`,
           `mouse     locked=${i.pointerLocked} raw=${i.rawInput} drag=${!!i._mouseDrag}`,
           `locks     ${i.lockChanges} changes, dropped ${i.dropped} spikes`,
+          `keyboard  fullscreen=${!!document.fullscreenElement} locked=${i.keyboardLocked} ` +
+            `blocked=${i.shortcutsBlocked}  <- false here means Ctrl+W still closes the tab`,
           `clamped   ${i.clamped} events, last ${i.lastClamp[0]},${i.lastClamp[1]} -> capped at 80px`,
           `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
           `lastMove  ${i.lastMovement[0]}, ${i.lastMovement[1]}  (spikes are dropped)`,

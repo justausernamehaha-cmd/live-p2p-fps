@@ -282,6 +282,17 @@ Everything below was found by measuring the running game, never by reading.
   walls** they used to fly over. Platform routes are swept along their whole run
   against every static box now, in `test/portals.mjs`; eyeballing it got it wrong
   in both directions.
+- **A portal must never hang off its wall**, so the slide is back: the erosion
+  gives every legal centre and the nearest point of it to the shot is where the
+  mouth goes. The earlier "it shouldn't move" turned out to be about the ring
+  *spinning*, which is a separate fix and stays.
+- **Bullets recurse through mouths** — `rayPortal()` for the geometry,
+  `_raycast()` hops up to twice and returns the corners of the path so the tracer
+  bends instead of crossing a wall. The exit ray has to be stepped off the exit's
+  own plane or it leaves through the face it just arrived at.
+- **Standing still in a mouth goes through it**, which forced `EXIT_CLEAR` up from
+  0.22 to 0.45: leaving a portal used to land you inside the band that counts as
+  standing in one, and you would be pulled straight back.
 - **Ctrl+W cannot be stopped by `preventDefault()`.** Only the Keyboard Lock API
   can, and only in fullscreen — so capturing the mouse takes the page fullscreen
   to earn it. That is a real trade, so it is a checkbox.

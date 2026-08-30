@@ -83,8 +83,7 @@ const PORTAL_COOLDOWN = 0.14;   // stops a pair sitting close together strobing
 // How close the body has to be to a surface to count as touching it. A portal is
 // a hole: if you are against the wall and the hole is where you are, the wall is
 // not there for you, whichever way you happen to be walking.
-const PORTAL_CONTACT = RADIUS + 0.05;
-const PORTAL_CONTACT_SPEED = 0.5;   // ...and you have to actually be moving
+const PORTAL_CONTACT = RADIUS + 0.03;
 // Being crushed happens in two stages, so it can be seen coming. A platform
 // closing on your head forces you down into a crouch first; only once it has
 // pushed past that — half a head deeper — does it kill you.
@@ -614,11 +613,16 @@ export class Player {
 
   /** Is the body up against this mouth's surface, and inside the mouth?
    *
+   *  Standing still counts. A hole in a wall you are already standing in is a
+   *  hole you fall through, and waiting for the player to be moving meant you
+   *  could press yourself into a mouth and simply stay there.
+   *
    *  Distance is measured to the portal's own plane, so "touching" means what it
    *  means for collision: a radius clear of the face. Standing anywhere in open
-   *  space — between two mouths, say — is metres from any plane and never counts. */
+   *  space — between two mouths, say — is far outside that band and never counts,
+   *  and EXIT_CLEAR is set wide enough that leaving a portal does not land you
+   *  back inside its partner's. */
   _inMouth(p) {
-    if (Math.hypot(this.vel.x, this.vel.z) < PORTAL_CONTACT_SPEED) return false;
     for (const frac of PORTAL_SAMPLES) {
       const y = this.pos.y + this.height * frac;
       const dx = this.pos.x - p.c.x, dy = y - p.c.y, dz = this.pos.z - p.c.z;

@@ -175,11 +175,15 @@ colour of your left-click portal and the right one the colour of your right.
 
 A portal is an oval **two metres tall and 1.36 wide**, and it goes on any surface
 with room for the whole of it — walls, floors, ceilings, ramps, the side of a
-moving platform. It lands **exactly where you shot it** and stays there: it does
-not shuffle itself along until its border lines up with the block's edge, and it
-does not turn once it is placed. Shot at something too small to hold a portal at
-all it **explodes and is gone**: the end of a cover wall is one metre thick and a
-portal is 1.36 wide, so that wall takes one on its face and never on its edge.
+moving platform. **No part of one ever hangs off its surface**: shot too near an
+edge it slides inward until the whole oval is on the wall, and no further than it
+had to. It does not turn once it is placed. Shot at something too small to hold a
+portal at all it **explodes and is gone**: the end of a cover wall is one metre
+thick and a portal is 1.36 wide, so that wall takes one on its face and never on
+its edge.
+
+**Bullets go through them too**, up to two mouths deep, and the tracer bends with
+the shot rather than passing through the wall.
 
 **You can see through them.** Each mouth is a window onto whatever is in front of
 the other one, rendered from a camera put through the portal exactly the way you
@@ -202,7 +206,8 @@ and no negotiation.
 
 Walking in is meant to be easy. Any part of your body through the mouth is you
 through it, and the rim counts: brush the very edge with a shoulder and you go
-in rather than scraping along it. You can stand between two of them without being
+in rather than scraping along it. Standing still in one is enough — a hole you
+are already stood in is a hole you fall through. You can stand between two of them without being
 thrown about — nothing moving into a mouth means nothing goes through it. And you
 **keep everything you had**. Your speed is turned into the
 exit's direction, not scrubbed, so a long drop into a portal on the floor comes

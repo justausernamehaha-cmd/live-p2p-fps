@@ -174,23 +174,6 @@ const R = await page.evaluate(async () => {
     out.broadAccepted = !!(p3 && p3.a);
   }
 
-  // --------------------------------------------- it goes where it was shot
-  // Not shuffled along until its border lines up with the block's edge. Fired
-  // hard into the corner of the arena's floor-level wall, the portal has to
-  // appear at the point of impact, overhang and all.
-  g.portals.clear();
-  const wall = g.world.boxes.find(b => b.min.z < -59 && b.max.x - b.min.x > 100);
-  out.foundOuterWall = !!wall;
-  if (wall) {
-    const aimY = 0.35;                       // low enough that a slide would show
-    g.portals.fire('me', { x: 12, y: aimY, z: -50 }, { x: 0, y: 0, z: -1 }, 'a');
-    await sleep(700);
-    const pa = g.portals.pairs.get('me')?.a;
-    out.shotWhereAimed = pa ? round(Math.abs(pa.c.y - aimY)) : null;
-    out.landedAtImpact = !!pa && Math.abs(pa.c.y - aimY) < 0.02 && Math.abs(pa.c.x - 12) < 0.02;
-    out.allowedToOverhang = !!pa && pa.c.y - 1.0 < 0;      // half of a 2 m portal
-  }
-
   // ------------------------------------------------------- 2 m tall, oval
   out.portalHeight = round(2 * 1.0);
   const anyPortal = g.portals.pairs.get('me')?.a;
@@ -274,6 +257,71 @@ const R = await page.evaluate(async () => {
     .some(pr => ['a', 'b'].some(k => pr[k] && pr[k].light));
   out.sceneLightCount = g.scene.children.filter(c => c.isLight).length;
   out.selfHiddenFromOwnCamera = g.selfAvatar.group.visible === false;
+
+  // ----------------------------------------- a mouth never hangs off its wall
+  // Shot hard into a corner, it slides inward until the whole oval is on the
+  // face — the least it can move and still be entirely on the surface.
+  g.portals.clear();
+  const bigWall = g.world.boxes.find(b => b.min.z < -59 && b.max.x - b.min.x > 100);
+  out.foundOuterWall = !!bigWall;
+  if (bigWall) {
+    g.portals.fire('me', { x: 12, y: 0.3, z: -50 }, { x: 0, y: 0, z: -1 }, 'a');
+    await sleep(700);
+    const pa = g.portals.pairs.get('me')?.a;
+    out.slidClear = !!pa && pa.c.y - 1.0 >= -0.01;   // half of a 2 m portal, on the floor side
+    out.slidTo = pa ? round(pa.c.y) : null;
+  }
+
+  // -------------------------------------- standing still is enough to go in
+  g.portals.clear();
+  g.portals.fire('me', { x: -30, y: 1.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
+  g.portals.fire('me', { x: 0, y: 1.6, z: -20 }, { x: 0, y: 0, z: 1 }, 'b');
+  await sleep(900);
+  const wm = g.portals.pairs.get('me')?.a;
+  if (wm) {
+    park(wm.c.x, 0.05, wm.c.z + 0.19, 0);
+    keys();
+    const before = g.player.portalCount;
+    await sleep(600);
+    out.stillWentThrough = g.player.portalCount - before > 0;
+  }
+
+  // ...and stepping out of one does not drop you straight back into it
+  g.portals.clear();
+  const X2 = -52;
+  g.portals.place('me', 'a', { c: { x: X2, y: 1.2, z: -3 }, n: { x: 0, y: 0, z: 1 },
+    u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: X2 + 30, y: 1.2, z: 0 }, n: { x: 1, y: 0, z: 0 },
+    u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  park(X2, 0.05, 0, 0);
+  keys('fwd');
+  await sleep(500);
+  keys();
+  const settled = g.player.portalCount;
+  await sleep(1200);
+  out.noBounceBack = g.player.portalCount - settled;
+
+  // ------------------------------------------- bullets go through them too
+  g.portals.clear();
+  g.portals.place('me', 'a', { c: { x: X2, y: 1.6, z: -3 }, n: { x: 0, y: 0, z: 1 },
+    u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: 0, y: 1.6, z: -59.5 }, n: { x: 0, y: 0, z: 1 },
+    u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  park(X2, 0.05, 0, 0);
+  g.player.portalCooldown = 999;                 // stay put; this is about the bullet
+  await sleep(200);
+  const V = g._aimDirection().constructor;
+  const eye = new V(g.player.pos.x, g.player.eyeY, g.player.pos.z);
+  const aim = g._aimDirection();
+  const shot = g._raycast(eye.clone(), aim, 200);
+  out.shotLegs = shot.points.length;
+  out.shotEnd = { x: round(shot.end.x), z: round(shot.end.z) };
+  g.portals.clear();
+  await sleep(150);
+  const plain = g._raycast(eye.clone(), aim, 200);
+  out.plainLegs = plain.points.length;
+  out.plainEnd = { x: round(plain.end.x), z: round(plain.end.z) };
+  g.player.portalCooldown = 0;
 
   // ------------------------------------- every platform's run is clear of the level
   // Swept along its whole path against every static box, because eyeballing this
@@ -675,9 +723,6 @@ want('...standing upright on it', R.placedUpright, R.placedUpright);
 want('a surface too narrow explodes instead', R.thinRefused, { face: R.thinFace, refused: R.thinRefused });
 want('...while the same wall\'s broad side takes one', R.broadAccepted, R.broadAccepted);
 
-want('a portal lands exactly where it was shot', R.landedAtImpact,
-  { offBy: R.shotWhereAimed });
-want('...and is allowed to hang over the edge', R.allowedToOverhang, R.allowedToOverhang);
 want('a portal is 2 m tall', R.portalHeight === 2, R.portalHeight);
 want('...taller than it is wide', R.discIsUpright, R.discIsUpright);
 want('...with the ring on the mouth, not around it', R.ringMatchesDisc, R.ringMatchesDisc);
@@ -707,6 +752,16 @@ want('a mouth on a lift hands over the lift\'s motion',
   { onLift: R.exitOnLift, offLift: R.exitOffLift, liftSpeed: R.liftSpeed });
 want('walking along a wall into a mouth on it goes in', R.hugWalkedIn,
   { pressedAt: R.pressedAgainstWall, wentIn: R.hugWalkedIn });
+
+want('a portal never hangs off the wall it is on', R.slidClear, { slidTo: R.slidTo });
+want('standing still in a mouth takes you through', R.stillWentThrough, R.stillWentThrough);
+want('...and coming out of one does not put you back in', R.noBounceBack === 0, R.noBounceBack);
+want('a bullet goes through a portal', R.shotLegs > 2, { legs: R.shotLegs, end: R.shotEnd });
+want('...and comes out somewhere the straight shot never reaches',
+  R.shotEnd && R.plainEnd && (Math.abs(R.shotEnd.x - R.plainEnd.x) > 5 ||
+                              Math.abs(R.shotEnd.z - R.plainEnd.z) > 5),
+  { throughPortal: R.shotEnd, straight: R.plainEnd });
+want('...while the same shot with no portals is one straight leg', R.plainLegs === 2, R.plainLegs);
 
 want('no platform\'s run touches the level it runs through',
   R.pathHits && R.pathHits.every(n => n === 0), R.pathHits);

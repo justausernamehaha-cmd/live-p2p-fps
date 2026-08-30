@@ -167,6 +167,16 @@ export class Input {
     // Remembered, so anyone who would rather keep their browser chrome can turn
     // it off once in the settings panel and be left alone about it.
     this.wantFullscreenLock = localStorage.getItem('pa.kblock') !== '0';
+    this.keyboardLocked = false;      // did navigator.keyboard.lock() actually take?
+    // Entering fullscreen by any route is a chance to take the keyboard, and
+    // leaving it always loses it.
+    document.addEventListener('fullscreenchange', () => {
+      if (document.fullscreenElement) {
+        if (this.wantFullscreenLock && this.pointerLocked) this._grabKeyboard();
+      } else {
+        this.keyboardLocked = false;
+      }
+    });
 
     this._touchMove = null;         // {id, ox, oy}
     this._touchLook = null;         // {id, x, y}
@@ -262,6 +272,15 @@ export class Input {
       // worth tens of degrees. That is a spike per click, not just on the first.
       const reallyLocked = document.pointerLockElement === this.canvas;
       if (reallyLocked !== this.pointerLocked) this.pointerLocked = reallyLocked;
+
+      // Every click, not only the one that captures the mouse. requestFullscreen()
+      // and keyboard.lock() both need a live user gesture, and a click is the
+      // only one going — called from pointerlockchange, as this used to be, the
+      // fullscreen request is rejected outright and the keyboard is never taken,
+      // which is why Ctrl+W went on closing the tab. Leaving fullscreen keeps the
+      // pointer lock, so gating this on "not yet locked" would mean it could
+      // never be re-armed afterwards either.
+      if (!this.suspendLock && !this.shortcutsBlocked) this._grabKeyboard();
 
       if (!reallyLocked && !this.lockRefused && !this.suspendLock) {
         if (this.canvas.requestPointerLock) {
@@ -374,6 +393,7 @@ export class Input {
         this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
+        this.keyboardLocked = false;
         try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
         this._mouseHeld.clear();
         this.releaseAll();         // nothing may survive losing the mouse
@@ -391,16 +411,33 @@ export class Input {
    *  best-effort — a browser that will not play along simply keeps its
    *  shortcuts, and everything else still works. */
   _grabKeyboard() {
+    if (!this.wantFullscreenLock) return;
     const lock = () => {
-      try { navigator.keyboard?.lock?.()?.catch?.(() => {}); } catch { /* unsupported */ }
+      const k = navigator.keyboard;
+      if (!k || !k.lock) { this.keyboardLocked = false; return; }
+      try {
+        const p = k.lock();
+        if (p && p.then) p.then(() => { this.keyboardLocked = true; })
+                          .catch(() => { this.keyboardLocked = false; });
+        else this.keyboardLocked = true;
+      } catch { this.keyboardLocked = false; }
     };
+    // Browser fullscreen — the one you get from F11 — is not element fullscreen,
+    // and keyboard lock only bites in the second. `fullscreenElement` is null
+    // under F11, so this asks for the real thing rather than assuming.
     if (document.fullscreenElement) { lock(); return; }
-    if (!this.wantFullscreenLock) { lock(); return; }
     try {
       const p = document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
-      if (p && p.then) p.then(lock).catch(lock);
+      if (p && p.then) p.then(lock).catch(() => { this.keyboardLocked = false; });
       else lock();
-    } catch { lock(); }
+    } catch { this.keyboardLocked = false; }
+  }
+
+  /** True only when the reserved combinations really are ours. Anything less —
+   *  no API, no fullscreen, a refused request — and the browser still owns
+   *  Ctrl+W, which the settings panel says out loud rather than implying. */
+  get shortcutsBlocked() {
+    return !!(this.keyboardLocked && document.fullscreenElement);
   }
 
   /** A refusal is only worth respecting for a moment; after that, try again. */
@@ -734,7 +771,11 @@ export class Input {
   setFullscreenLock(on) {
     this.wantFullscreenLock = !!on;
     try { localStorage.setItem('pa.kblock', on ? '1' : '0'); } catch { /* private mode */ }
-    if (on && this.pointerLocked) this._grabKeyboard();
+    if (on) this._grabKeyboard();      // the click on the checkbox is the gesture
+    else {
+      this.keyboardLocked = false;
+      try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
+    }
   }
 
   setTextMode(on) {

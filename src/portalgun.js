@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  HALF_W, HALF_H, faceOf, fitPortal, overlapsPartner, assignHues, SOLO_PAIR
+  HALF_W, HALF_H, faceOf, fitPortal, overlapsPartner, assignHues, SOLO_PAIR, rayPortal
 } from './portal.js';
 
 // Everything you can see about a portal, and the ball that puts one there.
@@ -264,6 +264,18 @@ export class PortalField {
       if (!pair.a || !pair.b) continue;
       this._links.push({ from: pair.a, to: pair.b }, { from: pair.b, to: pair.a });
     }
+  }
+
+  /** The nearest mouth a ray goes through before `maxDist`, and where it comes
+   *  out. A shot through a portal is the same shot, somewhere else. */
+  rayHit(origin, dir, maxDist) {
+    let best = null;
+    for (const link of this._links) {
+      const t = rayPortal(origin, dir, link.from, maxDist);
+      if (t < 0) continue;
+      if (!best || t < best.t) best = { t, from: link.from, to: link.to };
+    }
+    return best;
   }
 
   forget(owner) {

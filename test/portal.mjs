@@ -45,11 +45,12 @@ t('a corner shot still places a portal', !!corner);
 // FIT slack: fitPortal allows half a millimetre so an exact fit is not decided
 // by the last bit of a float. Nothing here is measuring closer than that.
 const SLACK = 1e-3;
-t('...exactly where it was shot, not shuffled along the block',
-  corner && near(corner.c.x, -9.9, SLACK) && near(corner.c.y, 0.05, SLACK),
+t('...slid in until the whole oval is on the face',
+  corner && corner.c.x - HALF_W >= -10 - SLACK && corner.c.y - HALF_H >= -SLACK,
   corner && JSON.stringify([fx(corner.c.x), fx(corner.c.y)]));
-t('...and it is allowed to hang over the edge',
-  corner && corner.c.x - HALF_W < -10, corner && fx(corner.c.x - HALF_W));
+t('...and no further in than it had to go',
+  corner && near(corner.c.x, -10 + HALF_W, 2e-3) && near(corner.c.y, HALF_H, 2e-3),
+  corner && JSON.stringify([fx(corner.c.x), fx(corner.c.y)]));
 
 // ----------------------------------------------------------- it explodes
 // a 1 x 1 m plate cannot hold a 1.36 x 1.8 oval however it is slid
@@ -74,19 +75,24 @@ const shy = { min: { x: -HALF_W + 0.01, y: 0, z: -0.5 }, max: { x: HALF_W, y: HA
 t('a hair too narrow explodes',
   fitPortal(faceOf({ box: shy, axis: 2, sign: -1 }), { x: 0, y: 1, z: -0.5 }, { x: 0, y: 0, z: 1 }) === null);
 
-// The property that matters now, checked over the face rather than at one
-// hand-picked spot: wherever the shot lands on a surface big enough to hold a
-// portal, the portal lands there — never anywhere else. A hundred points is
-// cheap and catches a class of mistake one corner case walks straight past.
-let moved = 0, refused = 0;
+// The property the fit exists for, checked over the whole face rather than at
+// one hand-picked spot: wherever the shot lands, no part of the oval that comes
+// back hangs off the surface. A hundred points is cheap and catches a class of
+// mistake one corner case walks straight past.
+let offFace = 0, refused = 0, moved = 0;
 for (let i = 0; i < 100; i++) {
   const px = -10 + (i * 0.2) % 20, py = (i * 0.37) % 6;
   const f = fitPortal(face, { x: px, y: py, z: -0.5 }, { x: 0, y: 0, z: 1 });
   if (!f) { refused++; continue; }
+  if (f.c.x - HALF_W < -10 - SLACK || f.c.x + HALF_W > 10 + SLACK ||
+      f.c.y - HALF_H < -SLACK || f.c.y + HALF_H > 6 + SLACK) offFace++;
   if (Math.abs(f.c.x - px) > SLACK || Math.abs(f.c.y - py) > SLACK) moved++;
 }
-t('every shot on a big wall puts the portal where it was aimed', moved === 0, moved + ' were shuffled');
+t('no shot on a big wall leaves a portal hanging off it', offFace === 0, offFace + ' overhang');
 t('...and none of them was refused', refused === 0, refused + ' refused');
+// a shot in the open middle of a wall is not slid at all — only edges move
+t('a portal in clear space is not shuffled about', moved > 0 && moved < 100,
+  moved + ' of 100 had to slide');
 
 // ------------------------------------------------------------------ the floor
 const floor = { min: { x: -30, y: -1, z: -30 }, max: { x: 30, y: 0, z: 30 } };

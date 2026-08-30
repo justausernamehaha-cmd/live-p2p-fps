@@ -348,6 +348,39 @@ R.settingsFreesTheMouse = await page.evaluate(async () => {
 await close();
 R.lockAllowedAgainAfterwards = await page.evaluate(() => window.game.input.suspendLock === false);
 
+// ------------------------------------------- the browser's own shortcuts
+// Ctrl+W cannot be stopped by preventDefault(); only the Keyboard Lock API can,
+// and only in element fullscreen. Both have to be asked for from a live user
+// gesture — from a pointerlockchange handler the fullscreen request is rejected
+// outright, which is how Ctrl+W went on closing the tab while the game believed
+// it had the keyboard. The click that captures the mouse is the gesture.
+R.keyboardLock = await page.evaluate(async () => {
+  const g = window.game;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+  g.input.keyboardLocked = false;
+  await sleep(150);
+  const before = { fullscreen: !!document.fullscreenElement, blocked: g.input.shortcutsBlocked };
+  return { before, api: !!navigator.keyboard?.lock };
+});
+await page.mouse.click(450, 300);          // a real click, with a real gesture
+await page.waitForTimeout(700);
+R.keyboardLock.after = await page.evaluate(() => ({
+  fullscreen: !!document.fullscreenElement,
+  keyboardLocked: window.game.input.keyboardLocked,
+  blocked: window.game.input.shortcutsBlocked,
+  label: document.getElementById('kblockval').textContent
+}));
+// and turning it off hands them back
+R.keyboardLock.off = await page.evaluate(() => {
+  window.game.input.setFullscreenLock(false);
+  const r = { blocked: window.game.input.shortcutsBlocked };
+  window.game.input.setFullscreenLock(true);
+  return r;
+});
+await page.evaluate(() => document.exitFullscreen?.().catch(() => {}));
+await page.waitForTimeout(200);
+
 // -------------------------------------------------------------------- verdict
 if (!R.equalsDoesNothing) fail.push('= still opens the settings panel, and it should not');
 if (String(R.forwardKeys) !== 'W') fail.push('Forward does not show W: ' + R.forwardKeys);
@@ -405,6 +438,13 @@ if (R.designDefaults.platform !== 'platform') fail.push('T does not make a movin
 if (R.designDefaults.rotate !== 'rotate') fail.push('R does not rotate in the designer');
 if (R.designDefaults.shape !== 'shape') fail.push('F does not switch shape in the designer');
 if (R.designDefaults.matchR !== 'reload' || R.designDefaults.matchQ !== 'lastweapon') fail.push('the designer map leaked into the match map');
+if (R.keyboardLock.api) {
+  if (!R.keyboardLock.after.fullscreen) fail.push('clicking the game did not take it fullscreen, so the keyboard cannot be locked: ' + JSON.stringify(R.keyboardLock));
+  if (!R.keyboardLock.after.keyboardLocked) fail.push('navigator.keyboard.lock() never took: ' + JSON.stringify(R.keyboardLock));
+  if (!R.keyboardLock.after.blocked) fail.push('the browser still owns Ctrl+W: ' + JSON.stringify(R.keyboardLock));
+  if (R.keyboardLock.after.label !== 'blocked') fail.push('the settings panel misreports the lock: ' + R.keyboardLock.after.label);
+  if (R.keyboardLock.off.blocked) fail.push('turning the setting off did not hand the shortcuts back');
+}
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 
 console.log(JSON.stringify(R, null, 2));

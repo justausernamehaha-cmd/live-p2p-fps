@@ -27,10 +27,11 @@
 export const HALF_W = 0.68;
 export const HALF_H = 1.0;
 
-// How far outside the mouth the exit puts you. Enough to clear the player's own
-// radius plus the collision skin, so you never materialise inside the wall you
-// just came out of.
-export const EXIT_CLEAR = 0.22;
+// How far outside the mouth the exit puts you. It has to clear the player's own
+// radius so you never materialise inside the wall you came out of — and, since
+// standing in a mouth is now enough to go through one, it has to clear that band
+// too, or stepping out of a portal would put you straight back into it.
+export const EXIT_CLEAR = 0.45;
 
 // Two portals of the same pair sitting on top of each other is an infinite loop
 // with no way out. Refuse it rather than let the player wedge themselves.
@@ -129,18 +130,21 @@ export function frameFor(n, look) {
  *  Returns {c, u, v, n} on success, or null when the surface cannot hold the
  *  whole oval — in which case the caller makes it explode.
  *
- *  A portal goes exactly where it was shot. It used to slide itself along until
- *  its border lined up with the block's edge, which is not what anybody aiming
- *  at a spot means by hitting it — you would fire at a corner and watch the
- *  portal appear somewhere you had not pointed.
+ *  No part of a portal may hang off the surface it is on. Where the shot lands
+ *  too near an edge for the whole oval to fit, it slides inward until it does —
+ *  the least it can be moved and still be entirely on the wall.
  *
- *  The erosion is still computed, but only to answer the other half of the
- *  question: *can* this surface hold a portal at all? The set of centres at which
- *  an axis-aligned box of half-size (HALF_W, HALF_H) fits inside a convex polygon
- *  is that polygon eroded by the box — push every edge inward by how far the box
- *  reaches along that edge's normal and clip. Empty means the surface is too
- *  small however you place it, and the shot explodes. Anything else takes the
- *  portal at the point of impact, overhang and all. */
+ *  The set of centres at which an axis-aligned box of half-size (HALF_W, HALF_H)
+ *  fits inside a convex polygon is that polygon eroded by the box, which is exact
+ *  and is itself convex: push every edge inward by how far the box reaches along
+ *  that edge's normal, and clip. Whatever survives is every legal centre; the
+ *  nearest point of it to where the shot landed is where the portal goes, which
+ *  is "slide it in until it fits" stated as arithmetic. Empty means the surface
+ *  is too small however it is placed, and the shot explodes instead.
+ *
+ *  The oval is inscribed in that box rather than fitted itself, so the fit is a
+ *  little conservative at a slanted corner — erring toward refusing a portal that
+ *  would poke over an edge, which is the right way to be wrong. */
 export function fitPortal(face, point, look) {
   if (!face || face.verts.length < 3) return null;
   const { u, v, n } = frameFor(face.n, look);
@@ -172,9 +176,11 @@ export function fitPortal(face, point, look) {
     if (poly.length < 1) return null;             // nowhere on this face fits
   }
 
-  // where the shot landed, projected onto the face's own plane so a portal is
-  // never a hair in front of or behind the surface it is on
-  const [s, t] = to2(point);
+  // where the shot landed, slid to the nearest place the whole oval sits on the
+  // face, and projected onto the face's own plane so a portal is never a hair in
+  // front of or behind the surface it is on
+  const [s0, t0] = to2(point);
+  const [s, t] = nearestInPoly(poly, s0, t0);
   const c = add3(origin, add3(scale3(u, s), scale3(v, t)));
   return { c, u, v, n };
 }
@@ -312,6 +318,47 @@ function signedArea(poly) {
     a += p[0] * q[1] - q[0] * p[1];
   }
   return a / 2;
+}
+
+/** Nearest point of a convex polygon to (s,t) — the point itself when it is
+ *  already inside, otherwise the closest point on the boundary. A single
+ *  surviving vertex (an exact fit) falls out of the same code. */
+function nearestInPoly(poly, s, t) {
+  if (poly.length === 1) return poly[0];
+  let inside = true;
+  for (let i = 0; i < poly.length && inside; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    if ((s - a[0]) * ey - (t - a[1]) * ex > EPS) inside = false;   // right of a CCW edge
+  }
+  if (inside) return [s, t];
+  let best = poly[0], bestD = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const len2 = ex * ex + ey * ey;
+    const k = len2 < EPS ? 0 : Math.max(0, Math.min(1, ((s - a[0]) * ex + (t - a[1]) * ey) / len2));
+    const px = a[0] + ex * k, py = a[1] + ey * k;
+    const d = (px - s) ** 2 + (py - t) ** 2;
+    if (d < bestD) { bestD = d; best = [px, py]; }
+  }
+  return best;
+}
+
+/** Distance along a ray to where it goes through this portal's mouth, or -1.
+ *
+ *  The front face only, exactly as a body enters it: a bullet arriving at the
+ *  back of a mouth hits the wall the mouth is on, which is what is really there. */
+export function rayPortal(origin, dir, portal, maxDist = Infinity) {
+  const denom = dot(dir, portal.n);
+  if (denom >= -1e-9) return -1;                 // parallel, or coming from behind
+  const t = dot(sub3(portal.c, origin), portal.n) / denom;
+  if (t < 1e-4 || t > maxDist) return -1;
+  const hit = add3(origin, scale3(dir, t));
+  const rel = sub3(hit, portal.c);
+  const s = dot(rel, portal.u) / HALF_W;
+  const q = dot(rel, portal.v) / HALF_H;
+  return s * s + q * q <= 1 ? t : -1;
 }
 
 /** Sutherland-Hodgman against `nx*x + ny*y >= d`. */
