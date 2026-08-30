@@ -387,9 +387,8 @@ const R = await page.evaluate(async () => {
     g.player._through = function (link, dt) {
       const e = this._eyePhys();
       const n = link.from.n, c = link.from.c;
-      // where the eye will be once this sub-step has been travelled
-      const ex = e.x + this.vel.x * dt, ey = e.y + this.vel.y * dt, ez = e.z + this.vel.z * dt;
-      const before = (ex - c.x) * n.x + (ey - c.y) * n.y + (ez - c.z) * n.z;
+      // the body has already passed the plane by the time this runs
+      const before = (e.x - c.x) * n.x + (e.y - c.y) * n.y + (e.z - c.z) * n.z;
       const speedBefore = Math.hypot(this.vel.x, this.vel.y, this.vel.z);
       realThrough(link, dt);
       const e2 = this._eyePhys(), n2 = link.to.n, c2 = link.to.c;
@@ -412,6 +411,29 @@ const R = await page.evaluate(async () => {
     keys();
     g.player._through = realThrough;
     out.continuity = cont;
+  }
+
+  // ------------------------------------------- a mouth lying on a slope
+  // Every slope in the map is 45 degrees, so a mouth on one is tilted 45
+  // degrees, and the crossing is judged on the *middle* of the body rather than
+  // on the eye for exactly this case: asking the eye to get below a tilted plane
+  // means sinking a whole eye-height into the hill, and the floor underneath
+  // stops you at about half of that. Standing in the mouth did nothing at all.
+  g.portals.clear();
+  g.portals.fire('me', { x: 15.2, y: 6, z: 0 }, { x: 0, y: -1, z: 0 }, 'a');  // the +x centre ramp
+  await sleep(700);
+  g.portals.place('me', 'b', { c: { x: 0, y: 3, z: -59.5 }, n: { x: 0, y: 0, z: 1 },
+    u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  const ramped = g.portals.pairs.get('me')?.a;
+  out.mouthOnASlope = ramped
+    ? { tilted: round(ramped.n.y), onTheRamp: round(ramped.c.y) } : null;
+  if (ramped) {
+    park(ramped.c.x, ramped.c.y + 0.3, ramped.c.z, 0);
+    keys();
+    const before = g.player.portalCount;
+    await sleep(1200);
+    out.slopeMouthTookThem = g.player.portalCount - before > 0;
+    out.slopeMouthEnded = round(g.player.pos.z);
   }
 
   // ------------------------------------- gravity comes through with the body
@@ -543,9 +565,21 @@ const R = await page.evaluate(async () => {
     out.ridingSpeed = round(ride.vel.x);
     out.rideVel = g.player.rideVel ? round(g.player.rideVel.x) : null;
     out.stoodOnIt = round(g.player.pos.y) === round(rb.max.y);
+    // Jump, and read the speed on the frame it actually leaves the platform.
+    // Polling on the wall clock caught whatever the flight was doing 100 ms
+    // later, which under a software rasteriser is sometimes before the jump and
+    // sometimes after the landing.
+    let leftWith = null;
+    const realUp = g.player.update.bind(g.player);
+    g.player.update = function (dt, input) {
+      const before = this.onGround;
+      realUp(dt, input);
+      if (leftWith === null && before && !this.onGround) leftWith = this.vel.x;
+    };
     keys('jump');
-    await sleep(100);
-    out.velAfterJump = round(g.player.vel.x);
+    for (let i = 0; i < 40 && leftWith === null; i++) await sleep(16);
+    g.player.update = realUp;
+    out.velAfterJump = leftWith === null ? 0 : round(leftWith);
     keys();
     await sleep(500);
 
@@ -574,7 +608,9 @@ const R = await page.evaluate(async () => {
     await sleep(120);
     keys('fwd');
     let onIt2 = false;
-    for (let i = 0; i < 90 && !onIt2; i++) {
+    // Long enough that it does not matter whether the shuttle happens to be
+    // running away at the time: it turns round at the end of its own run.
+    for (let i = 0; i < 400 && !onIt2; i++) {
       await sleep(16);
       if (g.player.pos.y > rb3.max.y - 0.1) onIt2 = true;
     }
@@ -665,6 +701,42 @@ const R = await page.evaluate(async () => {
     out.crushVertical = seen;
     out.crushFeed = [...document.querySelectorAll('#killfeed > div')].map(e => e.textContent).slice(-1)[0] || '';
   }
+
+  // --------------------------- ...unless the thing coming down has a hole in it
+  // A mouth on the underside of a lift is a way out of being crushed by it, and
+  // the only one. The crush above is the control: the same lift, the same place,
+  // with nothing shot at it, kills you.
+  const lift3 = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
+  if (lift3) {
+    g.portals.clear();
+    lift3.at = 1; lift3.dir = -1;                  // at the top, on its way down
+    await sleep(80);
+    const sh = lift3.shape;
+    const cx = (sh.min.x + sh.max.x) / 2, cz = (sh.min.z + sh.max.z) / 2;
+    g.portals.place('me', 'a', { c: { x: cx, y: sh.min.y, z: cz }, n: { x: 0, y: -1, z: 0 },
+      u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: -1 }, mover: lift3.index });
+    g.portals.place('me', 'b', { c: { x: 0, y: 3, z: -59.5 }, n: { x: 0, y: 0, z: 1 },
+      u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    park(cx, 0.05, cz, 0);
+    g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
+    g.player.crouchT = 0; g.player.height = 1.8;
+    g.protectedUntil = 0;
+    keys();
+    const before = g.player.portalCount;
+    const seen = { died: false, crouched: false };
+    for (let i = 0; i < 260; i++) {
+      await sleep(16);
+      if (g.player.crouchT > 0.25) seen.crouched = true;
+      if (!g.player.alive) { seen.died = true; break; }
+      if (g.player.portalCount > before) break;
+    }
+    out.crushEscape = {
+      ...seen,
+      wentThrough: g.player.portalCount - before > 0,
+      endedAt: { x: round(g.player.pos.x), y: round(g.player.pos.y), z: round(g.player.pos.z) }
+    };
+  }
+  g.portals.clear();
 
   // ...and sideways, pressed into something that is not going anywhere
   const shuttle = g.world.movers.find(m => Math.abs(m.p1.x - m.p0.x) > 10);
@@ -968,6 +1040,12 @@ want('the eye comes out exactly as far in as it went',
 want('...at exactly the speed it went in with',
   !!R.continuity && R.continuity.speedKept < 1e-6, R.continuity);
 
+// a mouth on a slope is a mouth
+want('a portal goes on a 45-degree slope',
+  !!R.mouthOnASlope && Math.abs(R.mouthOnASlope.tilted - 0.71) < 0.02, R.mouthOnASlope);
+want('...and standing in it takes you through',
+  R.slopeMouthTookThem, { through: R.slopeMouthTookThem, endedAtZ: R.slopeMouthEnded });
+
 // gravity travels with the body
 want('a ceiling mouth onto a wall stands you on that wall',
   R.gravityWentThrough && R.upAfter && R.upAfter.x === -1,
@@ -984,6 +1062,12 @@ want('...and comes out somewhere the straight shot never reaches',
                               Math.abs(R.shotEnd.z - R.plainEnd.z) > 5),
   { throughPortal: R.shotEnd, straight: R.plainEnd });
 want('...while the same shot with no portals is one straight leg', R.plainLegs === 2, R.plainLegs);
+
+want('a mouth in a lift is a way out of being crushed by it',
+  !!R.crushEscape && R.crushEscape.wentThrough && !R.crushEscape.died,
+  R.crushEscape);
+want('...and it does not even squash you into a crouch on the way',
+  !!R.crushEscape && !R.crushEscape.crouched, R.crushEscape);
 
 want('no platform\'s run touches the level it runs through',
   R.pathHits && R.pathHits.every(n => n === 0), R.pathHits);

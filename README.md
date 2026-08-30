@@ -190,13 +190,19 @@ its edge.
 **Bullets go through them too**, up to two mouths deep, and the tracer bends with
 the shot rather than passing through the wall.
 
+**A mouth in a platform is a hole in a platform.** Shoot one at the underside of
+a lift and stand where it is coming down, and it takes you through instead of
+crushing you — the only way out of a crush there is.
+
 **You are not teleported.** A portal is a hole, and you go through it the way
 anything goes through a hole — a bit at a time. Walk into one and the wall it is
 cut into stops being solid for you, so you can stop halfway and **stand there,
 half out of one mouth and half out of the other**; everyone else sees both halves
 of you, and so do you if you look at the mouth you are hanging out of. The moment
-your eye reaches the surface the whole body is re-expressed on the far side —
-position, speed, view, and which way is up — so nothing on screen moves at all.
+the middle of you passes the surface the whole body is re-expressed on the far
+side — position, speed, view, and which way is up — so nothing on screen moves at
+all. Half of you through is the rule, which is also what makes a mouth lying on a
+ramp work: standing in one takes you through it.
 
 Because it is a hole rather than a magnet, sliding along a wall *past* a mouth
 does not pull you in. You have to walk into it.
@@ -204,12 +210,15 @@ does not pull you in. You have to walk into it.
 **Gravity comes with you.** Where your feet point is where you fall: go up
 through a mouth in a ceiling and out of one on a wall, and you are standing on
 that wall with the room on its side. The horizon rolls over rather than snapping.
-To get back the right way up, walk down one of the **45-degree fillets** in the
-room's corners — every wall meets the floor and the ceiling through one, and a
-fillet belongs to both surfaces, so it hands you from one to the other. It only
-ever hands you *toward* upright: walking into a corner the right way up does
-nothing, so ordinary play is untouched. Every slope in the arena is 45 degrees
-for the same reason, the centre stairs included.
+**Only a portal ever changes which way you fall** — nothing you walk on will turn
+you over — so getting back upright means shooting your way back, which is the
+point of it.
+
+Every inside corner of the room, floor and ceiling alike, carries a **45-degree
+fillet**. They are there because for somebody standing on a wall the corner would
+otherwise be a sheer face with nothing walkable between the wall and the floor —
+and because a portal goes on one perfectly well. Every slope in the arena is 45
+degrees, the centre stairs included.
 
 The arena and every designed room are **closed boxes** — floor, four walls and a
 ceiling — so however your gravity is pointing there is always something to land
@@ -373,8 +382,12 @@ Driven in headless Chromium, two peers at once, over the real public relays:
   gone behind the near one, to a millionth of a metre, at the same speed;
 * going up through a mouth in a ceiling and out of one on a wall, and then
   accelerating **into that wall** rather than downward;
-* a wall-walker brought back upright by a corner fillet, and the same corner
-  walked into the right way up leaving them alone;
+* a wall-walker able to stand on a corner fillet and **not** be turned over by
+  it, and the same corner walked into the right way up leaving them alone;
+* a mouth on a 45-degree ramp, stood in and gone through;
+* a lift with a mouth on its underside coming down on somebody, who goes
+  through it rather than being crushed — against the same lift with no portal,
+  which kills them;
 * the portal gun's two touch triggers, including the second tap of a latched
   `AIM` — which used to do nothing at all.
 

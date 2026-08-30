@@ -67,11 +67,12 @@ R.pitches = await page.evaluate(() => {
 });
 R.every45 = R.pitches.length > 0 && R.pitches.every(p => Math.abs(p - 45) < 0.01);
 
-// ---------------------------------------- a fillet turns a wall-walker upright
-// The whole reason the corners are filleted. Stand somebody on a wall the way a
-// portal would leave them, walk them at the floor, and they should come off the
-// 45-degree face the right way up — and, in the other direction, walking into
-// that same corner upright must not put them on the wall.
+// ------------------------------------- a fillet is geometry, not a gravity switch
+// The corners are filleted so there is a walkable surface between a wall and a
+// floor at all — and so a portal has somewhere to go there. What a fillet must
+// *not* do is turn you over: only a portal ever changes which way you fall, so a
+// wall-walker who reaches one stays on the wall, and somebody walking into the
+// same corner the right way up stays upright.
 R.fillet = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
   const keys = (...on) => { g.input.held.clear(); for (const k of on) g.input.held.add(k); g.input._recalcKeys(); };
@@ -94,7 +95,8 @@ R.fillet = await page.evaluate(async () => {
   const out = {
     stoodOnTheWall,
     upAfter: { ...g.player.up },
-    turnedBackUpright: g.player.up.y === 1 && g.player.onGround && g.player.pos.y < 2,
+    keptTheirWall: g.player.up.x === -1,
+    walkedOnTheFillet: g.player.onGround,
     restingY: +g.player.pos.y.toFixed(2), restingX: +g.player.pos.x.toFixed(2)
   };
   // ...and the same corner, walked into the right way up, leaves you upright
@@ -430,7 +432,8 @@ R.oldSeedStillLoads = await page.evaluate(() => {
 // eight stairs plus the eight corner fillets, floor and ceiling
 if (R.arena.ramps !== 16) fail.push('the arena does not have sixteen ramps: ' + JSON.stringify(R.arena));
 if (!R.every45) fail.push('a slope in the default map is not 45 degrees: ' + JSON.stringify(R.pitches));
-if (!R.fillet.turnedBackUpright) fail.push('a corner fillet did not turn a wall-walker upright: ' + JSON.stringify(R.fillet));
+if (!R.fillet.keptTheirWall) fail.push('a corner fillet turned a wall-walker over — only a portal may do that: ' + JSON.stringify(R.fillet));
+if (!R.fillet.walkedOnTheFillet) fail.push('a wall-walker could not stand on the corner fillet at all: ' + JSON.stringify(R.fillet));
 if (!R.fillet.stayedUprightOnTheWayIn) fail.push('walking into a corner the right way up turned the player over: ' + JSON.stringify(R.fillet));
 if (R.arena.boxesInTheRampsPlace > 0) fail.push('a flight of steps is still in the arena: ' + R.arena.boxesInTheRampsPlace);
 if (!R.walkUp.reachedThePlatform) fail.push('could not walk up an arena ramp: ' + JSON.stringify(R.walkUp));

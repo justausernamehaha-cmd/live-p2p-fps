@@ -331,12 +331,36 @@ the teleport showing. Now:
   else changes, and the body can never be more than a radius past the plane
   before the crossing hands it over — so the hole cannot be walked *along*, only
   through.
-- The hand-over is the eye reaching the surface, and it is the portal's own
-  transform applied to the whole body: position, velocity, view, and which way is
-  up. `test/portals.mjs` asserts the eye comes out exactly as far in front of the
-  far mouth as it had just gone behind the near one, to 1e-6, at exactly the same
+- The hand-over is **the middle of the body** reaching the surface, and it is the
+  portal's own transform applied to the whole body: position, velocity, view, and
+  which way is up. It is *anchored* on the eye — that is the thing you are
+  looking through, so that is the thing that must not move — and
+  `test/portals.mjs` asserts the eye comes out exactly as far in front of the far
+  mouth as it had just gone behind the near one, to 1e-6, at exactly the same
   speed. That equality is the whole claim; if it ever drifts, the crossing has
   become a jump again.
+- **A crossing is measured against the mouth's own frame, from the last step to
+  this one** — not from a guess at where the body is going. Two things forced it.
+  A prediction of the body's own step can be short of the real one, so a slow
+  approach slips through the gap; and when it is the *mouth* that moves, the
+  player's own step says nothing at all. A lift coming down on somebody standing
+  still crosses *them*, and the mouth's movement between frames jumps the sign
+  without ever being inside a single step. Keeping each mouth's (u, v, d) from
+  the previous sub-step makes all of it one test. `_through` no longer advances
+  the body first — it has already passed the plane, which is what was measured.
+- **A mouth in a moving platform is a way out of being crushed by it.** `_ride`
+  and `_crush` skip the platform whose mouth the body is in (`_carvedMover`), so
+  a lift with a portal on its underside comes down and takes you through instead
+  of squashing you. `straddling` is therefore recomputed at the top of `update`,
+  before the platform code runs, and not only inside the collision sub-steps.
+- **The trigger was the eye at first, and that broke every mouth on a slope.**
+  On a vertical wall the head and the middle stand at the same distance from the
+  plane, so it made no difference and looked right. On a 45-degree face they are
+  0.64 m apart: a mouth on the arena's own ramp sits about 1.3 m above the floor,
+  asking the *eye* to get below its plane means sinking a whole eye-height into
+  the hill, and the floor underneath stops you at about half of that. You could
+  stand in the mouth, see the far side through it, and nothing would happen.
+  Half of you through is the rule.
 - Which means you can stand still with the body astride a mouth, half out of each
   — the thing that was asked for. The other half is drawn as a *ghost* out of the
   far mouth (`ghostOf` in remote.js, for peers and for your own body in portal
@@ -392,17 +416,16 @@ exactly this room). They are not decoration: for somebody standing on a wall a
 right-angled corner is a dead end, because there is no surface between the wall
 and the floor that either of them can walk on. A 45-degree face belongs to both.
 
-`Player._groundUp` is the rule: a walkable face hands you to whichever axis it
-could equally belong to, but **only ever toward the world's own up**. So a fillet
-carries a wall-walker down onto the floor, and a ceiling fillet carries somebody
-upside down onto a wall, but walking into an ordinary corner the right way up
-does nothing at all — there is no more upright axis to ratchet to. Leaving the
-world's up is a portal's job and only a portal's, which is what keeps every
-corner in the map from becoming a wall-run.
+They started out as a gravity switch too — a walkable 45-degree face handed you
+to whichever axis it could equally belong to, but only ever toward upright, so a
+fillet carried a wall-walker back down. **That is gone at the user's asking.**
+Only a portal ever changes which way you fall: touching a slope is not consent to
+be turned over, and getting home from a wall is meant to cost you a shot and a
+walk. What the fillets are for now is that they are the only walkable surface
+between a wall and a floor at all — for somebody standing on a wall the corner
+would otherwise be a sheer face — and that a mouth goes on one perfectly well.
 
-Every slope in the default map is 45 degrees now, the centre stairs included:
-45 is the one pitch that belongs equally to the two surfaces it joins, and a
-slope decides which way is up for whoever is standing on it.
+Every slope in the default map is 45 degrees now, the centre stairs included.
 
 ### No speed limit
 
