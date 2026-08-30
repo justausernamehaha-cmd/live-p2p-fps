@@ -348,6 +348,13 @@ the teleport showing. Now:
   without ever being inside a single step. Keeping each mouth's (u, v, d) from
   the previous sub-step makes all of it one test. `_through` no longer advances
   the body first — it has already passed the plane, which is what was measured.
+- **The first two portals of a session are the expensive ones**: their render
+  targets are built on the frame they appear, and that frame can be long enough
+  that a fixed stopwatch in a test ends with the player still short of a mouth
+  they were always going to walk into. It failed once against the live site and
+  never locally. Wait for the traversal, not for a clock. (A mouth with no
+  previous sample now also steps *backwards* to make one, so a crossing is caught
+  in the sub-step it happens in rather than the one after.)
 - **A mouth in a moving platform is a way out of being crushed by it.** `_ride`
   and `_crush` skip the platform whose mouth the body is in (`_carvedMover`), so
   a lift with a portal on its underside comes down and takes you through instead

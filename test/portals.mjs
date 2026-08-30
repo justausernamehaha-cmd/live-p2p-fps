@@ -107,14 +107,19 @@ const R = await page.evaluate(async () => {
   await sleep(200);
   const before = { count: g.player.portalCount };
   keys('fwd');
-  await sleep(900);
-  keys();
+  // Wait for the traversal rather than for a stopwatch. The first two portals of
+  // the session are the expensive ones — their render targets are built on the
+  // frame they appear — so a fixed window can end with the player still three
+  // strides short of a mouth they were always going to walk into.
+  for (let i = 0; i < 160 && g.player.portalCount === before.count; i++) await sleep(16);
+  // read while still walking: letting go first would measure the friction
   out.walkedThrough = g.player.portalCount - before.count >= 1;
   out.afterWalk = { x: round(g.player.pos.x), y: round(g.player.pos.y), z: round(g.player.pos.z) };
   out.nearExit = Math.hypot(g.player.pos.x - 30, g.player.pos.z - 0) < 6;
   // in at -z, out along the exit's own normal, which is +x
   out.leftAlongExitNormal = g.player.vel.x > 3 && Math.abs(g.player.vel.z) < 2;
   out.speedAfter = round(speed());
+  keys();
 
   // ------------------------------------------------- momentum is not scrubbed
   // A fast fall into a portal on the floor has to come out of a wall as speed.

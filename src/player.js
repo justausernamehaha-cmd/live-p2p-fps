@@ -852,7 +852,12 @@ export class Player {
       const p = link.from;
       const cur = this._localOf(p, mid);
       seen.set(p, cur);
-      const was = this._wasAt.get(p);
+      // With no sample from last step — the first one after a mouth is created —
+      // step backwards to make one. That frame is exactly the expensive frame,
+      // because the mouth's render target is being built on it, and a player
+      // walking through a portal the instant it appears would otherwise cross it
+      // in a single unwatched step and come out the other side of nothing.
+      const was = this._wasAt.get(p) || this._localOf(p, this._back(p, mid, dt));
       // only going in. Coming back out of the surface is how you leave a mouth
       // you are standing in, and it must not send you anywhere.
       if (crossed || !was || was.d < 0 || cur.d >= 0) continue;
@@ -866,6 +871,12 @@ export class Player {
     if (!crossed) return false;
     this._through(crossed, dt);
     return true;
+  }
+
+  /** Where the body was a step ago, relative to this mouth. */
+  _back(p, at, dt) {
+    const v = this._relativeTo(p);
+    return { x: at.x - v.x * dt, y: at.y - v.y * dt, z: at.z - v.z * dt };
   }
 
   /** A world point in a mouth's own frame: across it, up it, and out of it. */
