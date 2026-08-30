@@ -448,6 +448,62 @@ to be suspended while they do** (`Input.setHoldOverride`): a toggled aim placed 
 mouth on the tap that turned it on and nothing at all on the tap that turned it
 off, so every second tap was dead. Watched go red.
 
+## Asked for, not built yet — 2026-08-30
+
+Four things, in the user's own words:
+
+> fix a bug where when i gravity change, i have a chance to clip out of the room
+> and fall infinitely. my gravity should also change when i come out a 45 degrees
+> slope, and same for go in, too, so my gravitational force should be able to
+> rotate 45 degrees. and, make the horizontal platforms high enough for me to
+> barely jump onto it, and make it go further until hitting a wall.
+
+**1. Turning over can drop you out of the room.** Reported, not yet reproduced.
+The suspects, in order: the body turns about its feet when `up` changes, so a
+box that was 1.8 m tall along y becomes 1.8 m long along x and can end up inside
+a wall — `_through` only calls `_unstick` when it finds an overlap it did not
+carve, and `_unstick` resolves along the shallowest axis, which at the moment of
+a turn may be *through* the wall rather than back out of it. The second suspect
+is the carve itself: while a body is in a mouth the wall that mouth is cut into
+is not there for it, and if the straddle ends while the body is still inside that
+wall (walking out sideways along it, say) the only thing between the player and
+the outside is `_unstick`. A diagnostic first: log `up`, `straddling`, and the
+box the body is inside on every frame where `pos` leaves the room's bounds.
+Whatever it turns out to be, the failsafe in `_moveStep` — `pos.y < -20` — is
+wrong now: it only catches falling down the world's own y, and a player whose up
+is sideways leaves through a wall, not through the floor.
+
+**2. Gravity should rotate 45 degrees too.** This is the big one, and it breaks
+the assumption `src/frame.js` was built on: up is one of the **six world axes**,
+which is exactly what keeps the body's collision box axis-aligned and lets
+`_axis`, the step-up and the platform code work unchanged. Adding the twelve
+45-degree directions (or the twenty-four orientations they imply) means the body
+is no longer an AABB in the world, and every one of those falls over:
+
+- `aabb()` stops being expressible; collision would have to go through
+  `capsulePush` against everything, not just the ramps, and the boxes lose their
+  fast exact path.
+- `_axis()` resolves one *world* axis at a time. In a turned frame the three
+  directions the body cares about are not world axes any more.
+- `snapAxis` becomes snap-to-24, and `northFor` needs a yaw zero for each.
+
+The cheap half of the ask is real though: coming out of a mouth **on** a
+45-degree face, the rigid image of your up *is* 45 degrees, and it is currently
+rounded to the nearer axis. So the honest options are (a) snap to 24
+orientations and accept a large collision rewrite, or (b) keep six and make the
+rounding explicit rather than silent — the fillets exist precisely so a
+45-degree face is a place you can walk, not a place you have to stand at 45
+degrees. Worth asking which they actually want before building either.
+
+**3 & 4. The shuttles.** Raise them until their top is a whisker under a jump —
+`JUMP_SPEED` 8.2 against `GRAVITY` 24 is about 1.4 m of rise, so a top around
+1.3 m — and extend each run until it meets a wall instead of stopping short.
+Both are numbers in `World._build`, but the routes are swept against every static
+box by `test/portals.mjs` for a reason: at head height these two flew over the
+cover walls, and lowering them so they could be boarded drove them straight
+through the same walls. Raising and lengthening them will need that sweep to be
+re-run, and the arena's cover may have to move.
+
 ## Ideas, not built
 
 - **Peers seeing edits live.** The designer is deliberately single-player: a
