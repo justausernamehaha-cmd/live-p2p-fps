@@ -45,7 +45,11 @@ const R = await page.evaluate(() => {
 
   const trapped = [], crouchOnly = [], noFloor = [];
   const step = 2;
-  const edge = span - 1;
+  // Inside the room, not on top of it. The arena is a closed box now, so the
+  // tops of the walls are the far side of the ceiling and no place a player can
+  // be; scanning them would report the lid as a headroom trap. The inner faces
+  // are half a metre in from the outer ones.
+  const edge = span - 1.5;
   for (let x = -edge; x <= edge; x += step) {
     for (let z = -edge; z <= edge; z += step) {
       const y = supportAt(x, z);

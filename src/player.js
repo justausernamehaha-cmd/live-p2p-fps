@@ -1,7 +1,10 @@
 import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
 import { capsulePush } from './solid.js';
-import { crossing, portalMap, lookAngles, EXIT_CLEAR, HALF_W, HALF_H } from './portal.js';
+import { portalMap, atMouth, BODY_SAMPLES, HALF_W, HALF_H } from './portal.js';
+import {
+  UPS, UP_Y, snapAxis, axisKey, axisSign, crossKeys, basisFor, lookFrom, anglesIn, dot3
+} from './frame.js';
 
 const RADIUS = 0.17;      // matches the rendered body half-width in remote.js
 const HEIGHT = 1.8;
@@ -47,14 +50,11 @@ const FALL_SPEED_MAX = 8;       // m/s one landing may ever add
 const GROUND_FRICTION = 5;      // stopping friction, only when you stop asking to move
 const GROUND_DRAG = 0.35;       // the slow bleed on carried speed while still running
 const GROUND_STEER = 9;         // how fast carried momentum can be turned, magnitude kept
-const SPEED_CAP = 22;           // sanity limit, well above anything reachable by hand
-// ...but a portal can hand you far more than a hand can, and clamping a fling
-// back to a sprint the instant it leaves the mouth would make building the speed
-// pointless. While a portal's gift is still in the air it is allowed to stand,
-// up to the same terminal the fall itself has. Landing ends it, and the ordinary
-// ground rules bleed it off from there.
-const PORTAL_SPEED_CAP = 80;
-const PORTAL_FLING_TIME = 3;    // seconds the allowance lasts in the air
+// There is no speed limit. There was a 22 m/s sanity cap, and a raised one for
+// the three seconds after a portal handed you a fall to spend — the second
+// existed only to get out of the way of the first. Both are gone at the user's
+// asking: what you build is yours to keep, and the ground rules below (friction,
+// drag, the collapse on a bump) are the only things that take speed off you.
 const MAX_STEP_DIST = 0.3;      // sub-step the movement so fast players cannot tunnel
 const STEP_SMOOTH_RATE = 5;     // m/s the view catches up after a step, i.e. a linear climb
 const STEP_SMOOTH_MAX = 1.0;
@@ -66,50 +66,46 @@ const STEP_SMOOTH_MAX = 1.0;
 const SKIN = 1e-3;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 const CROUCH_TIME = 0.3;        // seconds to fully crouch or stand, so it cannot flicker
-// A portal is a hole in a wall that the wall does not know about: collision is
-// still solid right across the mouth. Rather than cut the hole — which would
-// mean unpicking the merged geometry that makes this game cheap — the crossing
-// test is run against a plane held this far out in front of the real surface, so
-// it fires on the sub-step *before* the wall would have stopped you. That figure
-// is the player's own radius plus a little, i.e. exactly where their leading
-// edge is when the wall is about to refuse them.
-const PORTAL_LEAD = RADIUS + 0.06;
-// Sample points down the body, as fractions of its height. Any part of you
-// through the mouth is you through the mouth, which is what "step in easily"
-// means in arithmetic. The feet and the head have to be in the list: falling
-// into a portal on the floor is the feet going through it and nothing else, and
-// with the lowest sample at a quarter height that could never happen — the floor
-// stopped the body while the sample was still a foot above the mouth.
-const PORTAL_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
+// A portal is a hole in a wall that the wall does not know about. It used to be
+// a hole you were thrown through: the crossing was tested against a plane held a
+// radius out in *front* of the surface, so you were handed over before the wall
+// could refuse you and the far side pushed you clear of itself on arrival. Both
+// of those were the teleport showing, and both are gone. The wall itself is
+// taken out of collision while a body is in the mouth (see `_boxes`), so the
+// body goes through the hole the way anything goes through a hole.
+//
+// Sample points down the body, as fractions of its height, shared with whatever
+// draws the half of a body that is out of the far mouth. Any part of you in the
+// mouth is you in the mouth. The feet and the head have to be in the list:
+// falling into a portal on the floor is the feet going through it and nothing
+// else, and the head is the eye, which is what decides the hand-over.
+const PORTAL_SAMPLES = BODY_SAMPLES;
 // The sample line is the middle of the player, but a player is a cylinder. The
 // mouth is widened by the radius so that clipping the rim with a shoulder counts
 // as going in — the edge of a portal is an entrance, not somewhere to scrape
 // along.
 const PORTAL_EDGE = RADIUS;
-// A traversal is refused for one frame afterwards, and no longer. It used to be
-// a seventh of a second, which quietly put a ceiling on a fall through a floor
-// mouth into a ceiling one: once the drop took less time than the cooldown the
-// crossing was refused, the player hit the floor instead, and the loop started
-// again from rest. What stops a pair strobing is `exitedVia` below, which is
-// about *which* mouth rather than about time.
-const PORTAL_COOLDOWN = 0.02;
-// How far you have to get from the mouth you came out of before it will take you
-// back. Wide enough that stepping out of one is never stepping into it.
-const PORTAL_REARM = 1.0;
-// How close the body has to be to a surface to count as touching it. A portal is
-// a hole: if you are against the wall and the hole is where you are, the wall is
-// not there for you, whichever way you happen to be walking.
+// How close a part of the body has to be to the surface to count as being in the
+// mouth. A hole is a hole: if you are against the wall and the hole is where you
+// are, the wall is not there for you, whichever way you happen to be walking.
 const PORTAL_CONTACT = RADIUS + 0.03;
 // Being crushed happens in two stages, so it can be seen coming. A platform
 // closing on your head forces you down into a crouch first; only once it has
 // pushed past that — half a head deeper — does it kill you.
 const CRUSH_DEPTH = 0.17;           // half a head, the same 0.34 the model uses
+// Seconds the camera takes to roll from one up to the next. The body turns at
+// once — physics has no use for a half-turned frame — and only the view eases.
+const UP_ROLL_TIME = 0.22;
 
 export class Player {
   constructor(world) {
     this.world = world;
     this.pos = { x: 0, y: 2, z: 0 };     // feet position
     this.vel = { x: 0, y: 0, z: 0 };
+    // Which way is up for this player. Always one of the six world axes; a
+    // portal can turn it over, and everything below that says "vertical" means
+    // along this. See frame.js.
+    this.up = UP_Y;
     this.yaw = 0;
     this.pitch = 0;
     this.height = HEIGHT;
@@ -130,10 +126,10 @@ export class Player {
     this.recoil = 0;             // extra pitch, decays
     this.recoilYaw = 0;
     this.portals = null;      // set by the game: something with .links()
-    this.portalCooldown = 0;
-    this.exitedVia = null;    // the mouth we came out of, until we are clear of it
-    this.portalFling = 0;     // seconds of raised speed cap left, after a traversal
+    this.straddling = null;   // the mouth the body is standing in, and its wall
     this.portalCount = 0;     // bumped on every traversal, for tests and effects
+    this.upFrom = null;       // the up we are rolling out of, for the camera only
+    this.upBlend = 0;         // 1 -> 0 across the roll
     this.rideVel = null;      // the platform underfoot, if any, and how fast it goes
     this.squashed = false;    // a platform closed on us: the game turns this into a death
     this.beingCrushed = false;// ...and this is the warning before it, for the HUD
@@ -143,25 +139,65 @@ export class Player {
    *  behind it at a constant rate so a staircase is climbed as a straight line
    *  rather than a series of jolts. Shots come from here too, so aim still
    *  matches exactly what is on screen. */
-  get eyeY() { return this.pos.y + this.height * EYE_RATIO - this.stepSmooth; }
+  get eyeY() { return this.eye().y; }
 
-  aabb(pos = this.pos, height = this.height) {
+  /** The eye, in the world. `extra` is the view bob, which travels with the
+   *  head and so is measured along the player's own up like everything else. */
+  eye(extra = 0) {
+    const d = this.height * EYE_RATIO - this.stepSmooth + extra;
     return {
-      min: { x: pos.x - RADIUS, y: pos.y, z: pos.z - RADIUS },
-      max: { x: pos.x + RADIUS, y: pos.y + height, z: pos.z + RADIUS }
+      x: this.pos.x + this.up.x * d,
+      y: this.pos.y + this.up.y * d,
+      z: this.pos.z + this.up.z * d
     };
+  }
+
+  /** Which world axis the body is tall along, and which way its head points. */
+  get upK() { return axisKey(this.up); }
+  get upS() { return axisSign(this.up); }
+  /** The two axes it is wide along. */
+  get flatK() { return crossKeys(this.up); }
+
+  /** Speed along up — what used to be simply `vel.y`. */
+  get vUp() { return this.vel[axisKey(this.up)] * axisSign(this.up); }
+  set vUp(v) { this.vel[axisKey(this.up)] = v * axisSign(this.up); }
+
+  /** Speed across the plane the player walks in. */
+  flatSpeed() {
+    const [a, b] = crossKeys(this.up);
+    return Math.hypot(this.vel[a], this.vel[b]);
+  }
+
+  /** The body's box. Still axis-aligned whichever way up the player is, which
+   *  is the entire reason an arbitrary up costs so little here: it is tall along
+   *  one axis and RADIUS wide along the other two, and which is which is the
+   *  only thing that changes. */
+  aabb(pos = this.pos, height = this.height) {
+    const k = axisKey(this.up), s = axisSign(this.up);
+    const [a, b] = crossKeys(this.up);
+    const min = {}, max = {};
+    min[a] = pos[a] - RADIUS; max[a] = pos[a] + RADIUS;
+    min[b] = pos[b] - RADIUS; max[b] = pos[b] + RADIUS;
+    min[k] = s > 0 ? pos[k] : pos[k] - height;
+    max[k] = s > 0 ? pos[k] + height : pos[k];
+    return { min, max };
   }
 
   spawn(point) {
     this.spawnSeq++;
     this.pos = { x: point.x, y: point.y, z: point.z };
+    // However a portal left you standing, you are born the right way up.
+    this.up = UP_Y;
+    this.upFrom = null;
+    this.upBlend = 0;
+    this.straddling = null;
     this.height = HEIGHT;
     this.crouching = false;
     this.crouchT = 0;
     this.sprintLatch = false;
     this.stepSmooth = 0;
     // lift out of anything the spawn point happens to clip
-    for (let i = 0; i < 12 && this._overlaps(this.world.boxes); i++) this.pos.y += 0.5;
+    for (let i = 0; i < 12 && this._overlaps(this.world.boxes); i++) this.pos.y += 0.5;   // up is (0,1,0) here
     this.vel = { x: 0, y: 0, z: 0 };
     this.hp = 100;
     this.alive = true;
@@ -183,11 +219,9 @@ export class Player {
   update(dt, input) {
     // the view catches up to a step at a constant speed: linear, not easing
     this.stepSmooth = Math.max(0, this.stepSmooth - STEP_SMOOTH_RATE * dt);
-    this.portalCooldown = Math.max(0, this.portalCooldown - dt);
-    // the fling allowance runs in the air and is spent the moment you land
-    if (this.portalFling > 0) {
-      this.portalFling = this.onGround ? 0 : Math.max(0, this.portalFling - dt);
-    }
+    // ...and to a change of up the same way, so turning over is a roll rather
+    // than a frame in which the room is suddenly on its side
+    if (this.upBlend > 0) this.upBlend = Math.max(0, this.upBlend - dt / UP_ROLL_TIME);
 
     if (this.alive) this._ride();
 
@@ -197,7 +231,8 @@ export class Player {
     this.recoilYaw *= Math.exp(-9 * dt);
 
     if (!this.alive) {
-      this.vel.x = this.vel.z = 0;
+      const [da, db] = crossKeys(this.up);
+      this.vel[da] = this.vel[db] = 0;
       return;
     }
 
@@ -219,15 +254,18 @@ export class Player {
     const upright = sprinting ? SPRINT : WALK;
     const maxSpeed = lerp(upright, CROUCH_SPEED, this.crouchT);
 
-    // World-space wish direction. This basis MUST match the camera, which looks
-    // along Ry(yaw) * (0,0,-1):
-    //   forward = (-sin yaw, -cos yaw)
-    //   right   = ( cos yaw, -sin yaw)
-    // Getting the z sign wrong here mirrors the controls: W/S invert when facing
-    // along z, A/D invert when facing along x, and both feel swapped in between.
-    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
-    const wx = wish.x * cos - wish.y * sin;
-    const wz = -(wish.x * sin + wish.y * cos);
+    // World-space wish direction. This basis MUST match the camera. At the
+    // ordinary up it is the one it has always been — forward (-sin yaw, -cos yaw)
+    // and right (cos yaw, -sin yaw) — and frame.js asserts exactly that; getting
+    // a sign wrong mirrors the controls, W/S inverting when facing along z and
+    // A/D when facing along x, which feels like a bug in the mouse.
+    const [KA, KB] = crossKeys(this.up);
+    const { f, r } = basisFor(this.up, this.yaw);
+    const w = {
+      x: r.x * wish.x + f.x * wish.y,
+      y: r.y * wish.x + f.y * wish.y,
+      z: r.z * wish.x + f.z * wish.y
+    };
 
     // Decide the jump now but apply it after the ground move, so a hop still
     // leaves the ground at full running speed. Holding space auto-hops, and a
@@ -236,7 +274,7 @@ export class Player {
     const wantJump = input.down('jump') && this.onGround;
 
     const wishLen = Math.hypot(wish.x, wish.y);   // already clamped to <= 1
-    const speed = Math.hypot(this.vel.x, this.vel.z);
+    const speed = this.flatSpeed();
 
     // A frame that ends in a jump keeps the velocity it arrived with, and pays no
     // friction at all. That is the whole of a hop chain: the alignment a strafe
@@ -254,8 +292,8 @@ export class Player {
     if (this.onGround && !keepMomentum) {
       if (speed <= maxSpeed + 0.05) {
         // direct control: you go exactly where you press, at once
-        this.vel.x = wx * maxSpeed;
-        this.vel.z = wz * maxSpeed;
+        this.vel[KA] = w[KA] * maxSpeed;
+        this.vel[KB] = w[KB] * maxSpeed;
       } else if (wishLen > 0.02) {
         // Carrying more than a walk — off a hop chain, a heavy landing, a run
         // down some stairs. Touching the ground must not confiscate that, so the
@@ -263,19 +301,19 @@ export class Player {
         // GROUND_DRAG rather than stopping friction.
         //
         const k = Math.min(1, GROUND_STEER * dt);
-        const nx = this.vel.x + (wx * speed - this.vel.x) * k;
-        const nz = this.vel.z + (wz * speed - this.vel.z) * k;
-        const m = Math.hypot(nx, nz) || 1;
-        this.vel.x = (nx / m) * speed;
-        this.vel.z = (nz / m) * speed;
+        const na = this.vel[KA] + (w[KA] * speed - this.vel[KA]) * k;
+        const nb = this.vel[KB] + (w[KB] * speed - this.vel[KB]) * k;
+        const m = Math.hypot(na, nb) || 1;
+        this.vel[KA] = (na / m) * speed;
+        this.vel[KB] = (nb / m) * speed;
         const drop = Math.max(0, 1 - GROUND_DRAG * dt);
-        this.vel.x *= drop;
-        this.vel.z *= drop;
+        this.vel[KA] *= drop;
+        this.vel[KB] *= drop;
       } else {
         // you stopped asking to move, so stop
         const drop = Math.max(0, 1 - GROUND_FRICTION * dt);
-        this.vel.x *= drop;
-        this.vel.z *= drop;
+        this.vel[KA] *= drop;
+        this.vel[KB] *= drop;
       }
     } else if (Math.abs(wish.x) > 0.02) {
       // Air control, and the whole of bunny hopping.
@@ -287,49 +325,47 @@ export class Player {
       // put it 45 degrees off and the budget would already be spent. Hold a
       // strafe key, turn the view that way, and every frame pays out.
       const strafe = Math.sign(wish.x) * Math.min(1, Math.abs(wish.x));
-      const dirX = cos * strafe;        // the camera's right vector
-      const dirZ = -sin * strafe;
-      const len = Math.hypot(dirX, dirZ);
-      const nx = dirX / len, nz = dirZ / len;
+      const sgn = Math.sign(strafe);
+      const na = r[KA] * sgn, nb = r[KB] * sgn;   // the camera's right vector
 
       const wishSpeed = Math.min(Math.abs(strafe) * maxSpeed, AIR.cap);
-      const current = this.vel.x * nx + this.vel.z * nz;
+      const current = this.vel[KA] * na + this.vel[KB] * nb;
       const add = wishSpeed - current;
       if (add > 0) {
         const accel = Math.min(AIR.accel * wishSpeed * dt, add);
-        const beforeMag = Math.hypot(this.vel.x, this.vel.z);
-        this.vel.x += nx * accel;
-        this.vel.z += nz * accel;
+        const beforeMag = this.flatSpeed();
+        this.vel[KA] += na * accel;
+        this.vel[KB] += nb * accel;
 
         // Air control redirects, it never brakes. Straight Quake would let the
         // budget go negative and scrub speed when you flip from A to D against
         // your own momentum; here the magnitude is restored, so swapping strafe
         // keys turns the momentum instead of throwing it away.
-        const afterMag = Math.hypot(this.vel.x, this.vel.z);
+        const afterMag = this.flatSpeed();
         if (afterMag < beforeMag && afterMag > 1e-4) {
-          this.vel.x *= beforeMag / afterMag;
-          this.vel.z *= beforeMag / afterMag;
+          this.vel[KA] *= beforeMag / afterMag;
+          this.vel[KB] *= beforeMag / afterMag;
         }
       }
     }
 
     if (wantJump) {
-      this.vel.y = JUMP_SPEED;
+      this.vUp = JUMP_SPEED;
       this.onGround = false;
       // Leave a moving platform and you leave it *going somewhere*. Riding one
       // only ever moved the body, so jumping off a shuttle left the shuttle to
       // carry on without you and you landed behind it, which is not what
       // standing on a moving thing feels like anywhere.
       if (this.rideVel) {
-        this.vel.x += this.rideVel.x;
-        this.vel.z += this.rideVel.z;
+        this.vel[KA] += this.rideVel[KA];
+        this.vel[KB] += this.rideVel[KB];
       }
     }
 
-    this._capSpeed();
-
-    this.vel.y -= GRAVITY * (this.vel.y < 0 ? FALL_GRAVITY : 1) * dt;
-    if (this.vel.y < -80) this.vel.y = -80;
+    // Gravity pulls the way the feet point, which after a portal need not be
+    // down the world's y at all.
+    const vu = this.vUp;
+    this.vUp = Math.max(-80, vu - GRAVITY * (vu < 0 ? FALL_GRAVITY : 1) * dt);
 
     this.fellAt = 0;
     this._move(dt);
@@ -339,31 +375,29 @@ export class Player {
     // worth momentum, which is the same bargain the hop chain makes.
     if (this.fellAt > FALL_MIN) {
       const gain = Math.min(FALL_SPEED_MAX, (this.fellAt - FALL_MIN) * FALL_TO_SPEED);
-      const sp = Math.hypot(this.vel.x, this.vel.z);
-      let dx, dz;
-      if (sp > 0.5) { dx = this.vel.x / sp; dz = this.vel.z / sp; }
-      else if (wishLen > 0.02) { dx = wx; dz = wz; }
-      else { dx = dz = 0; }     // dropped straight down standing still: nothing
-      this.vel.x += dx * gain;
-      this.vel.z += dz * gain;
+      const sp = this.flatSpeed();
+      let da, db;
+      if (sp > 0.5) { da = this.vel[KA] / sp; db = this.vel[KB] / sp; }
+      else if (wishLen > 0.02) { da = w[KA]; db = w[KB]; }
+      else { da = db = 0; }     // dropped straight down standing still: nothing
+      this.vel[KA] += da * gain;
+      this.vel[KB] += db * gain;
     }
-
-    this._capSpeed();
 
     // Hitting something ends a hop chain: whatever you had built collapses back
     // to the speed you can run at. Landings and stairs do not trigger this —
     // only a horizontal surface that actually stopped you.
     if (this.bumped) {
       this.bumped = false;
-      const sp = Math.hypot(this.vel.x, this.vel.z);
+      const sp = this.flatSpeed();
       if (sp > maxSpeed && sp > 1e-4) {
-        this.vel.x *= maxSpeed / sp;
-        this.vel.z *= maxSpeed / sp;
+        this.vel[KA] *= maxSpeed / sp;
+        this.vel[KB] *= maxSpeed / sp;
       }
     }
 
     // view bob, purely cosmetic
-    const groundSpeed = Math.hypot(this.vel.x, this.vel.z);
+    const groundSpeed = this.flatSpeed();
     if (this.onGround && groundSpeed > 0.5) {
       this.bobPhase += dt * groundSpeed * 1.5;
       this.bob = Math.sin(this.bobPhase) * 0.035 * Math.min(1, groundSpeed / WALK);
@@ -388,25 +422,28 @@ export class Player {
     this.rideVel = null;
     const movers = this.world.movers;
     if (!movers || !movers.length) return;
+    const k = this.upK, up = this.upS;
+    const [KA, KB] = this.flatK;
     for (const m of movers) {
       const s = m.shape;
-      if (this.pos.x + RADIUS <= s.min.x || this.pos.x - RADIUS >= s.max.x) continue;
-      if (this.pos.z + RADIUS <= s.min.z || this.pos.z - RADIUS >= s.max.z) continue;
-      const top = s.max.y;
-      const gap = top - this.pos.y;
+      if (this.pos[KA] + RADIUS <= s.min[KA] || this.pos[KA] - RADIUS >= s.max[KA]) continue;
+      if (this.pos[KB] + RADIUS <= s.min[KB] || this.pos[KB] - RADIUS >= s.max[KB]) continue;
+      // the face you would be standing on is whichever of its two is nearer your head
+      const top = up > 0 ? s.max[k] : s.min[k];
+      const gap = (top - this.pos[k]) * up;
       // standing on it, or it has just come up under us by less than a step
       if (gap > STEP_HEIGHT || gap < -0.12) continue;
       if (gap > 0) {
-        if (this.vel.y > 0.1) continue;         // jumping off it, not riding it
-        this.pos.y = top;
+        if (this.vUp > 0.1) continue;           // jumping off it, not riding it
+        this.pos[k] = top;
         this.onGround = true;
-        if (this.vel.y < 0) this.vel.y = 0;
+        if (this.vUp < 0) this.vUp = 0;
       } else {
         this.pos.x += m.delta.x;
-        this.pos.z += m.delta.z;
         this.pos.y += m.delta.y;
+        this.pos.z += m.delta.z;
       }
-      this.rideVel = { x: m.vel.x, z: m.vel.z };
+      this.rideVel = { x: m.vel.x, y: m.vel.y, z: m.vel.z };
       return;
     }
   }
@@ -428,16 +465,21 @@ export class Player {
     if (!this.alive || !this.world.movers || !this.world.movers.length) return;
 
     // ---- something coming down on top of us
+    const k = this.upK, up = this.upS;
+    const [KA, KB] = this.flatK;
     let lowest = Infinity;
     for (const m of this.world.movers) {
       const s = m.shape;
-      if (this.pos.x + RADIUS <= s.min.x || this.pos.x - RADIUS >= s.max.x) continue;
-      if (this.pos.z + RADIUS <= s.min.z || this.pos.z - RADIUS >= s.max.z) continue;
-      if (s.min.y <= this.pos.y + 0.05) continue;          // not above us
-      if (s.min.y < lowest) lowest = s.min.y;
+      if (this.pos[KA] + RADIUS <= s.min[KA] || this.pos[KA] - RADIUS >= s.max[KA]) continue;
+      if (this.pos[KB] + RADIUS <= s.min[KB] || this.pos[KB] - RADIUS >= s.max[KB]) continue;
+      // "above" is toward the head, which after a portal can be any direction
+      const near = up > 0 ? s.min[k] : s.max[k];
+      const over = (near - this.pos[k]) * up;
+      if (over <= 0.05) continue;                          // not above us
+      if (over < lowest) lowest = over;
     }
     if (lowest < Infinity) {
-      const headroom = lowest - this.pos.y;
+      const headroom = lowest;
       if (headroom < CROUCH_HEIGHT - CRUSH_DEPTH) { this.squashed = true; return; }
       if (headroom < HEIGHT) {
         // Forced down as far as it takes to fit, and held there. Past a full
@@ -459,21 +501,21 @@ export class Player {
       // Sideways only. A platform coming down is the case above, and letting
       // this one see it would push the player out along whichever axis is
       // shallowest — which, for something resting on your head, is upwards.
-      if (Math.abs(m.vel.y) > Math.abs(m.vel.x) + Math.abs(m.vel.z)) continue;
+      if (Math.abs(m.vel[k]) > Math.abs(m.vel[KA]) + Math.abs(m.vel[KB])) continue;
       // Low enough to walk onto is low enough to walk onto. Shoving the player
       // away from a knee-high platform would make the arena's shuttles
       // impossible to board, which is the opposite of the point of them.
-      if (s.max.y - this.pos.y <= STEP_HEIGHT + 0.05) continue;
+      if ((up > 0 ? s.max[k] - this.pos[k] : this.pos[k] - s.min[k]) <= STEP_HEIGHT + 0.05) continue;
       if (!s.min || !aabbOverlap(this.aabb(), s)) continue;
 
       // Shoved along the way it is going, not out by the shortest route. A
       // platform bearing down on you does not politely lift you over itself; it
       // pushes you ahead of it, and whether that is survivable is a question
       // about what is behind you.
-      const k = Math.abs(m.vel.x) >= Math.abs(m.vel.z) ? 'x' : 'z';
-      const forward = m.vel[k] >= 0;
+      const j = Math.abs(m.vel[KA]) >= Math.abs(m.vel[KB]) ? KA : KB;
+      const forward = m.vel[j] >= 0;
       const wasAt = { ...this.pos };
-      this.pos[k] = forward ? s.max[k] + RADIUS + SKIN : s.min[k] - RADIUS - SKIN;
+      this.pos[j] = forward ? s.max[j] + RADIUS + SKIN : s.min[j] - RADIUS - SKIN;
       this.beingCrushed = true;
       if (this._overlapsStatic()) {
         this.pos = wasAt;          // nowhere to be shoved to
@@ -493,15 +535,6 @@ export class Player {
     return false;
   }
 
-  _capSpeed() {
-    const cap = this.portalFling > 0 ? PORTAL_SPEED_CAP : SPEED_CAP;
-    const sp = Math.hypot(this.vel.x, this.vel.z);
-    if (sp > cap) {
-      this.vel.x *= cap / sp;
-      this.vel.z *= cap / sp;
-    }
-  }
-
   _crouch(dt, want) {
     const step = dt / CROUCH_TIME;
     if (want) {
@@ -518,7 +551,7 @@ export class Player {
 
   _blockedAtHeight(h) {
     const test = this.aabb(this.pos, h);
-    for (const b of this.world.boxes) if (aabbOverlap(test, b)) return true;
+    for (const b of this._boxes()) if (aabbOverlap(test, b)) return true;
     return false;
   }
 
@@ -552,14 +585,16 @@ export class Player {
     // this one assumes it is.
     if (this._tryPortal(dt)) return;
 
-    const boxes = this.world.boxes;
-    const dx = this.vel.x * dt;
-    const dz = this.vel.z * dt;
+    const boxes = this._boxes();
+    const k = this.upK, up = this.upS;
+    const [KA, KB] = this.flatK;
+    const da = this.vel[KA] * dt;
+    const db = this.vel[KB] * dt;
     const start = { ...this.pos };
 
     // horizontal move, resolved one axis at a time
-    const blockedX = this._axis('x', dx, boxes);
-    const blockedZ = this._axis('z', dz, boxes);
+    const blockedA = this._axis(KA, da, boxes);
+    const blockedB = this._axis(KB, db, boxes);
     const flat = { ...this.pos };
 
     // If something got in the way, retry the same move one step higher so stairs,
@@ -578,28 +613,30 @@ export class Player {
     // they are already mid-jump with more than a metre of climb in hand, so this
     // only ever mounts a ledge they were going over anyway instead of scraping up
     // its face. There is no ratchet either — you cannot jump again in mid-air.
-    if (blockedX || blockedZ) {
-      this.pos = { ...start, y: start.y + STEP_HEIGHT };
+    if (blockedA || blockedB) {
+      this.pos = { ...start };
+      this.pos[k] = start[k] + STEP_HEIGHT * up;
       if (this._overlaps(boxes)) {
         this.pos = flat;
       } else {
-        this._axis('x', dx, boxes);
-        this._axis('z', dz, boxes);
-        this._axis('y', -STEP_HEIGHT, boxes);     // settle onto the step
-        const stepped = Math.hypot(this.pos.x - start.x, this.pos.z - start.z);
-        const slid = Math.hypot(flat.x - start.x, flat.z - start.z);
+        this._axis(KA, da, boxes);
+        this._axis(KB, db, boxes);
+        this._axis(k, -STEP_HEIGHT * up, boxes);     // settle onto the step
+        const stepped = Math.hypot(this.pos[KA] - start[KA], this.pos[KB] - start[KB]);
+        const slid = Math.hypot(flat[KA] - start[KA], flat[KB] - start[KB]);
         // A step up may never gain more than a step. _axis() resolves an overlap
         // by pushing clear of the whole box, so a horizontal push-out that lands
         // a float's width inside a tall wall lets the settle above lift the
         // player all the way to the top of it — walk into a four-metre wall and
         // you would end up standing on it.
-        if (this.pos.y > start.y + STEP_HEIGHT + 1e-4) {
+        const climbed = (this.pos[k] - start[k]) * up;
+        if (climbed > STEP_HEIGHT + 1e-4) {
           this.pos = flat;
         } else if (stepped <= slid + 1e-4) {
           this.pos = flat;
-        } else if (this.pos.y > start.y) {
+        } else if (climbed > 0) {
           // took a step up: hold the view back by the height gained
-          this.stepSmooth = Math.min(STEP_SMOOTH_MAX, this.stepSmooth + (this.pos.y - start.y));
+          this.stepSmooth = Math.min(STEP_SMOOTH_MAX, this.stepSmooth + climbed);
         }
       }
     }
@@ -607,23 +644,23 @@ export class Player {
     // Anything still genuinely blocked loses its speed along that axis, and flags
     // the frame as a bump. Stairs do not count: the step-up moves you, so the
     // axis is not blocked.
-    if (Math.abs(dx) > 1e-6 && Math.abs(this.pos.x - start.x) < Math.abs(dx) * 0.25) {
-      this.vel.x = 0;
+    if (Math.abs(da) > 1e-6 && Math.abs(this.pos[KA] - start[KA]) < Math.abs(da) * 0.25) {
+      this.vel[KA] = 0;
       this.bumped = true;
     }
-    if (Math.abs(dz) > 1e-6 && Math.abs(this.pos.z - start.z) < Math.abs(dz) * 0.25) {
-      this.vel.z = 0;
+    if (Math.abs(db) > 1e-6 && Math.abs(this.pos[KB] - start[KB]) < Math.abs(db) * 0.25) {
+      this.vel[KB] = 0;
       this.bumped = true;
     }
 
     // vertical
     this.onGround = false;
-    if (this._axis('y', this.vel.y * dt, boxes)) {
-      if (this.vel.y <= 0) {
+    if (this._axis(k, this.vel[k] * dt, boxes)) {
+      if (this.vUp <= 0) {
         this.onGround = true;
-        this.fellAt = Math.max(this.fellAt, -this.vel.y);   // read before it is zeroed
+        this.fellAt = Math.max(this.fellAt, -this.vUp);   // read before it is zeroed
       }
-      this.vel.y = 0;
+      this.vUp = 0;
     }
 
     // ramps and turned boxes last: they are resolved by pushing out, so they
@@ -634,128 +671,178 @@ export class Player {
     if (this.pos.y < -20) { this.pos.y = 10; this.vel.y = 0; }
   }
 
-  /** Is the body up against this mouth's surface, and inside the mouth?
+  /** The level, as collision sees it this instant.
    *
-   *  Standing still counts. A hole in a wall you are already standing in is a
-   *  hole you fall through, and waiting for the player to be moving meant you
-   *  could press yourself into a mouth and simply stay there.
-   *
-   *  Distance is measured to the portal's own plane, so "touching" means what it
-   *  means for collision: a radius clear of the face. Standing anywhere in open
-   *  space — between two mouths, say — is far outside that band and never counts,
-   *  and EXIT_CLEAR is set wide enough that leaving a portal does not land you
-   *  back inside its partner's. */
-  _inMouth(p) { return this._nearMouth(p, PORTAL_CONTACT); }
+   *  Which is not quite the level: a portal is a hole the wall does not know
+   *  about, and a body standing in one is inside that wall. The piece of world
+   *  carrying the mouth is taken out for exactly as long as the body is in the
+   *  mouth, so it can be half through instead of being stopped by a surface that
+   *  is not there any more. Nothing else is touched, and the body can never be
+   *  more than a radius past the plane before the crossing hands it over — so
+   *  the hole cannot be walked *along*, only through. */
+  _boxes() {
+    const carve = this.straddling && this.straddling.host;
+    if (!carve) return this.world.boxes;
+    if (!this.world.boxes.includes(carve)) return this.world.boxes;
+    if (this._carvedBoxes && this._carvedFor === carve) return this._carvedBoxes;
+    this._carvedFor = carve;
+    this._carvedBoxes = this.world.boxes.filter(b => b !== carve);
+    return this._carvedBoxes;
+  }
 
-  /** Is any part of the body within `reach` of this mouth's plane, on the front
-   *  of it, and inside the oval? */
-  _nearMouth(p, reach) {
-    for (const frac of PORTAL_SAMPLES) {
-      const y = this.pos.y + this.height * frac;
-      const dx = this.pos.x - p.c.x, dy = y - p.c.y, dz = this.pos.z - p.c.z;
-      const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
-      if (d < 0 || d > reach) continue;                  // behind it, or not near it
+  /** The same, for the ramps and turned boxes: a mouth can be cut into one of
+   *  those too. */
+  _solids() {
+    const carve = this.straddling && this.straddling.host;
+    const solids = this.world.solids;
+    if (!carve || !solids || !solids.length) return solids;
+    if (!solids.includes(carve)) return solids;
+    if (this._carvedSolids && this._carvedSolidFor === carve) return this._carvedSolids;
+    this._carvedSolidFor = carve;
+    this._carvedSolids = solids.filter(x => x !== carve);
+    return this._carvedSolids;
+  }
+
+  /** A point up the body, in the world. */
+  _sample(frac) {
+    const d = this.height * frac;
+    return {
+      x: this.pos.x + this.up.x * d,
+      y: this.pos.y + this.up.y * d,
+      z: this.pos.z + this.up.z * d
+    };
+  }
+
+  /** The eye as the physics uses it: no `stepSmooth`, which is a visual lag
+   *  behind a step and has no business deciding where a body actually is. */
+  _eyePhys() { return this._sample(EYE_RATIO); }
+
+  /** Is any part of the body in this mouth?
+   *
+   *  Two-sided, which is the whole change. A portal used to be something you
+   *  were thrown through before you ever reached the wall, so a body behind the
+   *  surface was an impossible state and the test only looked in front of it.
+   *  Now you walk into a mouth and stand in it, and half a body past the plane
+   *  is the ordinary case. The depth bound is a whole body length: past that you
+   *  have gone through and out the back of the world, which cannot happen while
+   *  the crossing below hands you over as soon as your eye reaches the plane. */
+  _atMouth(p, reach = PORTAL_CONTACT) {
+    return atMouth(p, this.pos, this.up, this.height, reach, PORTAL_EDGE);
+  }
+
+  /** Which mouth the body is standing in, and the piece of world that mouth is
+   *  cut into — which collision has to stop seeing while we are in it.
+   *
+   *  The reach grows by however far this sub-step will close on the surface, and
+   *  it has to: a body arriving at a mouth faster than the reach is wide would
+   *  otherwise be stopped by the wall on the step *before* the hole was opened,
+   *  stand on it for a frame, and set off again from rest. That is exactly what
+   *  a fall through a floor mouth did — it arrived at 18 m/s and left at 8. */
+  _findStraddle(links, dt = 0) {
+    let best = null, bestD = Infinity;
+    const e = this._eyePhys();
+    for (const link of links) {
+      const p = link.from;
+      const closing = Math.max(0, -(this.vel.x * p.n.x + this.vel.y * p.n.y + this.vel.z * p.n.z));
+      if (!this._atMouth(p, PORTAL_CONTACT + closing * dt)) continue;
+      const d = Math.abs((e.x - p.c.x) * p.n.x + (e.y - p.c.y) * p.n.y + (e.z - p.c.z) * p.n.z);
+      if (d < bestD) { bestD = d; best = link; }
+    }
+    return best ? { link: best, host: this.world.hostFor(best.from) } : null;
+  }
+
+  /** Walk into one mouth and out of the other, without ever being teleported.
+   *
+   *  A portal is not a doorway that moves you when you touch it: it is a hole,
+   *  and the body goes through it the way anything goes through a hole — a bit
+   *  at a time. So there is no lead plane held out in front of the wall any
+   *  more, and no clearance pushing you out of the far side. There is one event,
+   *  and it is the eye reaching the surface. Everything either side of it is
+   *  ordinary movement through a wall that collision has been told is not there.
+   *
+   *  The hand-over is *exactly* the portal's own transform applied to the whole
+   *  body — position, velocity, view, and which way is up — so the instant it
+   *  happens nothing on screen moves at all. That is what makes it possible to
+   *  stand still with half of you out of one mouth and half out of the other:
+   *  neither half is a special case, they are the same body seen from the two
+   *  sides of one hole.
+   *
+   *  Returns true when a hand-over happened, in which case this sub-step is over.
+   */
+  _tryPortal(dt) {
+    this.straddling = null;
+    if (!this.alive || !this.portals) return false;
+    const links = this.portals.links();
+    if (!links || !links.length) return false;
+
+    this.straddling = this._findStraddle(links, dt);
+
+    // the eye's path over this sub-step: where the crossing is judged
+    const e0 = this._eyePhys();
+    const e1 = { x: e0.x + this.vel.x * dt, y: e0.y + this.vel.y * dt, z: e0.z + this.vel.z * dt };
+
+    for (const link of links) {
+      const p = link.from;
+      const d0 = (e0.x - p.c.x) * p.n.x + (e0.y - p.c.y) * p.n.y + (e0.z - p.c.z) * p.n.z;
+      const d1 = (e1.x - p.c.x) * p.n.x + (e1.y - p.c.y) * p.n.y + (e1.z - p.c.z) * p.n.z;
+      // only going in. Coming back out of the surface is how you leave a mouth
+      // you are standing in, and it must not send you anywhere.
+      if (d0 < 0 || d1 >= 0) continue;
+      const t = d0 - d1 > 1e-12 ? d0 / (d0 - d1) : 0;
+      const at = {
+        x: e0.x + (e1.x - e0.x) * t,
+        y: e0.y + (e1.y - e0.y) * t,
+        z: e0.z + (e1.z - e0.z) * t
+      };
+      const dx = at.x - p.c.x, dy = at.y - p.c.y, dz = at.z - p.c.z;
       const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + PORTAL_EDGE);
       const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + PORTAL_EDGE);
-      if (su * su + sv * sv <= 1) return true;
+      if (su * su + sv * sv > 1) continue;      // crossed the wall, not the hole
+      this._through(link, dt);
+      return true;
     }
     return false;
   }
 
-  /** Walk into one mouth, come out of the other, keeping everything you had.
-   *
-   *  The transform is applied to the *crossing point* rather than to the
-   *  player's feet. Mapping the feet is the obvious thing and it is wrong: a
-   *  portal at head height on a wall would put your feet a metre and a half
-   *  behind the exit's plane, which for a portal on the floor is a metre and a
-   *  half underground. The point where you actually went through is by
-   *  construction inside the mouth, so its image is inside the other one.
-   *
-   *  Returns true when a traversal happened, in which case this sub-step is over.
-   */
-  _tryPortal(dt) {
-    if (!this.alive || this.portalCooldown > 0 || !this.portals) return false;
-    const links = this.portals.links();
-    if (!links || !links.length) return false;
-
-    const sx = this.vel.x * dt, sy = this.vel.y * dt, sz = this.vel.z * dt;
-    if (Math.abs(sx) + Math.abs(sy) + Math.abs(sz) < 1e-7) return false;
-
-    // the mouth we came out of is not a way back in until we have left it
-    if (this.exitedVia && !this._nearMouth(this.exitedVia, PORTAL_REARM)) this.exitedVia = null;
-
-    let best = null;
-    for (const link of links) {
-      const from = link.from;
-      if (from === this.exitedVia) continue;
-      // Already up against the surface, inside the mouth? Then go through it.
-      //
-      // The crossing test below cannot see this case and never could: it asks
-      // whether the body passed through the plane, and a player pressed against
-      // a wall is held a radius away from it by collision — which is *behind*
-      // the plane the test uses, so the test reads them as having come out the
-      // back and refuses. Walk along a wall into a portal on that same wall and
-      // you would slide straight past the mouth. Nothing here fires unless the
-      // body is genuinely touching the surface, so standing in the gap between
-      // two mouths is untouched by it.
-      if (this._inMouth(from)) { best = { k: 0, link, hy: this.height * 0.5, at: null }; break; }
-      // the mouth, held a player's radius out in front of the surface
-      const lead = {
-        c: {
-          x: from.c.x + from.n.x * PORTAL_LEAD,
-          y: from.c.y + from.n.y * PORTAL_LEAD,
-          z: from.c.z + from.n.z * PORTAL_LEAD
-        },
-        n: from.n, u: from.u, v: from.v
-      };
-      for (const frac of PORTAL_SAMPLES) {
-        const hy = this.height * frac;
-        const p0 = { x: this.pos.x, y: this.pos.y + hy, z: this.pos.z };
-        const p1 = { x: p0.x + sx, y: p0.y + sy, z: p0.z + sz };
-        const k = crossing(p0, p1, lead, PORTAL_EDGE);
-        if (k < 0) continue;
-        if (!best || k < best.k) best = { k, link, hy, p0, p1 };
-      }
-    }
-    if (!best) return false;
-
-    const { link, hy, p0, p1, k } = best;
+  /** The hand-over itself. */
+  _through(link, dt) {
     const from = link.from, to = link.to;
-    // where the body went through: the crossing point, or — for a body already
-    // standing in the mouth — itself, dropped onto the portal's own plane
-    let at;
-    if (best.at === null) {
-      const mid = { x: this.pos.x, y: this.pos.y + hy, z: this.pos.z };
-      const d = (mid.x - from.c.x) * from.n.x + (mid.y - from.c.y) * from.n.y +
-                (mid.z - from.c.z) * from.n.z;
-      at = { x: mid.x - from.n.x * d, y: mid.y - from.n.y * d, z: mid.z - from.n.z * d };
-    } else {
-      at = {
-        x: p0.x + (p1.x - p0.x) * k,
-        y: p0.y + (p1.y - p0.y) * k,
-        z: p0.z + (p1.z - p0.z) * k
-      };
-    }
     const map = portalMap(from, to);
-    const out = map.point(at);
-    const anchor = {
-      x: out.x + to.n.x * EXIT_CLEAR,
-      y: out.y + to.n.y * EXIT_CLEAR,
-      z: out.z + to.n.z * EXIT_CLEAR
+
+    // Travel the sub-step first and change frames afterwards. The transform
+    // sends a point *behind* the entry to the same distance *in front of* the
+    // exit, so handing over before the body has actually passed the plane would
+    // put it on the wrong side of the far mouth and it would be pulled straight
+    // back through.
+    this.pos.x += this.vel.x * dt;
+    this.pos.y += this.vel.y * dt;
+    this.pos.z += this.vel.z * dt;
+    const eyeWas = this._eyePhys();     // read before `up` is turned over
+
+    const look = map.dir(lookFrom(this.up, this.yaw, this.pitch));
+    // Gravity follows the body. Where your feet point is where you fall, so the
+    // exit decides which way is down for you from here — a mouth on a wall
+    // stands you on that wall. Rounded to an axis: see frame.js.
+    const turned = snapAxis(map.dir(this.up));
+    if (turned !== this.up) { this.upFrom = this.up; this.upBlend = 1; }
+    this.up = turned;
+    const ang = anglesIn(this.up, look);
+    this.yaw = ang.yaw;
+    this.pitch = clamp(ang.pitch, -MAX_PITCH, MAX_PITCH);
+
+    // The *eye* is what is anchored, not the feet. Where a mouth lies on a ramp
+    // its transform turns the body by something that is not a right angle, and
+    // rounding the new up to an axis then moves whatever point was pinned by as
+    // much as the rounding — 0.7 m at the head, for a mouth on the arena's own
+    // stairs. Pin the eye and that error goes into where the feet hang instead,
+    // which nobody is looking through.
+    const eyeAt = map.point(eyeWas);
+    const d = this.height * EYE_RATIO;
+    this.pos = {
+      x: eyeAt.x - this.up.x * d,
+      y: eyeAt.y - this.up.y * d,
+      z: eyeAt.z - this.up.z * d
     };
-
-    // The exit's own orientation decides where the body hangs off the mouth.
-    // Out of a wall you keep the height you went in at; out of the floor you
-    // stand on it, and out of the ceiling you hang below it. Anything else puts
-    // you inside the surface you just came through.
-    let feetY;
-    if (to.n.y > 0.7) feetY = anchor.y;
-    else if (to.n.y < -0.7) feetY = anchor.y - this.height;
-    else feetY = anchor.y - hy;
-
-    this.pos = { x: anchor.x, y: feetY, z: anchor.z };
-
-    // momentum is turned, never scrubbed: this is the whole point of the thing
     const v = map.dir(this.vel);
     this.vel = { x: v.x, y: v.y, z: v.z };
 
@@ -770,36 +857,22 @@ export class Player {
       this.vel.z += mover.vel.z;
     }
 
-    // and the view comes with it, so a portal on a wall does not leave you
-    // facing the wall you just left through
-    const cp = Math.cos(this.pitch);
-    const look = map.dir({
-      x: -Math.sin(this.yaw) * cp, y: Math.sin(this.pitch), z: -Math.cos(this.yaw) * cp
-    });
-    const ang = lookAngles(look);
-    this.yaw = ang.yaw;
-    this.pitch = clamp(ang.pitch, -MAX_PITCH, MAX_PITCH);
-
-    // Leave the exit genuinely clear of everything, not merely clear of the wall
-    // it is on. Pushing only along the exit's normal cannot fix a body four
-    // millimetres into the *floor*, and _axis() resolves an overlap it did not
-    // cause by ejecting across the whole box — which for the arena floor is a
-    // hundred and twenty metres sideways and then a fall out of the world.
-    this._unstick(to.n);
-
     this.onGround = false;
     this.bumped = false;
     this.stepSmooth = 0;
     this.fellAt = 0;
-    this.portalCooldown = PORTAL_COOLDOWN;
-    this.portalFling = PORTAL_FLING_TIME;
-    this.exitedVia = to;
     this.portalCount++;
     // Peers interpolate between the snapshots they hold; dragging a body across
     // the map between two of them is a smear rather than a teleport. This is the
     // same sequence number a respawn bumps, and it means the same thing here.
     this.spawnSeq++;
-    return true;
+
+    // Which mouth we are in now, so collision stops seeing the *exit's* wall —
+    // the body is half inside that one from this moment on.
+    this.straddling = this._findStraddle(this.portals.links());
+    // Anything else it landed in, though, is a real overlap: resolve it along
+    // the shallowest axis rather than letting _axis() eject across a whole box.
+    if (this._overlaps(this._boxes())) this._unstick(to.n);
   }
 
   /** Shortest way out of everything the player is currently inside.
@@ -812,10 +885,11 @@ export class Player {
    *  tie toward the way out of a portal, so a mouth flush with a wall lets you
    *  out in front of it rather than behind. */
   _unstick(prefer = null, passes = 8) {
+    const boxes = this._boxes();
     for (let i = 0; i < passes; i++) {
       const a = this.aabb();
       let best = null;
-      for (const b of this.world.boxes) {
+      for (const b of boxes) {
         if (!aabbOverlap(a, b)) continue;
         for (const k of ['x', 'y', 'z']) {
           const up = b.max[k] - a.min[k];        // move + to clear it
@@ -834,7 +908,7 @@ export class Player {
       if (!best) return true;
       this.pos[best.k] += best.amount;
     }
-    return !this._overlaps(this.world.boxes);
+    return !this._overlaps(boxes);
   }
 
   _overlaps(boxes) {
@@ -846,15 +920,21 @@ export class Player {
   /** The player as the capsule solid.js resolves against: a vertical segment
    *  inset by the radius at each end, so its lowest point is still the feet. */
   _capsule(height = this.height) {
-    return [this.pos.x, this.pos.y + RADIUS, this.pos.z,
-            this.pos.x, this.pos.y + Math.max(height - RADIUS, RADIUS), this.pos.z];
+    const lo = RADIUS, hi = Math.max(height - RADIUS, RADIUS);
+    const u = this.up;
+    return [this.pos.x + u.x * lo, this.pos.y + u.y * lo, this.pos.z + u.z * lo,
+            this.pos.x + u.x * hi, this.pos.y + u.y * hi, this.pos.z + u.z * hi];
   }
 
   _inSolid() {
-    const solids = this.world.solids;
+    const solids = this._solids();
     if (!solids || !solids.length) return false;
     const [ax, ay, az, bx, by, bz] = this._capsule();
-    for (const s of solids) if (capsulePush(ax, ay, az, bx, by, bz, RADIUS, s)) return true;
+    const a = this.aabb();
+    for (const s of solids) {
+      if (!aabbOverlap(a, s)) continue;
+      if (capsulePush(ax, ay, az, bx, by, bz, RADIUS, s)) return true;
+    }
     return false;
   }
 
@@ -865,22 +945,44 @@ export class Player {
    *  also nudges you a little downhill every frame gravity presses you into a
    *  ramp, and standing still on a slope would slide. */
   _resolveSolids() {
-    const solids = this.world.solids;
+    const solids = this._solids();
     if (!solids || !solids.length) return;
+    // Broad phase first. A convex push-out is not expensive on its own, but it
+    // runs against every solid, twice, on every one of up to eight collision
+    // sub-steps — and the room's corner fillets doubled how many solids there
+    // are, each of them as long as a wall. The box test rejects nearly all of
+    // them for the price of six comparisons.
     for (let pass = 0; pass < 2; pass++) {
       let moved = false;
       for (const s of solids) {
+        if (!aabbOverlap(this.aabb(), s)) continue;
         const [ax, ay, az, bx, by, bz] = this._capsule();
         const hit = capsulePush(ax, ay, az, bx, by, bz, RADIUS, s);
         if (!hit) continue;
         moved = true;
         const n = hit.n;
-        if (n.ny > 0.5) {
-          this.pos.y += hit.depth / n.ny;
-          if (this.vel.y <= 0) {
+        let facing = n.nx * this.up.x + n.ny * this.up.y + n.nz * this.up.z;
+        // A slope can turn you back the right way up, which is the only way home
+        // from a wall short of another portal. Done before the push, so the body
+        // is resolved in the frame it is about to be in.
+        if (facing > 0.5) {
+          const better = this._groundUp(n);
+          if (better) {
+            this._reorient(better);
+            facing = n.nx * this.up.x + n.ny * this.up.y + n.nz * this.up.z;
+          }
+        }
+        if (facing > 0.5) {
+          // walkable: push straight up rather than along the face, or standing
+          // still on a slope would creep downhill every frame gravity presses in
+          const d = hit.depth / facing;
+          this.pos.x += this.up.x * d;
+          this.pos.y += this.up.y * d;
+          this.pos.z += this.up.z * d;
+          if (this.vUp <= 0) {
             this.onGround = true;
-            this.fellAt = Math.max(this.fellAt, -this.vel.y);
-            this.vel.y = 0;
+            this.fellAt = Math.max(this.fellAt, -this.vUp);
+            this.vUp = 0;
           }
         } else {
           this.pos.x += n.nx * hit.depth;
@@ -891,12 +993,52 @@ export class Player {
             this.vel.x -= n.nx * into;
             this.vel.y -= n.ny * into;
             this.vel.z -= n.nz * into;
-            if (Math.abs(n.ny) < 0.7) this.bumped = true;
+            if (Math.abs(facing) < 0.7) this.bumped = true;
           }
         }
       }
       if (!moved) break;      // a second pass only matters where two solids meet
     }
+  }
+
+  /** Which way up the surface underfoot says you should be.
+   *
+   *  Only ever *toward* the world's own up, and only from a face that could
+   *  honestly belong to either axis — which in practice means a 45-degree one,
+   *  since that is the only pitch two axes are equally close to. So a corner
+   *  fillet carries a wall-walker down onto the floor, and the ceiling's fillets
+   *  carry somebody standing upside down onto a wall, but walking into an
+   *  ordinary corner the right way up does nothing at all: there is no more
+   *  upright axis to ratchet to. Leaving the world's up is a portal's job, and
+   *  only a portal's.
+   *
+   *  Returns null when the ground has nothing to say. */
+  _groundUp(n) {
+    let best = null;
+    for (const a of UPS) {
+      const d = n.nx * a.x + n.ny * a.y + n.nz * a.z;
+      if (d < 0.5) continue;                 // not a face this axis could stand on
+      if (a.y <= this.up.y) continue;        // never away from upright
+      if (!best || d > best.d) best = { a, d };
+    }
+    return best ? best.a : null;
+  }
+
+  /** Turn the body over, keeping where it is standing and where it is looking.
+   *  Yaw and pitch are angles *in* a frame, so they have to be re-read in the
+   *  new one or the view would swing when the feet did. */
+  _reorient(up) {
+    if (up === this.up) return;
+    const look = lookFrom(this.up, this.yaw, this.pitch);
+    this.upFrom = this.up;         // the camera rolls out of it rather than snapping
+    this.upBlend = 1;
+    this.up = up;
+    const ang = anglesIn(up, look);
+    this.yaw = ang.yaw;
+    this.pitch = clamp(ang.pitch, -MAX_PITCH, MAX_PITCH);
+    this.stepSmooth = 0;
+    // the body turned about its feet, which can leave it in something
+    if (this._overlaps(this._boxes())) this._unstick(up);
   }
 
   /** move along one axis and push out of anything hit; returns true if blocked */

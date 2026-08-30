@@ -49,7 +49,69 @@ R.arena = await page.evaluate(() => {
   };
 });
 
-// The centre platform's ramp on +x climbs from x=19 (ground) to x=14 (2.5 m).
+// Every slope in the map is 45 degrees, fillets included: the walkable face of
+// each is equally close to two axes, which is exactly what makes it able to hand
+// a player from one to the other.
+R.pitches = await page.evaluate(() => {
+  const g = window.game;
+  const out = [];
+  for (const s of g.world.solids) {
+    if (s.shape !== 1) continue;
+    for (const pl of s.planes) {
+      const flat = Math.hypot(pl.nx, pl.nz);
+      if (flat < 1e-6 || Math.abs(pl.ny) < 1e-6) continue;   // not a sloped face
+      out.push(+(Math.atan2(flat, Math.abs(pl.ny)) * 180 / Math.PI).toFixed(2));
+    }
+  }
+  return out;
+});
+R.every45 = R.pitches.length > 0 && R.pitches.every(p => Math.abs(p - 45) < 0.01);
+
+// ---------------------------------------- a fillet turns a wall-walker upright
+// The whole reason the corners are filleted. Stand somebody on a wall the way a
+// portal would leave them, walk them at the floor, and they should come off the
+// 45-degree face the right way up — and, in the other direction, walking into
+// that same corner upright must not put them on the wall.
+R.fillet = await page.evaluate(async () => {
+  const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
+  const keys = (...on) => { g.input.held.clear(); for (const k of on) g.input.held.add(k); g.input._recalcKeys(); };
+  const wallX = 59.5;                       // the +x wall's inner face
+  // standing on that wall means up points back into the room
+  g.player.spawn({ x: 0, y: 0.2, z: 0 });
+  g.player.up = { x: -1, y: 0, z: 0 };
+  g.player.pos = { x: wallX, y: 6, z: 0 };
+  g.player.vel = { x: 0, y: 0, z: 0 };
+  g.player.yaw = 0; g.player.pitch = 0;
+  await sleep(300);
+  const stoodOnTheWall = g.player.onGround && g.player.up.x === -1;
+  // "forward" for them is along the wall; aim at the floor and walk
+  const a = window.__frame.anglesIn(g.player.up, { x: 0, y: -1, z: 0 });
+  g.player.yaw = a.yaw;
+  keys('fwd');
+  await sleep(2500);
+  keys();
+  await sleep(300);
+  const out = {
+    stoodOnTheWall,
+    upAfter: { ...g.player.up },
+    turnedBackUpright: g.player.up.y === 1 && g.player.onGround && g.player.pos.y < 2,
+    restingY: +g.player.pos.y.toFixed(2), restingX: +g.player.pos.x.toFixed(2)
+  };
+  // ...and the same corner, walked into the right way up, leaves you upright
+  g.player.spawn({ x: wallX - 6, y: 0.2, z: 0 });
+  g.player.up = { x: 0, y: 1, z: 0 };
+  g.player.yaw = -Math.PI / 2;              // forward is +x, at the corner
+  g.player.pitch = 0;
+  keys('fwd');
+  await sleep(2200);
+  keys();
+  out.upAtTheCorner = { ...g.player.up };
+  out.stayedUprightOnTheWayIn = g.player.up.y === 1;
+  return out;
+});
+
+// The centre platform's ramp on +x climbs from x=16.5 (ground) to x=14 (2.5 m),
+// at 45 degrees like every other slope in the map.
 // Walk up it and arrive on the platform — that is the whole point of the change.
 R.walkUp = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
@@ -78,7 +140,7 @@ R.walkUp = await page.evaluate(async () => {
 // standing still on a ramp must not slide you back down it
 R.doesNotSlide = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
-  g.player.spawn({ x: 16.5, y: 3, z: 0 });     // halfway up, dropped on
+  g.player.spawn({ x: 15.25, y: 3, z: 0 });    // halfway up, dropped on
   await sleep(700);
   const settled = { x: g.player.pos.x, y: g.player.pos.y };
   await sleep(1500);                            // stand there, no keys
@@ -97,11 +159,11 @@ R.hitscan = await page.evaluate(() => {
   const g = window.game;
   const at = (y) => g.world.raycast({ x: 21, y, z: 0 }, { x: -1, y: 0, z: 0 }, 60);
   return {
-    // the surface at x=17 is 1 m up, so a shot at 1 m stops about 4 m out
+    // the surface is 1 m up at x=15.5, so a shot at 1 m stops 5.5 m out
     lowShot: +at(1).toFixed(2),
-    // above the ramp's tall end it carries on to the platform's own side, 7 m
+    // higher up the ramp is thinner, so the shot gets further before it lands
     highShot: +at(2.2).toFixed(2),
-    stoppedByTheRamp: at(1) > 2 && at(1) < 5.5,
+    stoppedByTheRamp: at(1) > 2 && at(1) < 6,
     higherGoesFurther: at(2.2) > at(1) + 1
   };
 });
@@ -365,7 +427,11 @@ R.oldSeedStillLoads = await page.evaluate(() => {
 });
 
 // -------------------------------------------------------------------- verdict
-if (R.arena.ramps !== 8) fail.push('the arena does not have eight ramps: ' + JSON.stringify(R.arena));
+// eight stairs plus the eight corner fillets, floor and ceiling
+if (R.arena.ramps !== 16) fail.push('the arena does not have sixteen ramps: ' + JSON.stringify(R.arena));
+if (!R.every45) fail.push('a slope in the default map is not 45 degrees: ' + JSON.stringify(R.pitches));
+if (!R.fillet.turnedBackUpright) fail.push('a corner fillet did not turn a wall-walker upright: ' + JSON.stringify(R.fillet));
+if (!R.fillet.stayedUprightOnTheWayIn) fail.push('walking into a corner the right way up turned the player over: ' + JSON.stringify(R.fillet));
 if (R.arena.boxesInTheRampsPlace > 0) fail.push('a flight of steps is still in the arena: ' + R.arena.boxesInTheRampsPlace);
 if (!R.walkUp.reachedThePlatform) fail.push('could not walk up an arena ramp: ' + JSON.stringify(R.walkUp));
 if (!R.doesNotSlide.standingOnTheRamp) fail.push('did not end up standing on the ramp: ' + JSON.stringify(R.doesNotSlide));

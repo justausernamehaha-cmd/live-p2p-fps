@@ -12,6 +12,7 @@ import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
 import { portalMap } from './portal.js';
+import { lookFrom, anglesIn, basisFor } from './frame.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
@@ -71,6 +72,7 @@ class Game {
     window.game = this;          // handy in the console; also what the test harness pokes at
     window.__spreadFor = spreadFor;
     window.__WEAPONS = WEAPONS;  // test/portals.mjs compares the guns against each other
+    window.__frame = { anglesIn, lookFrom, basisFor };   // test/slopes.mjs stands a player on a wall
     window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
     window.__selfId = getSelfId;
     window.__Level = Level;      // test/designer.mjs decodes seeds with it
@@ -125,7 +127,7 @@ class Game {
     // a body of your own, drawn only into portal views: shoot one portal in
     // front of you and one behind, and the person you see is you
     this.selfAvatar = new SelfAvatar(this.scene);
-    this.portals.selfView = this.selfAvatar.group;
+    this.portals.selfView = this.selfAvatar.root;
 
     addEventListener('resize', () => this._resize());
     addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
@@ -444,6 +446,7 @@ class Game {
     let r = this.remotes.get(id);
     if (!r) {
       r = new RemotePlayer(id, this.scene);
+      r.portals = this.portals;    // so their other half can be drawn out of a mouth
       this.remotes.set(id, r);
       this._recolour();
     }
@@ -688,11 +691,18 @@ class Game {
 
   /** The portal gun's brick wears the player's own pair — blue on the left and
    *  orange on the right on your own, until somebody else joins and everybody's
-   *  colours are re-agreed. Every other gun keeps the brick it has always had. */
+   *  colours are re-agreed. Every other gun keeps the brick it has always had.
+   *
+   *  The same pair goes onto the two touch buttons, because with this gun in
+   *  hand FIRE is the left mouth and AIM is the right one — and AIM has to stop
+   *  latching while that is true, or a player who prefers a toggled aim would
+   *  place a portal on every other tap. */
   _paintGun() {
-    if (!this.loadout.weapon.portal) return;
+    const portal = !!this.loadout.weapon.portal;
     const c = this.portals.myColors();
-    this.viewmodel.setAccents(c.a, c.b);
+    if (portal) this.viewmodel.setAccents(c.a, c.b);
+    this.hud.portalTriggers(portal, c.a, c.b);
+    this.input.setHoldOverride('ads', portal);
   }
 
   _fire(t, input) {
@@ -702,7 +712,8 @@ class Game {
     const w = this.loadout.tryFire(t, input.down('fire'), input.pressed('fire'));
     if (!w) return;
 
-    const eye = new THREE.Vector3(p.pos.x, p.eyeY + p.bob, p.pos.z);
+    const e = p.eye(p.bob);
+    const eye = new THREE.Vector3(e.x, e.y, e.z);
     const base = this._aimDirection();
     const moving = Math.hypot(p.vel.x, p.vel.z) > 1.5 || !p.onGround;
     const spread = spreadFor(w, moving, this.adsT);
@@ -776,7 +787,7 @@ class Game {
     for (const [action, side] of [['fire', 'a'], ['ads', 'b']]) {
       const w = this.loadout.tryPortalFire(t, input.pressed(action));
       if (!w) continue;
-      const eye = { x: p.pos.x, y: p.eyeY + p.bob, z: p.pos.z };
+      const eye = p.eye(p.bob);
       const dir = this._aimDirection();
       this.portals.fire(this.portals.selfId, eye, dir, side);
       this.effects.muzzle(w.shakeScale);
@@ -800,12 +811,8 @@ class Game {
   _aimDirection() {
     const p = this.player;
     const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-    const yaw = p.yaw + p.recoilYaw;
-    return new THREE.Vector3(
-      -Math.sin(yaw) * Math.cos(pitch),
-      Math.sin(pitch),
-      -Math.cos(yaw) * Math.cos(pitch)
-    ).normalize();
+    const d = lookFrom(p.up, p.yaw + p.recoilYaw, pitch);
+    return new THREE.Vector3(d.x, d.y, d.z).normalize();
   }
 
   /** Trace a shot, through any portals it meets on the way.
@@ -980,14 +987,35 @@ class Game {
     }
 
     const shake = this.effects.shake;
+    const e = p.eye(p.bob);
     cam.position.set(
-      p.pos.x + (Math.random() - 0.5) * shake * 0.1,
-      p.eyeY + p.bob + (Math.random() - 0.5) * shake * 0.1,
-      p.pos.z
+      e.x + (Math.random() - 0.5) * shake * 0.1,
+      e.y + (Math.random() - 0.5) * shake * 0.1,
+      e.z + (Math.random() - 0.5) * shake * 0.1
     );
-    cam.rotation.set(0, 0, 0);
-    cam.rotateY(p.yaw + p.recoilYaw);
-    cam.rotateX(p.pitch + p.recoil);
+    // The horizon is the player's own, not the world's: come out of a portal
+    // standing on a wall and the room is what has turned over, not you. lookAt
+    // takes the roll from `cam.up`, and pitch is clamped short of straight up so
+    // the look direction is never parallel to it.
+    const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    const d = lookFrom(p.up, p.yaw + p.recoilYaw, pitch);
+    // The horizon rolls into place rather than snapping: `upBlend` runs 1 -> 0
+    // over the fifth of a second after the body turned over, and only the camera
+    // ever sees the in-between.
+    if (p.upBlend > 0 && p.upFrom) {
+      const k = p.upBlend;
+      cam.up.set(
+        p.up.x * (1 - k) + p.upFrom.x * k,
+        p.up.y * (1 - k) + p.upFrom.y * k,
+        p.up.z * (1 - k) + p.upFrom.z * k
+      );
+      // two opposite ups have no plane between them; lean on the look direction
+      if (cam.up.lengthSq() < 1e-6) cam.up.set(p.up.x, p.up.y, p.up.z);
+      else cam.up.normalize();
+    } else {
+      cam.up.set(p.up.x, p.up.y, p.up.z);
+    }
+    cam.lookAt(cam.position.x + d.x, cam.position.y + d.y, cam.position.z + d.z);
     if (!p.alive) cam.rotateZ(0.9);        // drop the view on death
   }
 

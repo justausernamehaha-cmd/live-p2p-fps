@@ -146,6 +146,11 @@ export class Input {
     this._mouseHeld = new Set();
     this.toggled = new Set();
     this.toggleMode = new Set();
+    // Actions whose toggle mode is switched off for as long as something else
+    // needs every press to count. The portal gun's right trigger is the case:
+    // a latched AIM would place a mouth on the tap that turns it on and nothing
+    // at all on the tap that turns it off, so every second tap would be dead.
+    this.holdOverride = new Set();
     try {
       for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
     } catch { /* nothing saved */ }
@@ -536,7 +541,7 @@ export class Input {
   /** A press. In hold mode the action stays on while the input is down; in
    *  toggle mode a press flips it and the release is ignored. */
   press(action) {
-    if (this.toggleMode.has(action)) {
+    if (this._latches(action)) {
       if (this.toggled.has(action)) {
         this.toggled.delete(action);
         this.held.delete(action);
@@ -552,8 +557,29 @@ export class Input {
   }
 
   release(action) {
-    if (this.toggleMode.has(action)) return;   // a toggle only responds to presses
+    if (this._latches(action)) return;   // a toggle only responds to presses
     this.held.delete(action);
+  }
+
+  /** Is this action latching right now? Its mode, unless something has taken
+   *  the latch away for the moment. */
+  _latches(action) {
+    return this.toggleMode.has(action) && !this.holdOverride.has(action);
+  }
+
+  /** Force an action to behave as hold-to-use whatever its saved mode says.
+   *  Turning it on drops whatever the latch was holding, so the override can
+   *  never leave an action stuck down. */
+  setHoldOverride(action, on) {
+    if (on === this.holdOverride.has(action)) return;
+    if (on) {
+      this.holdOverride.add(action);
+      if (this.toggled.delete(action)) this.held.delete(action);
+    } else {
+      this.holdOverride.delete(action);
+      this.held.delete(action);
+    }
+    this._recalcKeys();
   }
 
   /** Switching an action to hold mode drops whatever the toggle was holding. */

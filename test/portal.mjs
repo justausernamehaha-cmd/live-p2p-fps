@@ -9,7 +9,7 @@
 //
 //   node test/portal.mjs
 import {
-  HALF_W, HALF_H, faceOf, fitPortal, frameFor, crossing, portalMap,
+  HALF_W, HALF_H, faceOf, fitPortal, frameFor, portalMap, atMouth, mouthAround,
   lookAngles, assignHues, overlapsPartner
 } from '../src/portal.js';
 import { Level } from '../src/level.js';
@@ -167,28 +167,36 @@ t('...and follows the exit when it faces the other way',
   fx(lookAngles(portalMap(A, Bflip).dir({ x: 0, y: 0, z: -1 })).yaw));
 t('lookAngles round-trips a level look', near(lookAngles({ x: 0, y: 0, z: -1 }).yaw, 0, 1e-9));
 
-// ---------------------------------------------------------------- crossing
-// A's normal is +z, so its front is the +z side: you go in heading -z. Entering
-// from behind is not entering, which is what stops the exit re-swallowing you.
-t('walking into the mouth crosses it',
-  crossing({ x: 0, y: 1, z: 0.3 }, { x: 0, y: 1, z: -0.3 }, A) > 0);
-t('walking into its back does not',
-  crossing({ x: 0, y: 1, z: -0.3 }, { x: 0, y: 1, z: 0.3 }, A) < 0);
-t('walking past the edge of it does not',
-  crossing({ x: 3, y: 1, z: 0.3 }, { x: 3, y: 1, z: -0.3 }, A) < 0);
-t('standing still does not',
-  crossing({ x: 0, y: 1, z: 0.3 }, { x: 0, y: 1, z: 0.3 }, A) < 0);
-t('just inside the rim crosses',
-  crossing({ x: HALF_W * 0.9, y: 1, z: 0.2 }, { x: HALF_W * 0.9, y: 1, z: -0.2 }, A) > 0);
-t('and just outside it does not',
-  crossing({ x: HALF_W * 1.05, y: 1, z: 0.2 }, { x: HALF_W * 1.05, y: 1, z: -0.2 }, A) < 0);
-// the rim is an entrance: a shoulder's width outside the drawn oval still counts
-t('brushing the rim from outside the oval still goes in',
-  crossing({ x: HALF_W * 1.1, y: 1, z: 0.2 }, { x: HALF_W * 1.1, y: 1, z: -0.2 }, A, 0.17) > 0);
-t('...but a long way outside still does not',
-  crossing({ x: HALF_W + 0.6, y: 1, z: 0.2 }, { x: HALF_W + 0.6, y: 1, z: -0.2 }, A, 0.17) < 0);
-t('a tall player clipping the top of a low portal still goes in',
-  crossing({ x: 0, y: 1 + HALF_H * 0.95, z: 0.2 }, { x: 0, y: 1 + HALF_H * 0.95, z: -0.2 }, A) > 0);
+// ------------------------------------------------- a body standing in a mouth
+// The old segment-crossing test went with the teleport. What decides a crossing
+// now is the eye passing the surface (player.js); what this file owns is whether
+// a body is *in* a mouth at all, which is two-sided — half a body past the plane
+// is the ordinary case, not an impossible one.
+{
+  const up = { x: 0, y: 1, z: 0 };
+  // A is centred at (0, 1, 0) facing +z, so a body standing at z = 0.1 is astride it
+  t('a body astride a mouth is in it',
+    atMouth(A, { x: 0, y: 0, z: 0.1 }, up, 1.8, 0.2, 0.17));
+  t('...and so is one pressed to the surface from behind',
+    atMouth(A, { x: 0, y: 0, z: -0.1 }, up, 1.8, 0.2, 0.17));
+  t('...but not one standing a stride in front of it',
+    !atMouth(A, { x: 0, y: 0, z: 0.9 }, up, 1.8, 0.2, 0.17));
+  t('...nor one that went through and kept going',
+    !atMouth(A, { x: 0, y: 0, z: -3 }, up, 1.8, 0.2, 0.17));
+  t('a body beside the mouth is not in it',
+    !atMouth(A, { x: 3, y: 0, z: 0.1 }, up, 1.8, 0.2, 0.17));
+  // the rim is an entrance: a shoulder's width outside the drawn oval counts
+  t('the rim counts as the mouth',
+    atMouth(A, { x: HALF_W + 0.1, y: 0, z: 0.1 }, up, 1.8, 0.2, 0.17));
+  t('...but only by a shoulder',
+    !atMouth(A, { x: HALF_W + 0.6, y: 0, z: 0.1 }, up, 1.8, 0.2, 0.17));
+  t('mouthAround names the link a body is standing in',
+    mouthAround([{ from: B, to: A }, { from: A, to: B }],
+      { x: 0, y: 0, z: 0.1 }, up, 1.8, 0.2, 0.17)?.from === A);
+  t('...and nothing where it is standing in none',
+    mouthAround([{ from: B, to: A }, { from: A, to: B }],
+      { x: 20, y: 0, z: 20 }, up, 1.8, 0.2, 0.17) === null);
+}
 
 // a pair cannot be placed on top of itself
 t('a portal refuses to swallow its own partner', overlapsPartner(A, { ...A }));

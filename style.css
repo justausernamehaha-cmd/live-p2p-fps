@@ -107,6 +107,13 @@ canvas#game{position:fixed;inset:0;width:100%;height:100%;display:block;touch-ac
 .tbtn.wide{width:104px;height:104px;font-size:14px;border-color:var(--accent);background:#ff8a3d24}
 .tbtn.small{width:auto;height:34px;border-radius:17px;padding:0 14px;font-size:10px}
 .tbtn:active,.tbtn.held{background:#ffffff44;transform:scale(.95)}
+/* The portal gun's two triggers. --pc is the mouth this button places, set from
+   the pair the page agreed with everyone else, so the button matches what comes
+   out of the wall. Line height is tightened because these labels are two words
+   where FIRE and AIM were one. */
+.tbtn.portal{border-color:var(--pc);background:color-mix(in srgb,var(--pc) 20%,#00000040);
+  line-height:1.15;letter-spacing:.04em}
+.tbtn.portal:active,.tbtn.portal.held{background:color-mix(in srgb,var(--pc) 45%,#00000040)}
 #tbuttons{position:absolute;right:calc(16px + env(safe-area-inset-right,0px));bottom:calc(18px + var(--safe));
   display:grid;grid-template-columns:auto auto;gap:12px;align-items:end;justify-items:end}
 #tbuttons [data-btn=fire]{grid-column:2;grid-row:1/span 2}

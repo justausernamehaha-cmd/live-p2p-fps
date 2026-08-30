@@ -38,12 +38,13 @@ against the live site.
 | `holdtoggle.mjs` | crouch and aim in hold or toggle mode |
 | `map.mjs` | every place you can stand lets you stand up |
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
-| `settings.mjs` | rebinding and stacking keys, latchable actions, the 3s protection window, pause overlay |
+| `settings.mjs` | rebinding and stacking keys, latchable actions, the 3s protection window, pause overlay, the portal gun's two touch triggers |
 | `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed, a ramp's lip does not rob a chain |
-| `slopes.mjs` | ramps are walkable and solid; a turned box collides where it was turned to |
+| `slopes.mjs` | ramps are walkable and solid; every slope is 45°; a corner fillet turns a wall-walker upright |
+| `frame.mjs` | which way is up: the basis, at all six ups, in node |
 | `solid.mjs` | the convex layer, in node — no browser, no server, about a second |
 | `portal.mjs` | portal fitting, sliding, refusal, the traversal map, colour agreement, platform seeds — also node-only |
-| `portals.mjs` | the same claims proved to the *player*: walking in, falling through, riding a platform |
+| `portals.mjs` | the same claims proved to the *player*: standing astride a mouth, the hand-over being exact, gravity coming through with the body, riding a platform |
 
 ## Things worth not rediscovering
 
@@ -311,6 +312,111 @@ Everything below was found by measuring the running game, never by reading.
 - **Ctrl+W cannot be stopped by `preventDefault()`.** Only the Keyboard Lock API
   can, and only in fullscreen — so capturing the mouse takes the page fullscreen
   to earn it. That is a real trade, so it is a checkbox.
+
+## Gravity, a room with a lid, and portals you can stand in — 2026-08-30
+
+Five things asked for together, and they turned out to be one change: a portal
+stopped being a teleport, gravity started following the body through it, the room
+was closed so there is always something to land on, every corner was filleted so
+there is a way back, and the speed limit went.
+
+### A portal is a hole, not a doorway
+
+It used to hand you over at a plane held a player's radius *in front* of the
+wall, and put you out a further 0.45 m clear of the far mouth. Both of those were
+the teleport showing. Now:
+
+- The wall a mouth is cut into is taken out of collision for exactly as long as a
+  body is in that mouth (`Player._boxes`, `_solids`, `World.hostFor`). Nothing
+  else changes, and the body can never be more than a radius past the plane
+  before the crossing hands it over — so the hole cannot be walked *along*, only
+  through.
+- The hand-over is the eye reaching the surface, and it is the portal's own
+  transform applied to the whole body: position, velocity, view, and which way is
+  up. `test/portals.mjs` asserts the eye comes out exactly as far in front of the
+  far mouth as it had just gone behind the near one, to 1e-6, at exactly the same
+  speed. That equality is the whole claim; if it ever drifts, the crossing has
+  become a jump again.
+- Which means you can stand still with the body astride a mouth, half out of each
+  — the thing that was asked for. The other half is drawn as a *ghost* out of the
+  far mouth (`ghostOf` in remote.js, for peers and for your own body in portal
+  views). There is no clipping to do: each half is behind the surface its own
+  mouth is cut into, so the walls do it.
+- **The carve has to be predictive.** A body arriving faster than the reach is
+  wide gets stopped by the wall on the sub-step *before* the hole opens, stands
+  on it for a frame, and sets off again from rest — a fall arrived at 18 m/s and
+  left at 8. `_findStraddle` grows the reach by however far this sub-step will
+  close on the surface.
+- **Anchor the hand-over on the eye, not the feet.** Where a mouth lies on a ramp
+  the transform turns the body by something that is not a right angle, and
+  rounding the new up to an axis moves whatever point was pinned — 0.7 m at the
+  head, for a mouth on the arena's own stairs. Pin the eye and the error goes
+  into where the feet hang, which nobody is looking through.
+- Gone with the teleport: `EXIT_CLEAR` on arrival, `PORTAL_LEAD`, `exitedVia`,
+  `PORTAL_REARM` and the cooldown. Nothing stops a pair strobing because nothing
+  needs to: a hand-over requires an actual crossing, and it leaves you in *front*
+  of the far plane, so the next one needs another one.
+- Deliberately lost with it: sliding along a wall past a mouth no longer drags
+  you through. Touching the surface anywhere inside the oval used to be enough.
+  You have to go in now, which is the same rule that stops it being a teleport.
+
+### Which way is up is per player (`src/frame.js`)
+
+Up is one of the six world axes, and gravity pulls along -up. That keeps every
+collision AABB axis-aligned however the body is standing, so the step-up, the
+platform code and the whole of `_axis` work unchanged — they are only told which
+letter is up and which way it points. At the ordinary up the arithmetic is
+*identical* to what it was, and `test/frame.mjs` asserts the basis against the
+closed form the camera has always used rather than against itself.
+
+A portal turns you over by applying its transform to your up and rounding to the
+nearest axis. So the user's own case — a mouth over your head, another on a wall
+— comes out standing on that wall with gravity pulling into it. A portal on a
+ramp rounds, which is blunt on purpose: half a frame of a tilted body is worth
+less than every other surface in the game staying exact.
+
+The camera rolls into a new up over 0.22 s (`upBlend`), because the body turns at
+once and physics has no use for a half-turned frame, but a view that snaps 90
+degrees is unreadable.
+
+### The room has a lid, and every corner is filleted
+
+The arena is a closed 12 m box (it was 9 m of wall and open sky; 9 put the
+ceiling within a jump of somebody standing on the centre block). The designer's
+rooms always had a ceiling.
+
+Every inside corner, floor and ceiling alike, carries a 45-degree wedge — in the
+arena (`World._fillets`) and in every designed room (`Level._buildFillets`,
+derived from the room's size and never encoded, so old seeds still describe
+exactly this room). They are not decoration: for somebody standing on a wall a
+right-angled corner is a dead end, because there is no surface between the wall
+and the floor that either of them can walk on. A 45-degree face belongs to both.
+
+`Player._groundUp` is the rule: a walkable face hands you to whichever axis it
+could equally belong to, but **only ever toward the world's own up**. So a fillet
+carries a wall-walker down onto the floor, and a ceiling fillet carries somebody
+upside down onto a wall, but walking into an ordinary corner the right way up
+does nothing at all — there is no more upright axis to ratchet to. Leaving the
+world's up is a portal's job and only a portal's, which is what keeps every
+corner in the map from becoming a wall-run.
+
+Every slope in the default map is 45 degrees now, the centre stairs included:
+45 is the one pitch that belongs equally to the two surfaces it joins, and a
+slope decides which way is up for whoever is standing on it.
+
+### No speed limit
+
+`SPEED_CAP` (22 m/s) and the raised `PORTAL_SPEED_CAP`/`portalFling` that existed
+only to get out of its way are both gone. Friction, drag and the collapse on a
+bump are the only things that take speed off you now.
+
+### The portal gun's two triggers, on a phone
+
+With it in hand the FIRE and AIM buttons become LEFT PORTAL and RIGHT PORTAL and
+wear the pair this page actually agreed with everyone else. **A latched AIM had
+to be suspended while they do** (`Input.setHoldOverride`): a toggled aim placed a
+mouth on the tap that turned it on and nothing at all on the tap that turned it
+off, so every second tap was dead. Watched go red.
 
 ## Ideas, not built
 

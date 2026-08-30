@@ -236,6 +236,70 @@ R.sprintButton = await page.evaluate(async () => {
            inTouchPad: !!el.closest('#tbuttons') };
 });
 
+// ------------------------------------ the portal gun's two triggers, on a phone
+// The portal gun has no fire and no aim: it has a left mouth and a right one. On
+// a phone those are the FIRE and AIM buttons, so with it in hand they have to
+// say so and wear the pair this page actually got — and AIM has to stop latching
+// while they do, or a player who prefers a toggled aim would place a portal on
+// the tap that turns it on and nothing at all on the tap that turns it off.
+R.portalButtons = await page.evaluate(async () => {
+  const g = window.game;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const fireBtn = document.querySelector('.tbtn[data-btn=fire]');
+  const aimBtn = document.querySelector('.tbtn[data-btn=ads]');
+  const t = () => performance.now() / 1000;
+  // the labels are two lines, so the break counts as the space
+  const text = el => el.innerHTML.replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ').trim();
+
+  g.input.setToggleMode('ads', true);          // the case that used to break
+  g.protectedUntil = 0;
+  g.player.alive = true;
+  g._switch(g.loadout.switchTo(0, t()));       // rifle first
+  await sleep(60);
+  const asRifle = { fire: text(fireBtn), aim: text(aimBtn),
+                    marked: fireBtn.classList.contains('portal') };
+
+  g._switch(g.loadout.switchTo(3, t()));       // ...then the portal gun
+  await sleep(60);
+  const colours = g.portals.myColors();
+  const hex = v => '#' + v.toString(16).padStart(6, '0');
+  const asPortalGun = {
+    fire: text(fireBtn), aim: text(aimBtn),
+    marked: fireBtn.classList.contains('portal') && aimBtn.classList.contains('portal'),
+    leftColour: fireBtn.style.getPropertyValue('--pc') === hex(colours.a),
+    rightColour: aimBtn.style.getPropertyValue('--pc') === hex(colours.b),
+    latches: g.input.isToggle('ads') && g.input.holdOverride.has('ads')
+  };
+
+  // tap AIM twice, the way a thumb does, and count the portal balls that leave
+  let balls = 0;
+  const realFire = g.portals.fire.bind(g.portals);
+  g.portals.fire = function (...a) { if (!a[4]) balls++; return realFire(...a); };
+  const tap = async el => {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', pointerId: 7 }));
+    await sleep(70);
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', pointerId: 7 }));
+    await sleep(380);          // the gun's own interval is 0.32 s
+  };
+  await sleep(320);            // clear the quarter-second delay on swapping guns
+  await tap(aimBtn);
+  const afterOne = balls;
+  const stuckOn = g.input.down('ads');
+  await tap(aimBtn);
+  const afterTwo = balls;
+  await tap(fireBtn);
+  const afterFire = balls;
+  g.portals.fire = realFire;
+
+  g._switch(g.loadout.switchTo(0, t()));       // back to the rifle
+  await sleep(60);
+  const restored = { fire: text(fireBtn), aim: text(aimBtn),
+                     marked: fireBtn.classList.contains('portal'),
+                     latchesAgain: !g.input.holdOverride.has('ads') };
+  g.input.setToggleMode('ads', false);
+  return { asRifle, asPortalGun, afterOne, afterTwo, afterFire, stuckOn, restored };
+});
+
 // ----------------- leaving the panel gives one 3s window, not two of anything
 // The point of merging them is that the shield and the weapon lock are the same
 // state, so the test is: while it holds you cannot be hurt *and* cannot fire,
@@ -322,6 +386,10 @@ R.pause = await page.evaluate(async () => {
   g.player.pos.y += 4;
   await new Promise(f => setTimeout(f, 500));
   out.worldStillMoving = Math.abs(g.player.pos.y - (before + 4)) > 0.2;
+  out.liftedFrom = +before.toFixed(2);
+  out.landedAt = +g.player.pos.y.toFixed(2);
+  out.alive = g.player.alive;
+  out.pos = { x: +g.player.pos.x.toFixed(1), z: +g.player.pos.z.toFixed(1) };
   return out;
 });
 
@@ -408,6 +476,22 @@ if (R.sprintLatches.afterSecondTap) fail.push('sprint did not latch off');
 if (!R.jumpLatches.held) fail.push('jump did not latch on');
 if (R.jumpLatches.hops < 2) fail.push('a latched jump did not keep hopping: ' + JSON.stringify(R.jumpLatches));
 if (!R.jumpLatches.releasedOnSecondTap) fail.push('jump did not latch off');
+const PB = R.portalButtons;
+if (PB.asRifle.fire !== 'FIRE' || PB.asRifle.aim !== 'AIM' || PB.asRifle.marked)
+  fail.push('the ordinary buttons are not FIRE and AIM: ' + JSON.stringify(PB.asRifle));
+if (PB.asPortalGun.fire !== 'LEFT PORTAL' || PB.asPortalGun.aim !== 'RIGHT PORTAL')
+  fail.push('the portal gun does not rename its two triggers: ' + JSON.stringify(PB.asPortalGun));
+if (!PB.asPortalGun.marked || !PB.asPortalGun.leftColour || !PB.asPortalGun.rightColour)
+  fail.push('the triggers do not wear the page\'s own pair: ' + JSON.stringify(PB.asPortalGun));
+if (!PB.asPortalGun.latches)
+  fail.push('a latched AIM was not suspended for the portal gun: ' + JSON.stringify(PB.asPortalGun));
+if (PB.afterOne !== 1) fail.push('the AIM button placed no right portal: ' + PB.afterOne);
+if (PB.afterTwo !== 2) fail.push('the second AIM tap did nothing — the latch is still on: ' + JSON.stringify(PB));
+if (PB.afterFire !== 3) fail.push('the FIRE button placed no left portal: ' + JSON.stringify(PB));
+if (PB.stuckOn) fail.push('tapping AIM with the portal gun left the sights latched on');
+if (PB.restored.fire !== 'FIRE' || PB.restored.aim !== 'AIM' || PB.restored.marked)
+  fail.push('the buttons did not go back to FIRE and AIM: ' + JSON.stringify(PB.restored));
+if (!PB.restored.latchesAgain) fail.push('AIM did not get its latch back with an ordinary gun');
 if (!R.sprintButton.exists) fail.push('there is no sprint button');
 if (!R.sprintButton.inTouchPad) fail.push('the sprint button is not on the touch pad');
 if (!R.sprintButton.whileDown) fail.push('the sprint button does not press sprint');

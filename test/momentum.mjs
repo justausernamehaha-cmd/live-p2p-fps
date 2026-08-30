@@ -53,21 +53,30 @@ R.hopChain = await page.evaluate(async () => {
   // test/mechanics.mjs uses, which is the one known to build speed
   for (const code of ['Space', 'KeyW', 'KeyD']) dispatchEvent(new KeyboardEvent('keydown', { code }));
 
+  // Counted per *game* frame, not per wall-clock sample. Polling every 16 ms
+  // measures how fast the page is rendering — under a software rasteriser one
+  // frame of ground contact spans two or three polls, and every one of them
+  // looked like a dropped hop. The claim is about frames the player spent
+  // standing on the floor with jump held, so count those.
   let hops = 0, groundFrames = 0, missed = 0, wasGround = true, peak = 0;
+  const realUpdate = g.player.update.bind(g.player);
+  g.player.update = function (dt, input) {
+    realUpdate(dt, input);
+    const on = this.onGround;
+    if (on) {
+      groundFrames++;
+      if (wasGround) missed++;          // two frames on the floor = a lost hop
+    }
+    if (wasGround && !on) hops++;
+    wasGround = on;
+    peak = Math.max(peak, Math.hypot(this.vel.x, this.vel.z));
+  };
   const t0 = performance.now();
   while (performance.now() - t0 < 4000) {
     g.player.yaw -= 0.016;                       // turn right, into the strafe
     await sleep(16);
-    const on = g.player.onGround;
-    if (on) {
-      groundFrames++;
-      // grounded with jump held and still grounded next sample = a lost hop
-      if (wasGround) missed++;
-    }
-    if (wasGround && !on) hops++;
-    wasGround = on;
-    peak = Math.max(peak, Math.hypot(g.player.vel.x, g.player.vel.z));
   }
+  g.player.update = realUpdate;
   for (const code of ['Space', 'KeyW', 'KeyD']) dispatchEvent(new KeyboardEvent('keyup', { code }));
   const speed = Math.hypot(g.player.vel.x, g.player.vel.z);
   return { hops, groundFrames, missed, peak: +peak.toFixed(2), speed: +speed.toFixed(2) };
@@ -147,7 +156,10 @@ R.fallPaysOut = await page.evaluate(async () => {
     shortDrop, longDrop,
     bothLanded: shortDrop.landed && longDrop.landed,
     taller: longDrop.speed > shortDrop.speed + 2,
-    capped: longDrop.speed <= 22.01
+    // There is no speed cap any more, so what bounds this is the payout itself:
+    // FALL_SPEED_MAX is 8 m/s, and the short drop (which pays out nothing) is
+    // the walking speed both of them start from.
+    capped: longDrop.speed <= shortDrop.speed + 8.01
   };
 });
 
@@ -265,7 +277,7 @@ if (R.stopsDead > 0.5) fail.push('letting go of everything did not stop the play
 if (!R.gravity.heavier) fail.push('falling is not heavier than rising: ' + JSON.stringify(R.gravity));
 if (!R.fallPaysOut.bothLanded) fail.push('a drop never reached the ground: ' + JSON.stringify(R.fallPaysOut));
 if (!R.fallPaysOut.taller) fail.push('a long fall was worth no more speed than a short one: ' + JSON.stringify(R.fallPaysOut));
-if (!R.fallPaysOut.capped) fail.push('the fall bonus broke the speed cap: ' + JSON.stringify(R.fallPaysOut));
+if (!R.fallPaysOut.capped) fail.push('the fall bonus paid out more than its own maximum: ' + JSON.stringify(R.fallPaysOut));
 if (R.standingDrop > 0.5) fail.push('dropping while standing still flung the player: ' + R.standingDrop);
 if (R.onTheRealMap.hops < 4) fail.push('the chain does not work on the real arena: ' + JSON.stringify(R.onTheRealMap));
 if (!R.rampLip.tried) fail.push('the ramp sweep never reached the ramp: ' + JSON.stringify(R.rampLip));

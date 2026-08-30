@@ -11,8 +11,14 @@ export class Hud {
       scoreboard: $('scoreboard'), scorebody: $('scorebody'),
       peercount: $('peercount'), ping: $('ping'), roomtag: $('roomtag'),
       chatform: $('chatform'), chatinput: $('chatinput'), status: $('status'),
-      protection: $('protection'), lockhint: $('lockhint'), debug: $('debug')
+      protection: $('protection'), lockhint: $('lockhint'), debug: $('debug'),
+      btnFire: document.querySelector('.tbtn[data-btn=fire]'),
+      btnAds: document.querySelector('.tbtn[data-btn=ads]')
     };
+    // what those two buttons say when they are an ordinary gun's buttons
+    for (const el of [this.el.btnFire, this.el.btnAds]) {
+      if (el) el.dataset.label = el.textContent.trim();
+    }
     this._cache = {};
     this._hitTimer = 0;
     this._dmgTimer = 0;
@@ -69,6 +75,27 @@ export class Hud {
     this._set('mag', mag, v => { this.el.mag.textContent = v; });
     this._set('reserve', reserve, v => { this.el.reserve.textContent = v; });
     this._set('reloading', !!reloading, v => this.el.reloading.classList.toggle('hidden', !v));
+  }
+
+  /** The portal gun has no fire and no aim: it has a left trigger and a right
+   *  one. On a phone those are the FIRE and AIM buttons, so while it is in hand
+   *  they say so and wear the two colours this page actually got — which are
+   *  re-agreed whenever somebody joins, hence the colours in the cache key. */
+  portalTriggers(on, left, right) {
+    this._set('ptrig', on ? `${left}:${right}` : '', () => {
+      for (const [el, label, hex] of [[this.el.btnFire, 'LEFT<br>PORTAL', left],
+                                      [this.el.btnAds, 'RIGHT<br>PORTAL', right]]) {
+        if (!el) continue;
+        if (on) {
+          el.innerHTML = label;
+          el.style.setProperty('--pc', '#' + hex.toString(16).padStart(6, '0'));
+        } else {
+          el.textContent = el.dataset.label;
+          el.style.removeProperty('--pc');
+        }
+        el.classList.toggle('portal', on);
+      }
+    });
   }
 
   hitmarker(kill) {

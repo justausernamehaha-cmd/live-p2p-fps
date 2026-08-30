@@ -1,3 +1,4 @@
+import { upIndex } from './frame.js';
 import { round2, now } from './util.js';
 
 // Trystero gives us WebRTC mesh networking with no server of our own: public
@@ -110,6 +111,7 @@ export class Net {
     this._send(this.aState, {
       x: round2(player.pos.x), y: round2(player.pos.y), z: round2(player.pos.z),
       a: round2(player.yaw), b: round2(player.pitch),
+      u: upIndex(player.up),       // which way is up for them; a portal can change it
       h: round2(player.height),
       hp: player.alive ? Math.max(1, Math.round(player.hp)) : 0,
       k: player.kills, d: player.deaths,

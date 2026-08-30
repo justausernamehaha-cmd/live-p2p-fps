@@ -42,7 +42,11 @@ const R = await page.evaluate(async () => {
     g.player.vel = { x: 0, y: 0, z: 0 };
     g.player.yaw = yaw; g.player.pitch = 0;
     g.player.crouchT = 0; g.player.sprintLatch = false; g.player.stepSmooth = 0;
-    g.player.portalCooldown = 0;
+    // Which way is up is state now, and a portal can turn it over. Parking
+    // somewhere means parking there the right way up, or every check after the
+    // first traversal would quietly be measuring a player standing on a wall.
+    g.player.up = { x: 0, y: 1, z: 0 };
+    g.player.straddling = null;
   };
   const speed = () => Math.hypot(g.player.vel.x, g.player.vel.z);
   const round = v => +v.toFixed(2);
@@ -123,7 +127,7 @@ const R = await page.evaluate(async () => {
     c: { x: 40, y: 3, z: 40 }, n: { x: 0, y: 0, z: -1 },
     u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1
   });
-  park(-40, 8, -40, 0);
+  park(-40, 7, -40, 0);                        // the arena has a roof now
   g.player.vel = { x: 0, y: -18, z: 0 };       // dropping hard
   const fellAt = 18;
   // Read at the instant of the traversal. Sampling a moment later measures where
@@ -247,7 +251,7 @@ const R = await page.evaluate(async () => {
   // then count how much of it the front mouth is showing. The control is the
   // same frame with the body taken out of portal views entirely.
   const magentaIn = async (showSelf) => {
-    g.portals.selfView = showSelf ? g.selfAvatar.group : null;
+    g.portals.selfView = showSelf ? g.selfAvatar.root : null;
     g.myColor = 0xff00ff;
     g.selfAvatar.setColor(0xff00ff);
     await sleep(500);
@@ -263,14 +267,14 @@ const R = await page.evaluate(async () => {
   };
   out.selfSeenThroughPortal = await magentaIn(true);
   out.selfNotSeenWithoutBody = await magentaIn(false);
-  g.portals.selfView = g.selfAvatar.group;
+  g.portals.selfView = g.selfAvatar.root;
   out.viewIsLive = g.portals.pairs.get('me')?.a?.disc.material.uniforms.uHasView.value;
   // A mouth carries no lamp. It used to, and a portal on the floor beside a wall
   // lit the wall — and whoever stood at it — like a spotlight.
   out.mouthHasNoLamp = ![...g.portals.pairs.values()]
     .some(pr => ['a', 'b'].some(k => pr[k] && pr[k].light));
   out.sceneLightCount = g.scene.children.filter(c => c.isLight).length;
-  out.selfHiddenFromOwnCamera = g.selfAvatar.group.visible === false;
+  out.selfHiddenFromOwnCamera = g.selfAvatar.root.visible === false;
 
   // ------------------------------------------------- falling through, for ever
   // One mouth at your feet and one over your head: you fall through the floor,
@@ -285,7 +289,6 @@ const R = await page.evaluate(async () => {
   g.portals.place('me', 'b', { c: { x: LX, y: 8, z: 0 }, n: { x: 0, y: -1, z: 0 },
     u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: -1 }, mover: -1 });
   park(LX, 6, 0, 0);
-  g.player.portalCooldown = 0; g.player.exitedVia = null;
   g.player.hp = 100; g.player.alive = true;
   keys();
   const fallSpeeds = [];
@@ -312,9 +315,8 @@ const R = await page.evaluate(async () => {
     u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: -1 });
   g.portals.place('me', 'b', { c: { x: LX + 20, y: 1.2, z: 0 }, n: { x: 1, y: 0, z: 0 },
     u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
-  park(LX, 9, 0, 0);
+  park(LX, 7, 0, 0);
   g.player.vel = { x: 0, y: -45, z: 0 };
-  g.player.portalCooldown = 0; g.player.exitedVia = null;
   let flung = null;
   const beforeFling = g.player._tryPortal.bind(g.player);
   g.player._tryPortal = function (dt) {
@@ -332,25 +334,136 @@ const R = await page.evaluate(async () => {
   const bigWall = g.world.boxes.find(b => b.min.z < -59 && b.max.x - b.min.x > 100);
   out.foundOuterWall = !!bigWall;
   if (bigWall) {
-    g.portals.fire('me', { x: 12, y: 0.3, z: -50 }, { x: 0, y: 0, z: -1 }, 'a');
+    // above the corner fillet, or the shot lands on that instead of the wall
+    g.portals.fire('me', { x: 12, y: 2.6, z: -50 }, { x: 0, y: 0, z: -1 }, 'a');
     await sleep(700);
     const pa = g.portals.pairs.get('me')?.a;
-    out.slidClear = !!pa && pa.c.y - 1.0 >= -0.01;   // half of a 2 m portal, on the floor side
+    out.slidClear = !!pa && pa.c.y - 1.0 >= 1.59;    // half of a 2 m portal, clear of the fillet
     out.slidTo = pa ? round(pa.c.y) : null;
   }
 
-  // -------------------------------------- standing still is enough to go in
+  // ---------------------------------- standing in a mouth leaves you in it
+  // A portal is a hole, not a doorway that grabs you. Stand with the body
+  // astride the surface and you stay there, half out of each mouth, for as long
+  // as you like — which is only possible because the wall the mouth is cut into
+  // stops being solid while you are in it.
   g.portals.clear();
-  g.portals.fire('me', { x: -30, y: 1.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
+  g.portals.fire('me', { x: -30, y: 3.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
   g.portals.fire('me', { x: 0, y: 1.6, z: -20 }, { x: 0, y: 0, z: 1 }, 'b');
   await sleep(900);
   const wm = g.portals.pairs.get('me')?.a;
   if (wm) {
-    park(wm.c.x, 0.05, wm.c.z + 0.19, 0);
+    // eye a hair in front of the surface, so the front of the body is past it.
+    // The mouth is above the corner fillet, so stand on the fillet's own top.
+    park(wm.c.x, wm.c.y - 1.62, wm.c.z + 0.1, 0);
     keys();
     const before = g.player.portalCount;
     await sleep(600);
-    out.stillWentThrough = g.player.portalCount - before > 0;
+    out.stillStayedPut = g.player.portalCount - before === 0;
+    out.stillStraddles = !!g.player.straddling;
+    out.stillCarvedTheWall = g.player._boxes().length === g.world.boxes.length - 1;
+    const box = g.player.aabb();
+    // the body genuinely crosses the plane: some of it in front, some behind
+    out.stillHalfIn = box.min.z < wm.c.z - 0.02 && box.max.z > wm.c.z + 0.02;
+    out.stillFrontDepth = round(wm.c.z - box.min.z);
+  }
+
+  // -------------------------------------- and the hand-over is not a teleport
+  // The body is re-expressed in the exit's frame at the instant the eye reaches
+  // the surface, so the eye comes out exactly as far in front of the far mouth
+  // as it had just gone behind the near one. That is an equality, not a
+  // tolerance: if this drifts, the crossing has become a jump again.
+  {
+    // Both mouths on flat vertical wall, so nothing has to be pushed out of
+    // anything afterwards: this measures the hand-over and only the hand-over.
+    g.portals.clear();
+    g.portals.place('me', 'a', { c: { x: -59.5, y: 3, z: 20 }, n: { x: 1, y: 0, z: 0 },
+      u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    g.portals.place('me', 'b', { c: { x: 59.5, y: 3, z: -20 }, n: { x: -1, y: 0, z: 0 },
+      u: { x: 0, y: 0, z: 1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    const cm = g.portals.pairs.get('me').a;
+    let cont = null;
+    const realThrough = g.player._through.bind(g.player);
+    g.player._through = function (link, dt) {
+      const e = this._eyePhys();
+      const n = link.from.n, c = link.from.c;
+      // where the eye will be once this sub-step has been travelled
+      const ex = e.x + this.vel.x * dt, ey = e.y + this.vel.y * dt, ez = e.z + this.vel.z * dt;
+      const before = (ex - c.x) * n.x + (ey - c.y) * n.y + (ez - c.z) * n.z;
+      const speedBefore = Math.hypot(this.vel.x, this.vel.y, this.vel.z);
+      realThrough(link, dt);
+      const e2 = this._eyePhys(), n2 = link.to.n, c2 = link.to.c;
+      const after = (e2.x - c2.x) * n2.x + (e2.y - c2.y) * n2.y + (e2.z - c2.z) * n2.z;
+      if (cont === null) {
+        cont = {
+          before: +before.toFixed(6), after: +after.toFixed(6),
+          gap: +Math.abs(after + before).toFixed(6),
+          speedKept: +Math.abs(Math.hypot(this.vel.x, this.vel.y, this.vel.z) - speedBefore).toFixed(6),
+          up: { ...this.up }, toN: { ...link.to.n }, toV: { ...link.to.v }, toU: { ...link.to.u },
+          fromV: { ...link.from.v }, fromN: { ...link.from.n },
+          straddlingAfter: !!this.straddling,
+          hostAfter: !!(this.straddling && this.straddling.host)
+        };
+      }
+    };
+    park(cm.c.x + 1.2, cm.c.y - 1.62, cm.c.z, Math.PI / 2);    // yaw pi/2 walks along -x
+    keys('fwd');
+    await sleep(700);
+    keys();
+    g.player._through = realThrough;
+    out.continuity = cont;
+  }
+
+  // ------------------------------------- gravity comes through with the body
+  // The user's own case: a mouth over your head and one on a wall. Go up into
+  // the first and you come out of the second standing *on* that wall, with
+  // gravity pulling into it — where your feet point is where you fall.
+  g.portals.clear();
+  const eastWall = g.world.boxes.find(b => b.min.x > 55 && b.max.z - b.min.z > 100);
+  out.foundEastWall = !!eastWall;
+  if (eastWall) {
+    g.portals.place('me', 'a', { c: { x: -20, y: 4, z: -20 }, n: { x: 0, y: -1, z: 0 },
+      u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: -1 }, mover: -1 });
+    g.portals.place('me', 'b', { c: { x: eastWall.min.x, y: 2.5, z: 0 }, n: { x: -1, y: 0, z: 0 },
+      u: { x: 0, y: 0, z: 1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    park(-20, 1, -20, 0);
+    keys();
+    // Measured inside the physics, one frame at a time. Sampling on the wall
+    // clock catches whatever the flight happened to be doing 200 ms later —
+    // including having already landed, which reads as no gravity at all.
+    let pull = null;
+    const seenAt = g.player.portalCount;
+    const realUpdate = g.player.update.bind(g.player);
+    g.player.update = function (dt, input) {
+      const before = { ...this.vel }, up0 = { ...this.up };
+      const pc = this.portalCount;
+      realUpdate(dt, input);
+      // not the frame of the hand-over itself: that velocity change is the
+      // portal's transform, not gravity
+      if (pull === null && pc > seenAt && this.portalCount === pc &&
+          !this.onGround && dt > 0) {
+        const d = (v, u) => -(v.x * u.x + v.y * u.y + v.z * u.z);
+        pull = {
+          toward: +((d(this.vel, up0) - d(before, up0)) / dt).toFixed(1),
+          downward: +((before.y - this.vel.y) / dt).toFixed(1)
+        };
+      }
+    };
+    // Up into the mouth, and a little sideways with it: come out of the wall
+    // dead square to it and gravity — which now points *into* that wall — drops
+    // you straight back into the hole you just left.
+    g.player.vel = { x: 0, y: 14, z: -3 };
+    const before = g.player.portalCount;
+    for (let i = 0; i < 60 && g.player.portalCount === before; i++) await sleep(16);
+    out.gravityWentThrough = g.player.portalCount > before;
+    out.upAfter = { ...g.player.up };
+    await sleep(300);
+    g.player.update = realUpdate;
+    // GRAVITY is 24 m/s^2, and 1.4x that falling: the pull has to be that, along
+    // the new up, with nothing left over pointing at the world's floor.
+    out.pullTowardTheWall = pull ? pull.toward : null;
+    out.pullDownward = pull ? pull.downward : null;
+    out.stillOnItsWall = { ...g.player.up };
   }
 
   // ...and stepping out of one does not drop you straight back into it
@@ -616,12 +729,12 @@ const R = await page.evaluate(async () => {
       lift.at = 0.4; lift.dir = 1;                 // on its way up
       g.portals.place('me', 'b', { c: { x: cx, y: sh.max.y, z: cz }, n: { x: 0, y: 1, z: 0 },
         u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: attached ? lift.index : -1 });
-      g.portals.place('me', 'a', { c: { x: -59.5, y: 1.2, z: -40 }, n: { x: 1, y: 0, z: 0 },
+      // clear of the corner fillet, which is 1.6 m of 45-degree wedge now
+      g.portals.place('me', 'a', { c: { x: -59.5, y: 3, z: -40 }, n: { x: 1, y: 0, z: 0 },
         u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
-      park(-57, 0.05, -40, Math.PI / 2);           // yaw pi/2 walks along -x
-      g.player.portalCooldown = 0;
+      park(-55, 0.05, -40, Math.PI / 2);           // yaw pi/2 walks along -x
       keys('fwd');
-      await sleep(700);
+      await sleep(1100);
       keys();
       return exitVel ? round(exitVel.y) : null;
     };
@@ -630,27 +743,38 @@ const R = await page.evaluate(async () => {
     out.exitOffLift = await runIntoWall(false);
   }
 
-  // --------------------------------- a portal on a wall you are pressed against
-  // Walk along a wall into a mouth on that same wall. Collision holds the body a
-  // radius clear of the surface, which is *behind* the plane the crossing test
-  // uses — so this used to slide straight past the mouth and never go in.
+  // ------------------------------ a mouth on a wall you are pressed against
+  // A hole in a wall you are leaning on is a hole you can walk into — but it is
+  // not a magnet. Sliding along the wall *past* the mouth used to drag you
+  // through it, back when touching the surface anywhere inside the oval was
+  // enough; now the body has to actually go in, which is what stops the
+  // crossing being a teleport in the first place.
   g.portals.clear();
-  g.portals.fire('me', { x: -30, y: 1.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
+  g.portals.fire('me', { x: -30, y: 3.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
   g.portals.fire('me', { x: 0, y: 1.6, z: -20 }, { x: 0, y: 0, z: 1 }, 'b');
   await sleep(900);
   const wallMouth = g.portals.pairs.get('me')?.a;
   out.mouthOnWall = !!wallMouth;
   if (wallMouth) {
-    park(wallMouth.c.x - 2.5, 0.05, wallMouth.c.z + 0.2, 0);
+    park(wallMouth.c.x - 2.5, wallMouth.c.y - 1.62, wallMouth.c.z + 0.2, 0);
     keys('fwd');
     await sleep(400);                              // press into the wall
     out.pressedAgainstWall = round(Math.abs(g.player.pos.z - wallMouth.c.z));
     const before = g.player.portalCount;
     g.player.yaw = -Math.PI / 2;                   // now walk along the wall
     keys('fwd');
-    await sleep(1400);
+    await sleep(900);
     keys();
-    out.hugWalkedIn = g.player.portalCount - before > 0;
+    out.hugReachedMouth = Math.abs(g.player.pos.x - wallMouth.c.x) < 1.5 ||
+                          g.player.pos.x > wallMouth.c.x;
+    out.hugSlidPast = g.player.portalCount - before === 0;
+    // ...and turning into it goes through, from the same place
+    park(wallMouth.c.x, wallMouth.c.y - 1.62, wallMouth.c.z + 0.5, 0);
+    const before2 = g.player.portalCount;
+    keys('fwd');
+    await sleep(600);
+    keys();
+    out.hugTurnedIn = g.player.portalCount - before2 > 0;
   }
 
   // ------------------------------------------------------- moving platforms
@@ -705,7 +829,7 @@ const R = await page.evaluate(async () => {
 
   g.portals.clear();
   keys();
-  g.portals.selfView = g.selfAvatar.group;
+  g.portals.selfView = g.selfAvatar.root;
   return out;
 });
 
@@ -761,7 +885,7 @@ R.viewThroughPortal = await centrePatch();
 R.viewDifference = R.directView.map((v, i) => +Math.abs(R.viewThroughPortal[i] - v).toFixed(1));
 await page.evaluate(() => {
   window.game.portals.clear();
-  window.game.portals.selfView = window.game.selfAvatar.group;
+  window.game.portals.selfView = window.game.selfAvatar.root;
 });
 
 const fail = [];
@@ -817,8 +941,10 @@ want('a mouth throws no light onto anything solid', R.mouthHasNoLamp,
 want('a mouth on a lift hands over the lift\'s motion',
   R.exitOnLift !== null && R.exitOffLift !== null && R.exitOnLift - R.exitOffLift > 1.5,
   { onLift: R.exitOnLift, offLift: R.exitOffLift, liftSpeed: R.liftSpeed });
-want('walking along a wall into a mouth on it goes in', R.hugWalkedIn,
-  { pressedAt: R.pressedAgainstWall, wentIn: R.hugWalkedIn });
+want('a body pressed to a wall reaches a mouth on it', R.hugReachedMouth,
+  { pressedAt: R.pressedAgainstWall, reached: R.hugReachedMouth });
+want('...and slides past it rather than being sucked in', R.hugSlidPast, R.hugSlidPast);
+want('...but walking into it goes through', R.hugTurnedIn, R.hugTurnedIn);
 
 want('a fall through one mouth and out of another loops', R.loopHops > 12,
   { hops: R.loopHops, speeds: R.loopFirst });
@@ -829,7 +955,28 @@ want('a fall turned sideways keeps its speed', R.flingSpeed !== null && R.flingS
   { fling: R.flingSpeed, walkingCap: 22 });
 
 want('a portal never hangs off the wall it is on', R.slidClear, { slidTo: R.slidTo });
-want('standing still in a mouth takes you through', R.stillWentThrough, R.stillWentThrough);
+want('standing in a mouth leaves you standing in it', R.stillStayedPut, R.stillStayedPut);
+want('...with the body genuinely astride the surface', R.stillHalfIn,
+  { half: R.stillHalfIn, frontDepth: R.stillFrontDepth });
+want('...because the wall it is cut into stops being solid',
+  R.stillStraddles && R.stillCarvedTheWall,
+  { straddling: R.stillStraddles, carved: R.stillCarvedTheWall });
+
+// the hand-over is a change of frame, not a jump
+want('the eye comes out exactly as far in as it went',
+  !!R.continuity && R.continuity.gap < 1e-6, R.continuity);
+want('...at exactly the speed it went in with',
+  !!R.continuity && R.continuity.speedKept < 1e-6, R.continuity);
+
+// gravity travels with the body
+want('a ceiling mouth onto a wall stands you on that wall',
+  R.gravityWentThrough && R.upAfter && R.upAfter.x === -1,
+  { went: R.gravityWentThrough, up: R.upAfter });
+want('...and gravity then pulls into that wall, not downward',
+  R.pullTowardTheWall !== null && R.pullTowardTheWall >= 23 &&
+  Math.abs(R.pullDownward) < 0.5 && R.stillOnItsWall && R.stillOnItsWall.x === -1,
+  { towardTheWall: R.pullTowardTheWall, downward: R.pullDownward,
+    up: R.stillOnItsWall });
 want('...and coming out of one does not put you back in', R.noBounceBack === 0, R.noBounceBack);
 want('a bullet goes through a portal', R.shotLegs > 2, { legs: R.shotLegs, end: R.shotEnd });
 want('...and comes out somewhere the straight shot never reaches',

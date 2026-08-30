@@ -53,6 +53,7 @@ export class Level {
     this.h = clampDim(h, MIN_H, MAX_H);
     this.boxes = [];                 // {id, x0,y0,z0, x1,y1,z1, c}
     this.shell = [];
+    this.fillets = [];               // derived from the shell, never stored
     this._nextId = 1;
     this.buildShell(SHELL_DEFAULT_C.slice());
   }
@@ -77,6 +78,48 @@ export class Level {
       c: clamp((c && c[i]) ?? SHELL_DEFAULT_C[i], 0, 9) | 0,
       shape: SHAPE_BOX, rx: 0, ry: 0, rz: 0
     }));
+    this._buildFillets();
+  }
+
+  /** A 45-degree wedge in each of the room's eight inside corners: four where
+   *  the walls meet the floor and four where they meet the ceiling.
+   *
+   *  Gravity follows a player through a portal, so somebody can end up standing
+   *  on a wall — and a right-angled corner is a dead end for them, with no
+   *  surface between the wall and the floor that either of them can walk on. The
+   *  fillet belongs to both, which is what lets it hand them back (see
+   *  Player._groundUp).
+   *
+   *  Derived, never encoded: they follow from the room's own size, so a seed
+   *  written before they existed still describes exactly this room, and one
+   *  written now still reads on a page that has not been updated. Like the shell
+   *  they are locked — a wedge you could delete would be a corner you could get
+   *  stuck in. Extents are stored in the wedge's own frame, which the turn about
+   *  Y then permutes into the world's. */
+  _buildFillets() {
+    const hw = this.w / 2, hl = this.l / 2, h = this.h, P = Math.PI;
+    const F = Math.min(1.6, h / 3, this.w / 4, this.l / 4);
+    const runs = [
+      { x: -hw, z: 0, axis: 'x', dir: 1, ry: P, width: this.l + 2 * SHELL_T },
+      { x: hw, z: 0, axis: 'x', dir: -1, ry: 0, width: this.l + 2 * SHELL_T },
+      { x: 0, z: -hl, axis: 'z', dir: 1, ry: P / 2, width: this.w + 2 * SHELL_T },
+      { x: 0, z: hl, axis: 'z', dir: -1, ry: -P / 2, width: this.w + 2 * SHELL_T }
+    ];
+    this.fillets = [];
+    let i = 0;
+    for (const r of runs) {
+      const cx = r.axis === 'x' ? r.x + (F / 2) * r.dir : r.x;
+      const cz = r.axis === 'z' ? r.z + (F / 2) * r.dir : r.z;
+      for (const [y0, rz] of [[0, 0], [h - F, P]]) {
+        this.fillets.push({
+          id: 'fillet' + (i++), kind: 'corner', locked: true,
+          x0: cx - F / 2, x1: cx + F / 2,
+          y0, y1: y0 + F,
+          z0: cz - r.width / 2, z1: cz + r.width / 2,
+          c: SHELL_DEFAULT_C[2], shape: SHAPE_SLOPE, rx: 0, ry: r.ry, rz
+        });
+      }
+    }
   }
 
   resize(w, l, h) {
@@ -171,7 +214,7 @@ export class Level {
     return true;
   }
 
-  all() { return [...this.shell, ...this.boxes]; }
+  all() { return [...this.shell, ...this.fillets, ...this.boxes]; }
 
   /** What world.js consumes: the level's entries with a resolved colour. It
    *  decides which are plain AABBs and which need the convex path. `src` links

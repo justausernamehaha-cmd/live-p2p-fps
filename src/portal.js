@@ -27,12 +27,6 @@
 export const HALF_W = 0.68;
 export const HALF_H = 1.0;
 
-// How far outside the mouth the exit puts you. It has to clear the player's own
-// radius so you never materialise inside the wall you came out of — and, since
-// standing in a mouth is now enough to go through one, it has to clear that band
-// too, or stepping out of a portal would put you straight back into it.
-export const EXIT_CLEAR = 0.45;
-
 // Two portals of the same pair sitting on top of each other is an infinite loop
 // with no way out. Refuse it rather than let the player wedge themselves.
 const MIN_PAIR_SEP = HALF_W * 1.2;
@@ -194,26 +188,6 @@ export function overlapsPartner(portal, partner) {
 }
 
 // --------------------------------------------------------------- traversal
-/** Did the segment p0 -> p1 pass through this portal's mouth, front to back?
- *  Returns the fraction along the segment where it crossed, or -1.
- *
- *  `pad` widens the mouth by that many metres in both directions. The player is
- *  a cylinder, not a line, so brushing the rim with your shoulder is still going
- *  in — passing it the player's radius is what makes the edge of a portal an
- *  entrance rather than a place to get stuck against. */
-export function crossing(p0, p1, portal, pad = 0) {
-  const d0 = dot(sub3(p0, portal.c), portal.n);
-  const d1 = dot(sub3(p1, portal.c), portal.n);
-  if (d0 <= 0 || d1 > 0) return -1;         // must start in front and end behind
-  const denom = d0 - d1;
-  if (Math.abs(denom) < EPS) return -1;
-  const k = d0 / denom;
-  const hit = v3(p0.x + (p1.x - p0.x) * k, p0.y + (p1.y - p0.y) * k, p0.z + (p1.z - p0.z) * k);
-  const rel = sub3(hit, portal.c);
-  const s = dot(rel, portal.u) / (HALF_W + pad);
-  const t = dot(rel, portal.v) / (HALF_H + pad);
-  return s * s + t * t <= 1 ? k : -1;
-}
 
 /** The rigid motion that takes a point at `from` and delivers it out of `to`.
  *
@@ -235,6 +209,43 @@ export function portalMap(from, to) {
     dir,
     point: p => add3(to.c, dir(sub3(p, from.c)))
   };
+}
+
+// ------------------------------------------------------------------- a body
+// Sample points up a body, as fractions of its height, and how much of a mouth
+// counts as the mouth. Both live here rather than in player.js because two
+// different things need the same answer: the player deciding whether the wall in
+// front of them is there, and every screen deciding whether to draw the half of
+// somebody that is sticking out of the far mouth.
+export const BODY_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
+
+/** Is any part of a body standing in this mouth?
+ *
+ *  Two-sided: half a body past the surface is the ordinary case, because a
+ *  portal is a hole you walk into rather than a doorway that moves you. The
+ *  depth bound is a body length — beyond that you are through and gone. */
+export function atMouth(p, pos, up, height, reach, edge) {
+  for (const frac of BODY_SAMPLES) {
+    const h = height * frac;
+    const dx = pos.x + up.x * h - p.c.x;
+    const dy = pos.y + up.y * h - p.c.y;
+    const dz = pos.z + up.z * h - p.c.z;
+    const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
+    if (d > reach || d < -(height + reach)) continue;
+    const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + edge);
+    const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + edge);
+    if (su * su + sv * sv <= 1) return true;
+  }
+  return false;
+}
+
+/** The link a body is standing in, if any — the mouth it is half out of, and
+ *  therefore the other mouth the rest of it is hanging out of. */
+export function mouthAround(links, pos, up, height, reach, edge) {
+  for (const link of links) {
+    if (atMouth(link.from, pos, up, height, reach, edge)) return link;
+  }
+  return null;
 }
 
 /** Yaw and pitch that look along `d`, in the game's own convention:

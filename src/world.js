@@ -13,15 +13,25 @@ import { makeSolid, rayConvex, isAxisAligned, translateSolid, SHAPE_BOX, SHAPE_S
 // gets twice as big to cross without any of it becoming twice as tall.
 const S = 2;
 const ARENA = 60 * S;  // floor is ARENA x ARENA, centred on the origin
-const WALL_H = 9;
+// The room is closed, so this is its height and not merely how tall the walls
+// are. Twelve rather than nine: a player standing on the centre block has their
+// feet at 5.9, and a nine-metre lid put the ceiling within a jump of their head.
+const WALL_H = 12;
 const PALETTE = {
   floor: 0x3d4757,
   wall: 0x4c586f,
   block: 0x616e8b,
   accent: 0xd9743b,
   accent2: 0x3aa89c,
-  plate: 0x76849f
+  plate: 0x76849f,
+  ceil: 0x333c4d,     // darker than the walls, so up still reads as up
+  fillet: 0x5a6884
 };
+
+// How far a corner fillet reaches along each of the two surfaces it joins. Big
+// enough to stand on with room to turn round; small enough that it takes nothing
+// worth having off the floor.
+const FILLET = 1.6;
 
 export class World {
   /** With no level, the hand-written arena below. With one, its data instead. */
@@ -158,6 +168,46 @@ export class World {
     this._mesh();
   }
 
+  /** The piece of world a portal's mouth is lying on.
+   *
+   *  Collision has to be able to take exactly that piece away while somebody is
+   *  standing in the mouth — a portal is a hole, and a body half through one is
+   *  inside the wall. Nothing records which box a portal was shot at (a peer's
+   *  portal arrives as four vectors and nothing else), so it is found from the
+   *  geometry: the surface whose face the centre is lying on, facing the way the
+   *  mouth faces. Cached on the portal, and a portal is rebuilt whenever it
+   *  moves, so the cache cannot go stale. */
+  hostFor(portal) {
+    if (portal._host !== undefined) return portal._host;
+    portal._host = this._findHost(portal.c, portal.n) || null;
+    return portal._host;
+  }
+
+  _findHost(c, n) {
+    const EPS = 3e-3;
+    // axis-aligned mouths are the common case, and are exact
+    const k = Math.abs(n.x) > 0.999 ? 'x' : Math.abs(n.y) > 0.999 ? 'y'
+            : Math.abs(n.z) > 0.999 ? 'z' : null;
+    if (k) {
+      const sign = n[k] > 0 ? 1 : -1;
+      const others = ['x', 'y', 'z'].filter(a => a !== k);
+      for (const b of this.boxes) {
+        const face = sign > 0 ? b.max[k] : b.min[k];
+        if (Math.abs(face - c[k]) > EPS) continue;
+        if (others.some(a => c[a] < b.min[a] - EPS || c[a] > b.max[a] + EPS)) continue;
+        return b;
+      }
+    }
+    for (const s of this.solids) {
+      for (const pl of s.planes) {
+        if (pl.nx * n.x + pl.ny * n.y + pl.nz * n.z < 0.999) continue;
+        if (Math.abs(pl.nx * c.x + pl.ny * c.y + pl.nz * c.z - pl.d) > EPS) continue;
+        return s;
+      }
+    }
+    return null;
+  }
+
   /** Pull the box list back out of the level after the designer changed it. */
   syncLevel() {
     if (!this.level) return;
@@ -181,30 +231,62 @@ export class World {
   }
 
   /** A ramp up to `height`, tall against (cx,cz) and falling away along `dir`.
-   *  This was a flight of half-metre steps; the pitch is the same, so anything
-   *  that could be walked up before still can, but a run up it no longer stutters
-   *  and a hop chain no longer catches on the nose of every step.
+   *
+   *  Every slope in this map is 45 degrees — run equals rise, with no exceptions
+   *  — because a slope is now the thing that decides which way is up for whoever
+   *  is standing on it, and 45 is the one pitch that belongs equally to the two
+   *  surfaces it joins. (It began as a flight of half-metre steps, then a gentler
+   *  ramp at the same pitch as those steps.)
+   *
+   *  `y` is the bottom, and `flip` turns the wedge over so the sloped face is
+   *  underneath it — which is what a fillet under a ceiling is.
    *
    *  The wedge in solid.js always climbs along its own +x, so the run is stored
-   *  along local x and a turn about Y aims it. */
-  slope(cx, cz, width, height, axis, dir, color) {
-    const run = height * 2;                       // the old staircase's pitch
+   *  along local x and a turn about Y aims it; the extents are in the wedge's own
+   *  frame, not the world's. */
+  slope(cx, cz, width, height, axis, dir, color, y = 0, flip = false) {
+    const run = height;                           // 45 degrees, always
     const wx = axis === 'x' ? cx + (run / 2) * dir : cx;
     const wz = axis === 'z' ? cz + (run / 2) * dir : cz;
     const ry = axis === 'x' ? (dir > 0 ? Math.PI : 0)
                             : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
-    return this.add(wx, 0, wz, run, height, width, color, SHAPE_SLOPE, [0, ry, 0]);
+    return this.add(wx, y, wz, run, height, width, color, SHAPE_SLOPE,
+                    [0, ry, flip ? Math.PI : 0]);
+  }
+
+  /** Fillet every inside corner of the room, floor and ceiling alike.
+   *
+   *  Not decoration. Gravity follows a player through a portal, so somebody can
+   *  be standing on a wall — and for them a right-angled corner is a dead end,
+   *  because there is no surface between the wall and the floor that either of
+   *  them can walk on. A 45-degree face belongs to both, and standing on one is
+   *  what turns you back the right way up: see Player._groundUp. */
+  _fillets(inner, color) {
+    const F = FILLET, top = WALL_H - FILLET;
+    const runs = [
+      [-inner, 0, ARENA, 'x', 1], [inner, 0, ARENA, 'x', -1],
+      [0, -inner, ARENA, 'z', 1], [0, inner, ARENA, 'z', -1]
+    ];
+    for (const [cx, cz, width, axis, dir] of runs) {
+      this.slope(cx, cz, width, F, axis, dir, color);
+      this.slope(cx, cz, width, F, axis, dir, color, top, true);
+    }
   }
 
   _build() {
     const H = ARENA / 2;
 
-    // ground + outer walls
+    // ground, outer walls, and a roof over the lot
     this.add(0, -1, 0, ARENA, 1, ARENA, PALETTE.floor);
     this.add(0, 0, -H, ARENA, WALL_H, 1, PALETTE.wall);
     this.add(0, 0, H, ARENA, WALL_H, 1, PALETTE.wall);
     this.add(-H, 0, 0, 1, WALL_H, ARENA, PALETTE.wall);
     this.add(H, 0, 0, 1, WALL_H, ARENA, PALETTE.wall);
+    // The room is closed now. It is a surface to put a portal on more than it is
+    // a lid: twelve metres is far above anything that can be jumped to, so
+    // nothing that could be reached before has become unreachable.
+    this.add(0, WALL_H, 0, ARENA, 1, ARENA, PALETTE.ceil);
+    this._fillets(H - 0.5, PALETTE.fillet);
 
     // ---- centre: raised platform with a stair on each side ----
     this.add(0, 0, 0, 14 * S, 2.5, 14 * S, PALETTE.plate);

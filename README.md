@@ -35,6 +35,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Look | mouse (pointer lock) | drag anywhere on the right — including across a button |
 | Fire | left click, or `F` | `FIRE` |
 | Aim | right click | `AIM` |
+| Left / right portal | left / right click | `LEFT PORTAL` / `RIGHT PORTAL` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
 | Sprint | `Shift` | `SPRINT`, or push the stick to its edge |
@@ -166,6 +167,10 @@ colour of your left-click portal and the right one the colour of your right.
 
 * **Left click** fires one mouth, **right click** the other. There is no aiming
   down sights with it, because the right button is already the second trigger.
+  On a phone the `FIRE` and `AIM` buttons say **LEFT PORTAL** and **RIGHT
+  PORTAL** while it is in your hands, in the two colours the mouths will be — and
+  `AIM` stops latching for as long as it does, so every tap places a mouth even
+  if you have it set to toggle.
 * **It never misses.** Accuracy is 100% standing, running, mid-hop, whatever —
   a portal that lands a foot off is not a near miss, it is the wrong wall.
 * It never runs out and never reloads.
@@ -184,6 +189,31 @@ its edge.
 
 **Bullets go through them too**, up to two mouths deep, and the tracer bends with
 the shot rather than passing through the wall.
+
+**You are not teleported.** A portal is a hole, and you go through it the way
+anything goes through a hole — a bit at a time. Walk into one and the wall it is
+cut into stops being solid for you, so you can stop halfway and **stand there,
+half out of one mouth and half out of the other**; everyone else sees both halves
+of you, and so do you if you look at the mouth you are hanging out of. The moment
+your eye reaches the surface the whole body is re-expressed on the far side —
+position, speed, view, and which way is up — so nothing on screen moves at all.
+
+Because it is a hole rather than a magnet, sliding along a wall *past* a mouth
+does not pull you in. You have to walk into it.
+
+**Gravity comes with you.** Where your feet point is where you fall: go up
+through a mouth in a ceiling and out of one on a wall, and you are standing on
+that wall with the room on its side. The horizon rolls over rather than snapping.
+To get back the right way up, walk down one of the **45-degree fillets** in the
+room's corners — every wall meets the floor and the ceiling through one, and a
+fillet belongs to both surfaces, so it hands you from one to the other. It only
+ever hands you *toward* upright: walking into a corner the right way up does
+nothing, so ordinary play is untouched. Every slope in the arena is 45 degrees
+for the same reason, the centre stairs included.
+
+The arena and every designed room are **closed boxes** — floor, four walls and a
+ceiling — so however your gravity is pointing there is always something to land
+on, and a ceiling is one more surface to put a mouth on.
 
 **You can see through them.** Each mouth is a window onto whatever is in front of
 the other one, rendered from a camera put through the portal exactly the way you
@@ -204,21 +234,17 @@ each player announces one random number when they join and every machine folds
 the same set together, so all of them reach the same answer with no authority
 and no negotiation.
 
-Walking in is meant to be easy. Any part of your body through the mouth is you
-through it, and the rim counts: brush the very edge with a shoulder and you go
-in rather than scraping along it. Standing still in one is enough — a hole you
-are already stood in is a hole you fall through.
+Walking in is meant to be easy. Any part of your body in the mouth is you in it,
+and the rim counts: brush the very edge with a shoulder and you are in rather
+than scraping along it. A mouth in the floor you are standing on is a hole you
+fall through.
 
 **Put one at your feet and one over your head and you fall for ever**, faster
 every time round, up to the same 80 m/s terminal any fall has. Nothing resets on
-the way through: the only thing that stops you going back through a mouth is
-having just come *out* of that one, and only until you are clear of it. Turn that
-fall sideways through a mouth on a wall and you keep it — a fling is allowed to
-break the walking speed cap for three seconds in the air, and landing spends it. You can stand between two of them without being
-thrown about — nothing moving into a mouth means nothing goes through it. And you
-**keep everything you had**. Your speed is turned into the
-exit's direction, not scrubbed, so a long drop into a portal on the floor comes
-out of a wall as a long flat run. Your view is turned with it.
+the way through, and nothing is capped: the crossing hands over exactly what
+arrived at it, so a long drop into a portal on the floor comes out of a wall as a
+long flat run, at the speed the drop was worth. Your view and your gravity are
+turned with it.
 
 ## Moving platforms
 
@@ -341,7 +367,16 @@ Driven in headless Chromium, two peers at once, over the real public relays:
   the thumbstick retired itself, and the look pad kept working alongside it;
 * the level designer end to end: a room built, played in, exported, and the seed
   loaded in a **second browser page that never saw the designer**, where the
-  player stood on the box the designer had made.
+  player stood on the box the designer had made;
+* standing astride a portal without going through it, and the hand-over itself
+  being exact — the eye comes out as far in front of the far mouth as it had
+  gone behind the near one, to a millionth of a metre, at the same speed;
+* going up through a mouth in a ceiling and out of one on a wall, and then
+  accelerating **into that wall** rather than downward;
+* a wall-walker brought back upright by a corner fillet, and the same corner
+  walked into the right way up leaving them alone;
+* the portal gun's two touch triggers, including the second tap of a latched
+  `AIM` — which used to do nothing at all.
 
 Frame rate was 25 fps under a software rasteriser, which is the renderer's
 floor, not the game's.
@@ -366,8 +401,9 @@ node test/settings.mjs
 node test/momentum.mjs
 node test/slopes.mjs
 node test/portals.mjs
-node test/solid.mjs      # no browser and no server: the fastest one
-node test/portal.mjs     # the other one that needs neither
+node test/frame.mjs      # no browser and no server: the fastest ones
+node test/solid.mjs
+node test/portal.mjs
 ```
 
 `test/designer.mjs` is the one that matters for the designer, because it refuses
@@ -385,9 +421,11 @@ counting take-offs over two seconds with nothing held down.
 speed a second later, and the fall bonus by the difference between a short drop
 and a long one from the same standing start.
 
-`test/solid.mjs` and `test/portal.mjs` are the two suites that need neither a
-browser nor a server, so they run in about a second each and are worth running
-first. `test/portal.mjs` is where the portal arithmetic is proved — that a mouth
+`test/frame.mjs`, `test/solid.mjs` and `test/portal.mjs` need neither a browser
+nor a server, so they run in about a second each and are worth running first.
+`test/frame.mjs` is which way is up: it asserts the movement basis at all six
+gravity directions against the closed form the camera has always used, rather
+than against itself. `test/portal.mjs` is where the portal arithmetic is proved — that a mouth
 only goes where the whole of it fits, that a near miss *slides* to the nearest
 place it does, that going through one keeps every bit of the momentum that went
 in, and that the colour agreement reaches the same answer on every machine
