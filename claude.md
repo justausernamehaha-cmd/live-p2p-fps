@@ -293,6 +293,21 @@ Everything below was found by measuring the running game, never by reading.
 - **Standing still in a mouth goes through it**, which forced `EXIT_CLEAR` up from
   0.22 to 0.45: leaving a portal used to land you inside the band that counts as
   standing in one, and you would be pulled straight back.
+- **A fixed cooldown between traversals silently capped the infinite fall.** Once
+  the drop took less time than the cooldown the crossing was refused, the player
+  hit the floor, and the loop began again from rest — speed climbed to about 40
+  and reset, for ever. What stops a pair strobing is *which* mouth, not time:
+  `exitedVia` refuses only the mouth you just came out of, and only until you are
+  a metre clear of it. The cooldown is one frame now, and the loop builds to the
+  80 m/s terminal and stays there.
+- **`SPEED_CAP` would have thrown that speed away.** A fling out of a wall mouth
+  was clamped to walking pace the instant it left. A portal traversal now buys
+  three seconds of a raised cap in the air, spent on landing — the ordinary ground
+  rules bleed it from there, and nothing else in the game sees a different cap.
+- **Measure a fling at the instant of the traversal.** Sampling a moment later
+  measures where the flight got to, not what the portal handed over; the old
+  "carrying most of the fall as speed" check started failing the moment flinging
+  actually worked, because a moment later was a wall away.
 - **Ctrl+W cannot be stopped by `preventDefault()`.** Only the Keyboard Lock API
   can, and only in fullscreen — so capturing the mouse takes the page fullscreen
   to earn it. That is a real trade, so it is a checkbox.

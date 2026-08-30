@@ -48,6 +48,13 @@ const GROUND_FRICTION = 5;      // stopping friction, only when you stop asking 
 const GROUND_DRAG = 0.35;       // the slow bleed on carried speed while still running
 const GROUND_STEER = 9;         // how fast carried momentum can be turned, magnitude kept
 const SPEED_CAP = 22;           // sanity limit, well above anything reachable by hand
+// ...but a portal can hand you far more than a hand can, and clamping a fling
+// back to a sprint the instant it leaves the mouth would make building the speed
+// pointless. While a portal's gift is still in the air it is allowed to stand,
+// up to the same terminal the fall itself has. Landing ends it, and the ordinary
+// ground rules bleed it off from there.
+const PORTAL_SPEED_CAP = 80;
+const PORTAL_FLING_TIME = 3;    // seconds the allowance lasts in the air
 const MAX_STEP_DIST = 0.3;      // sub-step the movement so fast players cannot tunnel
 const STEP_SMOOTH_RATE = 5;     // m/s the view catches up after a step, i.e. a linear climb
 const STEP_SMOOTH_MAX = 1.0;
@@ -79,7 +86,16 @@ const PORTAL_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
 // as going in — the edge of a portal is an entrance, not somewhere to scrape
 // along.
 const PORTAL_EDGE = RADIUS;
-const PORTAL_COOLDOWN = 0.14;   // stops a pair sitting close together strobing
+// A traversal is refused for one frame afterwards, and no longer. It used to be
+// a seventh of a second, which quietly put a ceiling on a fall through a floor
+// mouth into a ceiling one: once the drop took less time than the cooldown the
+// crossing was refused, the player hit the floor instead, and the loop started
+// again from rest. What stops a pair strobing is `exitedVia` below, which is
+// about *which* mouth rather than about time.
+const PORTAL_COOLDOWN = 0.02;
+// How far you have to get from the mouth you came out of before it will take you
+// back. Wide enough that stepping out of one is never stepping into it.
+const PORTAL_REARM = 1.0;
 // How close the body has to be to a surface to count as touching it. A portal is
 // a hole: if you are against the wall and the hole is where you are, the wall is
 // not there for you, whichever way you happen to be walking.
@@ -115,6 +131,8 @@ export class Player {
     this.recoilYaw = 0;
     this.portals = null;      // set by the game: something with .links()
     this.portalCooldown = 0;
+    this.exitedVia = null;    // the mouth we came out of, until we are clear of it
+    this.portalFling = 0;     // seconds of raised speed cap left, after a traversal
     this.portalCount = 0;     // bumped on every traversal, for tests and effects
     this.rideVel = null;      // the platform underfoot, if any, and how fast it goes
     this.squashed = false;    // a platform closed on us: the game turns this into a death
@@ -166,6 +184,10 @@ export class Player {
     // the view catches up to a step at a constant speed: linear, not easing
     this.stepSmooth = Math.max(0, this.stepSmooth - STEP_SMOOTH_RATE * dt);
     this.portalCooldown = Math.max(0, this.portalCooldown - dt);
+    // the fling allowance runs in the air and is spent the moment you land
+    if (this.portalFling > 0) {
+      this.portalFling = this.onGround ? 0 : Math.max(0, this.portalFling - dt);
+    }
 
     if (this.alive) this._ride();
 
@@ -472,10 +494,11 @@ export class Player {
   }
 
   _capSpeed() {
+    const cap = this.portalFling > 0 ? PORTAL_SPEED_CAP : SPEED_CAP;
     const sp = Math.hypot(this.vel.x, this.vel.z);
-    if (sp > SPEED_CAP) {
-      this.vel.x *= SPEED_CAP / sp;
-      this.vel.z *= SPEED_CAP / sp;
+    if (sp > cap) {
+      this.vel.x *= cap / sp;
+      this.vel.z *= cap / sp;
     }
   }
 
@@ -622,12 +645,16 @@ export class Player {
    *  space — between two mouths, say — is far outside that band and never counts,
    *  and EXIT_CLEAR is set wide enough that leaving a portal does not land you
    *  back inside its partner's. */
-  _inMouth(p) {
+  _inMouth(p) { return this._nearMouth(p, PORTAL_CONTACT); }
+
+  /** Is any part of the body within `reach` of this mouth's plane, on the front
+   *  of it, and inside the oval? */
+  _nearMouth(p, reach) {
     for (const frac of PORTAL_SAMPLES) {
       const y = this.pos.y + this.height * frac;
       const dx = this.pos.x - p.c.x, dy = y - p.c.y, dz = this.pos.z - p.c.z;
       const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
-      if (d < 0 || d > PORTAL_CONTACT) continue;          // behind it, or not touching
+      if (d < 0 || d > reach) continue;                  // behind it, or not near it
       const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + PORTAL_EDGE);
       const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + PORTAL_EDGE);
       if (su * su + sv * sv <= 1) return true;
@@ -654,9 +681,13 @@ export class Player {
     const sx = this.vel.x * dt, sy = this.vel.y * dt, sz = this.vel.z * dt;
     if (Math.abs(sx) + Math.abs(sy) + Math.abs(sz) < 1e-7) return false;
 
+    // the mouth we came out of is not a way back in until we have left it
+    if (this.exitedVia && !this._nearMouth(this.exitedVia, PORTAL_REARM)) this.exitedVia = null;
+
     let best = null;
     for (const link of links) {
       const from = link.from;
+      if (from === this.exitedVia) continue;
       // Already up against the surface, inside the mouth? Then go through it.
       //
       // The crossing test below cannot see this case and never could: it asks
@@ -761,6 +792,8 @@ export class Player {
     this.stepSmooth = 0;
     this.fellAt = 0;
     this.portalCooldown = PORTAL_COOLDOWN;
+    this.portalFling = PORTAL_FLING_TIME;
+    this.exitedVia = to;
     this.portalCount++;
     // Peers interpolate between the snapshots they hold; dragging a body across
     // the map between two of them is a smear rather than a teleport. This is the

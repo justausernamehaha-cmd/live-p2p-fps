@@ -207,7 +207,14 @@ and no negotiation.
 Walking in is meant to be easy. Any part of your body through the mouth is you
 through it, and the rim counts: brush the very edge with a shoulder and you go
 in rather than scraping along it. Standing still in one is enough — a hole you
-are already stood in is a hole you fall through. You can stand between two of them without being
+are already stood in is a hole you fall through.
+
+**Put one at your feet and one over your head and you fall for ever**, faster
+every time round, up to the same 80 m/s terminal any fall has. Nothing resets on
+the way through: the only thing that stops you going back through a mouth is
+having just come *out* of that one, and only until you are clear of it. Turn that
+fall sideways through a mouth on a wall and you keep it — a fling is allowed to
+break the walking speed cap for three seconds in the air, and landing spends it. You can stand between two of them without being
 thrown about — nothing moving into a mouth means nothing goes through it. And you
 **keep everything you had**. Your speed is turned into the
 exit's direction, not scrubbed, so a long drop into a portal on the floor comes

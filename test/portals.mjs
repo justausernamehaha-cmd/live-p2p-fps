@@ -126,11 +126,25 @@ const R = await page.evaluate(async () => {
   park(-40, 8, -40, 0);
   g.player.vel = { x: 0, y: -18, z: 0 };       // dropping hard
   const fellAt = 18;
+  // Read at the instant of the traversal. Sampling a moment later measures where
+  // the flight happened to have got to, not what the portal handed over — and now
+  // that a fling is allowed to keep its speed, a moment later is a wall away.
+  let outSpeed = null, outZ = null;
+  const wrapped = g.player._tryPortal.bind(g.player);
+  g.player._tryPortal = function (dt) {
+    const r = wrapped(dt);
+    if (r && outSpeed === null) {
+      outSpeed = Math.hypot(this.vel.x, this.vel.z);
+      outZ = this.vel.z;
+    }
+    return r;
+  };
   await sleep(700);
-  out.fellThrough = g.player.portalCount >= 2;
-  out.speedOutOfFall = round(speed());
-  out.keptMostOfTheFall = speed() > fellAt * 0.55;
-  out.exitZ = round(g.player.vel.z);
+  g.player._tryPortal = wrapped;
+  out.fellThrough = g.player.portalCount >= 1;
+  out.speedOutOfFall = outSpeed === null ? null : round(outSpeed);
+  out.keptMostOfTheFall = outSpeed !== null && outSpeed > fellAt * 0.55;
+  out.exitZ = outZ === null ? null : round(outZ);
 
   // ---------------------------------------------- the gun places and refuses
   g.portals.clear();
@@ -257,6 +271,59 @@ const R = await page.evaluate(async () => {
     .some(pr => ['a', 'b'].some(k => pr[k] && pr[k].light));
   out.sceneLightCount = g.scene.children.filter(c => c.isLight).length;
   out.selfHiddenFromOwnCamera = g.selfAvatar.group.visible === false;
+
+  // ------------------------------------------------- falling through, for ever
+  // One mouth at your feet and one over your head: you fall through the floor,
+  // come out of the ceiling, and do it again faster. The speed has to keep
+  // *building* — a fixed cooldown between traversals used to cap it, because
+  // once the drop took less time than the cooldown the crossing was refused, the
+  // player hit the floor instead, and the whole loop started again from rest.
+  g.portals.clear();
+  const LX = -52;
+  g.portals.place('me', 'a', { c: { x: LX, y: 0, z: 0 }, n: { x: 0, y: 1, z: 0 },
+    u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: LX, y: 8, z: 0 }, n: { x: 0, y: -1, z: 0 },
+    u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: -1 }, mover: -1 });
+  park(LX, 6, 0, 0);
+  g.player.portalCooldown = 0; g.player.exitedVia = null;
+  g.player.hp = 100; g.player.alive = true;
+  keys();
+  const fallSpeeds = [];
+  let seen = g.player.portalCount;
+  const until = performance.now() + 5000;
+  while (performance.now() < until) {
+    await sleep(16);
+    if (g.player.portalCount !== seen) {
+      seen = g.player.portalCount;
+      fallSpeeds.push(+Math.abs(g.player.vel.y).toFixed(1));
+    }
+  }
+  out.loopHops = fallSpeeds.length;
+  out.loopFirst = fallSpeeds.slice(0, 5);
+  out.loopPeak = fallSpeeds.length ? Math.max(...fallSpeeds) : 0;
+  // each of the first several is faster than the last, and it never falls back
+  out.loopBuilds = fallSpeeds.slice(0, 8).every((v, i, a) => i === 0 || v >= a[i - 1] - 0.5);
+  out.loopNeverReset = fallSpeeds.slice(3).every(v => v > 15);
+
+  // ...and turning that fall sideways keeps it, rather than clamping it to a
+  // sprint the instant it leaves the mouth
+  g.portals.clear();
+  g.portals.place('me', 'a', { c: { x: LX, y: 0, z: 0 }, n: { x: 0, y: 1, z: 0 },
+    u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: LX + 20, y: 1.2, z: 0 }, n: { x: 1, y: 0, z: 0 },
+    u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  park(LX, 9, 0, 0);
+  g.player.vel = { x: 0, y: -45, z: 0 };
+  g.player.portalCooldown = 0; g.player.exitedVia = null;
+  let flung = null;
+  const beforeFling = g.player._tryPortal.bind(g.player);
+  g.player._tryPortal = function (dt) {
+    const r = beforeFling(dt);
+    if (r && flung === null) flung = Math.hypot(this.vel.x, this.vel.z);
+    return r;
+  };
+  await sleep(600);
+  out.flingSpeed = flung === null ? null : round(flung);
 
   // ----------------------------------------- a mouth never hangs off its wall
   // Shot hard into a corner, it slides inward until the whole oval is on the
@@ -752,6 +819,14 @@ want('a mouth on a lift hands over the lift\'s motion',
   { onLift: R.exitOnLift, offLift: R.exitOffLift, liftSpeed: R.liftSpeed });
 want('walking along a wall into a mouth on it goes in', R.hugWalkedIn,
   { pressedAt: R.pressedAgainstWall, wentIn: R.hugWalkedIn });
+
+want('a fall through one mouth and out of another loops', R.loopHops > 12,
+  { hops: R.loopHops, speeds: R.loopFirst });
+want('...and gets faster every time round', R.loopBuilds, R.loopFirst);
+want('...without ever dropping back to a standstill', R.loopNeverReset, R.loopFirst);
+want('...up to the falling terminal', R.loopPeak > 55, R.loopPeak);
+want('a fall turned sideways keeps its speed', R.flingSpeed !== null && R.flingSpeed > 30,
+  { fling: R.flingSpeed, walkingCap: 22 });
 
 want('a portal never hangs off the wall it is on', R.slidClear, { slidTo: R.slidTo });
 want('standing still in a mouth takes you through', R.stillWentThrough, R.stillWentThrough);
