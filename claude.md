@@ -244,6 +244,48 @@ mouth shows — 934 pixels with the body in portal views, 0 with it taken out.
   player against the exact oval, so clipping the edge with a shoulder scraped you
   along it. The mouth is widened by the player's radius now.
 
+## Portals and platforms, second pass — 2026-08-30
+
+Everything below was found by measuring the running game, never by reading.
+
+- **The view through a mouth was linear where sRGB was expected**, so it came out
+  at about a third of its brightness — "meshed black". The render target is
+  *written* in sRGB (proved: an sRGB target reads back mean 53.4 where a plain one
+  reads 10.1) and sampled back as linear, and a raw `ShaderMaterial` gets none of
+  the conversions three.js appends to its own materials. `#include
+  <colorspace_fragment>` is the whole fix. Proved by putting both mouths in the
+  same place facing opposite ways — which makes the portal transform the identity
+  — and demanding the disc match the pixels it covers: off by 0.1 of 255.
+- **A player pressed against a wall is *behind* the crossing plane.** Collision
+  holds them a radius clear of the surface, and the plane the crossing test used
+  sat a radius *in front* of it, so walking along a wall into a mouth on that same
+  wall slid straight past it. There is now a second way in: touching the surface
+  and inside the mouth is enough, whichever way you are walking.
+- **Portals ride their platform after the player has already moved**, unless you
+  make them do it first. A frame of lag between a lift and the mouth on it sweeps
+  that mouth's plane across whoever is near it — which is what "randomly
+  teleported" was.
+- **A 2 m portal does not fit diagonally on a 2 m crate top.** Floor and ceiling
+  mouths took their orientation from the look direction, so whether a box would
+  take one depended on where you were standing. Snapped to the face's own axes:
+  8 of 8 from every angle.
+- **`_axis()` ejects clear of the whole box**, again: a lift rising into the feet
+  of someone standing on its edge left them overlapping, and their next step flung
+  them to one edge or the other. `_ride()` lifts anyone a platform has come up
+  under, before movement, so the overlap never exists.
+- **Crushing has to happen before the body moves.** Run it afterwards and the
+  overlap is already resolved — by `_axis()` pushing the player up out of the
+  platform and standing them on top of it. And past a full crouch the body has to
+  keep *compressing*, or the last half a head, the part that kills you, can never
+  happen.
+- **Lowering the shuttles to make them boardable drove them through the cover
+  walls** they used to fly over. Platform routes are swept along their whole run
+  against every static box now, in `test/portals.mjs`; eyeballing it got it wrong
+  in both directions.
+- **Ctrl+W cannot be stopped by `preventDefault()`.** Only the Keyboard Lock API
+  can, and only in fullscreen — so capturing the mouse takes the page fullscreen
+  to earn it. That is a real trade, so it is a checkbox.
+
 ## Ideas, not built
 
 - **Peers seeing edits live.** The designer is deliberately single-player: a

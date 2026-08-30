@@ -331,7 +331,22 @@ await page.waitForTimeout(250);
 R.menuButtonOpensSettings = await page.isVisible('#editpanel');
 R.menuClosedBehindIt = await page.evaluate(() =>
   document.getElementById('menu').classList.contains('hidden'));
+// The panel exists to be clicked, so it must arrive with the mouse free. Going
+// through the menu used to ask for the pointer back on the way out of the pause
+// screen and release it a millisecond later, and the lock could win that race.
+R.settingsFreesTheMouse = await page.evaluate(async () => {
+  const g = window.game;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const before = document.pointerLockElement !== null;
+  // a click on the canvas must not quietly take it back either
+  g.canvas.dispatchEvent(new PointerEvent('pointerdown',
+    { pointerId: 1, pointerType: 'mouse', button: 0, bubbles: true }));
+  await sleep(250);
+  return { locked: before, lockedAfterClick: document.pointerLockElement !== null,
+           suspended: g.input.suspendLock };
+});
 await close();
+R.lockAllowedAgainAfterwards = await page.evaluate(() => window.game.input.suspendLock === false);
 
 // -------------------------------------------------------------------- verdict
 if (!R.equalsDoesNothing) fail.push('= still opens the settings panel, and it should not');
@@ -379,6 +394,10 @@ if (!R.pause.pointerFree) fail.push('the mouse is still captured on the pause sc
 if (!R.pause.worldStillMoving) fail.push('the world froze while paused');
 if (!R.menuButtonOpensSettings) fail.push('the menu SETTINGS button does not open the panel');
 if (!R.menuClosedBehindIt) fail.push('the menu stayed up behind the settings panel');
+if (R.settingsFreesTheMouse.locked) fail.push('opening settings from the menu left the mouse captured');
+if (R.settingsFreesTheMouse.lockedAfterClick) fail.push('a click took the mouse back while the settings panel was open');
+if (!R.settingsFreesTheMouse.suspended) fail.push('the settings panel does not hold the pointer lock off');
+if (!R.lockAllowedAgainAfterwards) fail.push('the pointer lock is still suspended after closing settings');
 if (R.designRowsPresent.length !== 14) fail.push('the designer key list is wrong: ' + R.designRowsPresent);
 if (!R.designSectionHiddenInAMatch) fail.push('the designer key section shows during a match');
 if (R.designDefaults.del !== 'ddelete') fail.push('Delete does not delete in the designer');

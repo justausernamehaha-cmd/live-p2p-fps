@@ -163,6 +163,10 @@ export class Input {
     this.onKeyboardDetected = null;
     this.onAction = null;           // for UI-only buttons (chat / score / weapon)
     this.sensitivity = Number(localStorage.getItem('pa.sens')) || 1;
+    // Going fullscreen is what buys the right to swallow Ctrl+W and friends.
+    // Remembered, so anyone who would rather keep their browser chrome can turn
+    // it off once in the settings panel and be left alone about it.
+    this.wantFullscreenLock = localStorage.getItem('pa.kblock') !== '0';
 
     this._touchMove = null;         // {id, ox, oy}
     this._touchLook = null;         // {id, x, y}
@@ -361,9 +365,11 @@ export class Input {
       if (this.pointerLocked) {
         this.lockFailedAt = 0;     // it worked, so stop treating it as refused
         this._mouseDrag = null;
-        // Chrome will hand over the reserved combinations too (Ctrl+W and
-        // friends), but only in fullscreen; elsewhere this simply rejects.
-        try { navigator.keyboard?.lock?.()?.catch?.(() => {}); } catch { /* unsupported */ }
+        // preventDefault() cannot touch the browser's own combinations — Ctrl+W
+        // closes the tab before the page hears about it. The Keyboard Lock API
+        // is the only thing that can, and it only works in fullscreen, so
+        // capturing the mouse takes the page fullscreen to earn it.
+        this._grabKeyboard();
         this.lockedAt = now();     // ignore the settling moves that follow
         this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
@@ -374,6 +380,27 @@ export class Input {
         this.onAction?.('pause');
       }
     });
+  }
+
+  /** Take the reserved key combinations away from the browser.
+   *
+   *  `navigator.keyboard.lock()` is refused outside fullscreen, so this goes
+   *  fullscreen first. That is the whole price of it: there is no other way for
+   *  a page to stop Ctrl+W, Ctrl+T or Ctrl+N, and leaving them live means a
+   *  mistimed reach for the movement keys can close the match. Both calls are
+   *  best-effort — a browser that will not play along simply keeps its
+   *  shortcuts, and everything else still works. */
+  _grabKeyboard() {
+    const lock = () => {
+      try { navigator.keyboard?.lock?.()?.catch?.(() => {}); } catch { /* unsupported */ }
+    };
+    if (document.fullscreenElement) { lock(); return; }
+    if (!this.wantFullscreenLock) { lock(); return; }
+    try {
+      const p = document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
+      if (p && p.then) p.then(lock).catch(lock);
+      else lock();
+    } catch { lock(); }
   }
 
   /** A refusal is only worth respecting for a moment; after that, try again. */
@@ -702,6 +729,12 @@ export class Input {
   setSensitivity(v) {
     this.sensitivity = clamp(v, 0.2, 3);
     try { localStorage.setItem('pa.sens', String(this.sensitivity)); } catch { /* private mode */ }
+  }
+
+  setFullscreenLock(on) {
+    this.wantFullscreenLock = !!on;
+    try { localStorage.setItem('pa.kblock', on ? '1' : '0'); } catch { /* private mode */ }
+    if (on && this.pointerLocked) this._grabKeyboard();
   }
 
   setTextMode(on) {

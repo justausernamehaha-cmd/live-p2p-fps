@@ -1,7 +1,7 @@
 import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
 import { capsulePush } from './solid.js';
-import { crossing, portalMap, lookAngles, EXIT_CLEAR } from './portal.js';
+import { crossing, portalMap, lookAngles, EXIT_CLEAR, HALF_W, HALF_H } from './portal.js';
 
 const RADIUS = 0.17;      // matches the rendered body half-width in remote.js
 const HEIGHT = 1.8;
@@ -80,6 +80,15 @@ const PORTAL_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
 // along.
 const PORTAL_EDGE = RADIUS;
 const PORTAL_COOLDOWN = 0.14;   // stops a pair sitting close together strobing
+// How close the body has to be to a surface to count as touching it. A portal is
+// a hole: if you are against the wall and the hole is where you are, the wall is
+// not there for you, whichever way you happen to be walking.
+const PORTAL_CONTACT = RADIUS + 0.05;
+const PORTAL_CONTACT_SPEED = 0.5;   // ...and you have to actually be moving
+// Being crushed happens in two stages, so it can be seen coming. A platform
+// closing on your head forces you down into a crouch first; only once it has
+// pushed past that — half a head deeper — does it kill you.
+const CRUSH_DEPTH = 0.17;           // half a head, the same 0.34 the model uses
 
 export class Player {
   constructor(world) {
@@ -108,6 +117,9 @@ export class Player {
     this.portals = null;      // set by the game: something with .links()
     this.portalCooldown = 0;
     this.portalCount = 0;     // bumped on every traversal, for tests and effects
+    this.rideVel = null;      // the platform underfoot, if any, and how fast it goes
+    this.squashed = false;    // a platform closed on us: the game turns this into a death
+    this.beingCrushed = false;// ...and this is the warning before it, for the HUD
   }
 
   /** Collision moves the body up a whole step at once; the view is dragged along
@@ -156,19 +168,7 @@ export class Player {
     this.stepSmooth = Math.max(0, this.stepSmooth - STEP_SMOOTH_RATE * dt);
     this.portalCooldown = Math.max(0, this.portalCooldown - dt);
 
-    // A platform carries whoever is standing on it. Read from last frame's
-    // ground contact, before this frame's movement, so the ride is applied once
-    // and the player's own velocity is left completely alone — stepping off a
-    // moving platform must not fling you, and standing on one must not fight
-    // the direct ground control that would otherwise put you straight back.
-    if (this.alive && this.onGround && this.world.movers?.length) {
-      const m = this.world.moverUnder(this.pos, RADIUS);
-      if (m) {
-        this.pos.x += m.delta.x;
-        this.pos.y += m.delta.y;
-        this.pos.z += m.delta.z;
-      }
-    }
+    if (this.alive) this._ride();
 
     // recoil relaxes back toward zero and is folded into the view, not the state,
     // so remote players never see a jittering aim direction
@@ -182,6 +182,11 @@ export class Player {
 
     const wish = input.moveVector();
     this._crouch(dt, input.down('crouch'));
+    // Before anything moves. A platform overlapping the head is resolved by
+    // _axis() as though it were ground — it pushes up out of the *whole* box —
+    // so a lift coming down would stand the player on top of itself instead of
+    // squashing them. Ducking first means the overlap never happens.
+    this._crush();
 
     // Sprint latches: tapping shift keeps you sprinting until you let go of
     // forward, rather than making you hold two keys down the whole way.
@@ -290,6 +295,14 @@ export class Player {
     if (wantJump) {
       this.vel.y = JUMP_SPEED;
       this.onGround = false;
+      // Leave a moving platform and you leave it *going somewhere*. Riding one
+      // only ever moved the body, so jumping off a shuttle left the shuttle to
+      // carry on without you and you landed behind it, which is not what
+      // standing on a moving thing feels like anywhere.
+      if (this.rideVel) {
+        this.vel.x += this.rideVel.x;
+        this.vel.z += this.rideVel.z;
+      }
     }
 
     this._capSpeed();
@@ -336,6 +349,127 @@ export class Player {
     } else {
       this.bob *= Math.exp(-8 * dt);
     }
+  }
+
+  /** Ride whatever platform is underfoot.
+   *
+   *  Two jobs. It carries the body by exactly what the platform moved, so
+   *  standing on one holds still relative to it. And it *lifts* a body a rising
+   *  platform has come up into, which is the whole point: without that the feet
+   *  end up inside the platform, and the next horizontal move resolves that
+   *  overlap the only way _axis() knows how — by ejecting the player clear of the
+   *  whole box. Stand on the edge of a lift, take one step, and you were flung to
+   *  one edge of it or the other.
+   *
+   *  It also remembers the platform's own velocity, which is what a jump takes
+   *  with it. */
+  _ride() {
+    this.rideVel = null;
+    const movers = this.world.movers;
+    if (!movers || !movers.length) return;
+    for (const m of movers) {
+      const s = m.shape;
+      if (this.pos.x + RADIUS <= s.min.x || this.pos.x - RADIUS >= s.max.x) continue;
+      if (this.pos.z + RADIUS <= s.min.z || this.pos.z - RADIUS >= s.max.z) continue;
+      const top = s.max.y;
+      const gap = top - this.pos.y;
+      // standing on it, or it has just come up under us by less than a step
+      if (gap > STEP_HEIGHT || gap < -0.12) continue;
+      if (gap > 0) {
+        if (this.vel.y > 0.1) continue;         // jumping off it, not riding it
+        this.pos.y = top;
+        this.onGround = true;
+        if (this.vel.y < 0) this.vel.y = 0;
+      } else {
+        this.pos.x += m.delta.x;
+        this.pos.z += m.delta.z;
+        this.pos.y += m.delta.y;
+      }
+      this.rideVel = { x: m.vel.x, z: m.vel.z };
+      return;
+    }
+  }
+
+  /** What a moving platform does to somebody in its way.
+   *
+   *  Two stages, deliberately. A platform coming down on your head pushes you
+   *  into a crouch — that is a warning you can act on, and most of the time
+   *  ducking and walking out is the whole story. Only once it has come further
+   *  than a crouch allows, by half a head, are you dead. A platform closing on
+   *  you sideways is the same bargain with no crouch to buy you anything: if it
+   *  presses you into something solid and there is nowhere left to be pushed,
+   *  that is the end of it.
+   *
+   *  Only platforms crush. The level's own walls and ceilings have always been
+   *  there and have never killed anybody, and they are not going to start. */
+  _crush() {
+    this.beingCrushed = false;
+    if (!this.alive || !this.world.movers || !this.world.movers.length) return;
+
+    // ---- something coming down on top of us
+    let lowest = Infinity;
+    for (const m of this.world.movers) {
+      const s = m.shape;
+      if (this.pos.x + RADIUS <= s.min.x || this.pos.x - RADIUS >= s.max.x) continue;
+      if (this.pos.z + RADIUS <= s.min.z || this.pos.z - RADIUS >= s.max.z) continue;
+      if (s.min.y <= this.pos.y + 0.05) continue;          // not above us
+      if (s.min.y < lowest) lowest = s.min.y;
+    }
+    if (lowest < Infinity) {
+      const headroom = lowest - this.pos.y;
+      if (headroom < CROUCH_HEIGHT - CRUSH_DEPTH) { this.squashed = true; return; }
+      if (headroom < HEIGHT) {
+        // Forced down as far as it takes to fit, and held there. Past a full
+        // crouch the body keeps compressing rather than stopping: it has to, or
+        // the overlap would be resolved by _axis() pushing the player up out of
+        // the whole platform and standing them on top of it, and the last half a
+        // head — the part that kills you — could never happen at all.
+        const t = clamp((HEIGHT - headroom) / (HEIGHT - CROUCH_HEIGHT), 0, 1);
+        if (t > this.crouchT) this.crouchT = t;
+        this.height = Math.min(this.height, Math.max(headroom - 0.01, 0.3));
+        this.crouching = this.crouchT > 0.5;
+        this.beingCrushed = true;
+      }
+    }
+
+    // ---- or closing on us sideways, with a wall on the other side
+    for (const m of this.world.movers) {
+      const s = m.shape;
+      // Sideways only. A platform coming down is the case above, and letting
+      // this one see it would push the player out along whichever axis is
+      // shallowest — which, for something resting on your head, is upwards.
+      if (Math.abs(m.vel.y) > Math.abs(m.vel.x) + Math.abs(m.vel.z)) continue;
+      // Low enough to walk onto is low enough to walk onto. Shoving the player
+      // away from a knee-high platform would make the arena's shuttles
+      // impossible to board, which is the opposite of the point of them.
+      if (s.max.y - this.pos.y <= STEP_HEIGHT + 0.05) continue;
+      if (!s.min || !aabbOverlap(this.aabb(), s)) continue;
+
+      // Shoved along the way it is going, not out by the shortest route. A
+      // platform bearing down on you does not politely lift you over itself; it
+      // pushes you ahead of it, and whether that is survivable is a question
+      // about what is behind you.
+      const k = Math.abs(m.vel.x) >= Math.abs(m.vel.z) ? 'x' : 'z';
+      const forward = m.vel[k] >= 0;
+      const wasAt = { ...this.pos };
+      this.pos[k] = forward ? s.max[k] + RADIUS + SKIN : s.min[k] - RADIUS - SKIN;
+      this.beingCrushed = true;
+      if (this._overlapsStatic()) {
+        this.pos = wasAt;          // nowhere to be shoved to
+        this.squashed = true;
+      }
+      return;
+    }
+  }
+
+  /** Overlapping anything that is not itself a moving platform. */
+  _overlapsStatic() {
+    const a = this.aabb();
+    for (const b of this.world.boxes) {
+      if (b.mover !== undefined) continue;
+      if (aabbOverlap(a, b)) return true;
+    }
+    return false;
   }
 
   _capSpeed() {
@@ -478,6 +612,25 @@ export class Player {
     if (this.pos.y < -20) { this.pos.y = 10; this.vel.y = 0; }
   }
 
+  /** Is the body up against this mouth's surface, and inside the mouth?
+   *
+   *  Distance is measured to the portal's own plane, so "touching" means what it
+   *  means for collision: a radius clear of the face. Standing anywhere in open
+   *  space — between two mouths, say — is metres from any plane and never counts. */
+  _inMouth(p) {
+    if (Math.hypot(this.vel.x, this.vel.z) < PORTAL_CONTACT_SPEED) return false;
+    for (const frac of PORTAL_SAMPLES) {
+      const y = this.pos.y + this.height * frac;
+      const dx = this.pos.x - p.c.x, dy = y - p.c.y, dz = this.pos.z - p.c.z;
+      const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
+      if (d < 0 || d > PORTAL_CONTACT) continue;          // behind it, or not touching
+      const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + PORTAL_EDGE);
+      const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + PORTAL_EDGE);
+      if (su * su + sv * sv <= 1) return true;
+    }
+    return false;
+  }
+
   /** Walk into one mouth, come out of the other, keeping everything you had.
    *
    *  The transform is applied to the *crossing point* rather than to the
@@ -500,6 +653,17 @@ export class Player {
     let best = null;
     for (const link of links) {
       const from = link.from;
+      // Already up against the surface, inside the mouth? Then go through it.
+      //
+      // The crossing test below cannot see this case and never could: it asks
+      // whether the body passed through the plane, and a player pressed against
+      // a wall is held a radius away from it by collision — which is *behind*
+      // the plane the test uses, so the test reads them as having come out the
+      // back and refuses. Walk along a wall into a portal on that same wall and
+      // you would slide straight past the mouth. Nothing here fires unless the
+      // body is genuinely touching the surface, so standing in the gap between
+      // two mouths is untouched by it.
+      if (this._inMouth(from)) { best = { k: 0, link, hy: this.height * 0.5, at: null }; break; }
       // the mouth, held a player's radius out in front of the surface
       const lead = {
         c: {
@@ -522,11 +686,21 @@ export class Player {
 
     const { link, hy, p0, p1, k } = best;
     const from = link.from, to = link.to;
-    const at = {
-      x: p0.x + (p1.x - p0.x) * k,
-      y: p0.y + (p1.y - p0.y) * k,
-      z: p0.z + (p1.z - p0.z) * k
-    };
+    // where the body went through: the crossing point, or — for a body already
+    // standing in the mouth — itself, dropped onto the portal's own plane
+    let at;
+    if (best.at === null) {
+      const mid = { x: this.pos.x, y: this.pos.y + hy, z: this.pos.z };
+      const d = (mid.x - from.c.x) * from.n.x + (mid.y - from.c.y) * from.n.y +
+                (mid.z - from.c.z) * from.n.z;
+      at = { x: mid.x - from.n.x * d, y: mid.y - from.n.y * d, z: mid.z - from.n.z * d };
+    } else {
+      at = {
+        x: p0.x + (p1.x - p0.x) * k,
+        y: p0.y + (p1.y - p0.y) * k,
+        z: p0.z + (p1.z - p0.z) * k
+      };
+    }
     const map = portalMap(from, to);
     const out = map.point(at);
     const anchor = {
@@ -549,6 +723,17 @@ export class Player {
     // momentum is turned, never scrubbed: this is the whole point of the thing
     const v = map.dir(this.vel);
     this.vel = { x: v.x, y: v.y, z: v.z };
+
+    // A mouth on a moving platform hands over the platform's own motion as well.
+    // Coming out of a portal on the underside of a lift should throw you the way
+    // the lift is going — the surface you are leaving through is itself moving,
+    // and a portal that ignored that would swallow the ride.
+    const mover = to.mover >= 0 && this.world.movers ? this.world.movers[to.mover] : null;
+    if (mover) {
+      this.vel.x += mover.vel.x;
+      this.vel.y += mover.vel.y;
+      this.vel.z += mover.vel.z;
+    }
 
     // and the view comes with it, so a portal on a wall does not leave you
     // facing the wall you just left through

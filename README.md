@@ -183,8 +183,14 @@ portal is 1.36 wide, so that wall takes one on its face and never on its edge.
 
 **You can see through them.** Each mouth is a window onto whatever is in front of
 the other one, rendered from a camera put through the portal exactly the way you
-would be. Put one in front of you and one behind and you are looking at yourself,
-down a corridor that keeps going.
+would be — and what you see through one is *exactly* what it covers, not a tinted
+or dimmed version of it. Put one in front of you and one behind and you are
+looking at yourself, down a corridor that keeps going.
+
+A mouth throws no light of its own, so a portal on the floor beside a wall does
+not turn you into a spotlight. Floor and ceiling mouths are turned to the way you
+were facing but snapped to the surface's own axes, so the top of a crate takes one
+whichever way you happen to be standing.
 
 Anyone can use anyone's portals, which is why the colours matter. With one
 player they are blue and orange. As soon as anybody else is in the room every

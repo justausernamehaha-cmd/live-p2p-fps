@@ -106,10 +106,17 @@ export function frameFor(n, look) {
   const up = v3(0, 1, 0);
   let u;
   if (Math.abs(n.y) > 0.9) {
-    // floor or ceiling: use the look direction flattened onto the face
+    // Floor or ceiling. Turned to face roughly the way the shooter was looking,
+    // but *snapped to the nearest world axis* rather than following the look
+    // exactly. A portal is 1.36 by 2, and the top of a crate is 2 by 2: laid
+    // diagonally it no longer fits on its own surface and the shot explodes, so
+    // whether you could put a portal on a box came down to which way you
+    // happened to be standing. Snapped, a square face always takes one.
     const f = look ? sub3(look, scale3(n, dot(look, n))) : v3(0, 0, -1);
-    let vv = norm3(Math.hypot(f.x, f.y, f.z) > 1e-3 ? f : v3(0, 0, -1));
-    u = norm3(cross(vv, n));
+    const along = Math.abs(f.x) > Math.abs(f.z)
+      ? v3(Math.sign(f.x) || 1, 0, 0)
+      : v3(0, 0, Math.sign(f.z) || -1);
+    u = norm3(cross(along, n));
     return { u, v: norm3(cross(n, u)), n };
   }
   u = norm3(cross(up, n));

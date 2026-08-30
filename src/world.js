@@ -88,7 +88,9 @@ export class World {
             index: this.movers.length, shape, src: p.src || p,
             p0, p1: { x: mv.x, y: mv.y, z: mv.z },
             sp: mv.sp, dist, at: 0, dir: 1,
-            delta: { x: 0, y: 0, z: 0 }, mesh: null
+            delta: { x: 0, y: 0, z: 0 },     // how far it moved this frame
+            vel: { x: 0, y: 0, z: 0 },       // ...and how fast, which a portal on
+            mesh: null                        // it hands to whatever comes out
           });
         }
       }
@@ -119,6 +121,7 @@ export class World {
       const at = centreOf(m.shape);
       const dx = want.x - at.x, dy = want.y - at.y, dz = want.z - at.z;
       m.delta.x = dx; m.delta.y = dy; m.delta.z = dz;
+      if (dt > 1e-6) { m.vel.x = dx / dt; m.vel.y = dy / dt; m.vel.z = dz / dt; }
       if (m.shape.planes) translateSolid(m.shape, dx, dy, dz);
       else {
         m.shape.min.x += dx; m.shape.min.y += dy; m.shape.min.z += dz;
@@ -257,11 +260,18 @@ export class World {
     const tower = this.add(0, 0, -50, 5, 0.5, 5, PALETTE.accent);
     tower.mv = { x: 0, y: 5.75, z: -50, sp: 2.6 };        // a long way up, and back
 
-    const shuttle = this.add(-30, 4, 44, 8, 0.5, 4, PALETTE.accent2);
-    shuttle.mv = { x: 30, y: 4.25, z: 44, sp: 5 };        // along the far edge
+    // The two shuttles run along the floor rather than overhead. Up at four
+    // metres there was no way onto them — a jump is worth 1.4 m — and anything
+    // low enough to climb onto is also low enough to trap someone underneath.
+    // On the ground there is nothing to be under, and you board one by walking.
+    // Routes chosen by sweeping each one along its whole run against every
+    // static box in the arena, not by eye: at head height these two flew over
+    // the cover, and on the floor they drove straight through it.
+    const shuttle = this.add(-30, 0, 56, 8, 0.5, 4, PALETTE.accent2);
+    shuttle.mv = { x: 30, y: 0.25, z: 56, sp: 5 };        // along the north edge
 
-    const crossing = this.add(52, 5, -30, 5, 0.5, 5, PALETTE.accent2);
-    crossing.mv = { x: 52, y: 5.25, z: 30, sp: 4.5 };     // over the east flank
+    const crossing = this.add(56, 0, -30, 4, 0.5, 8, PALETTE.accent2);
+    crossing.mv = { x: 56, y: 0.25, z: 30, sp: 4.5 };     // and up the east one
 
     // ---- scattered crates: repositioned, but still crate-sized ----
     const crates = [

@@ -21,7 +21,7 @@ const BALL_STEP = 1.2;        // metres per collision query along its flight
 // one, once per portal, per frame. That is the most expensive thing this game
 // does, so it is rationed: only portals actually on screen are redrawn, at most
 // this many of them, at half resolution.
-const MAX_VIEWS = 2;
+const MAX_VIEWS = 4;
 const VIEW_SCALE = 0.5;
 const VIEW_RANGE = 90;        // metres past which a mouth is not worth redrawing
 
@@ -44,10 +44,16 @@ const VIEW_FRAG = `
   void main() {
     if (uHasView < 0.5) { gl_FragColor = vec4(uFallback, 0.92); return; }
     vec2 uv = (vClip.xy / vClip.w) * 0.5 + 0.5;
-    vec3 col = texture2D(uView, clamp(uv, 0.002, 0.998)).rgb;
-    // a breath of the mouth's own colour, so which portal you are looking
-    // through is still readable when both ends show the same grey room
-    gl_FragColor = vec4(mix(col, uTint, 0.12), 1.0);
+    // Straight through, untouched — it used to be mixed 12% toward the portal's
+    // own colour to say which mouth you were looking through, and that only made
+    // the view look murky. The ring already says which is which.
+    gl_FragColor = vec4(texture2D(uView, clamp(uv, 0.002, 0.998)).rgb, 1.0);
+    // The target is written in sRGB and sampled back as linear, and a raw
+    // ShaderMaterial gets none of the conversions three.js appends to its own
+    // materials. Without this the mouth outputs linear values where sRGB is
+    // expected and everything through it comes out at about a third of its
+    // brightness — which is what "meshed black" was.
+    #include <colorspace_fragment>
   }`;
 
 export class PortalField {
@@ -422,7 +428,7 @@ export class PortalField {
           uView: { value: null },
           uHasView: { value: 0 },
           uFallback: { value: new THREE.Color(0x0a0f18) },
-          uTint: { value: new THREE.Color(p.color) }
+          uTint: { value: new THREE.Color(p.color) }   // kept for the ring's sake
         },
         vertexShader: VIEW_VERT, fragmentShader: VIEW_FRAG,
         side: THREE.DoubleSide, depthWrite: false, transparent: true
@@ -441,9 +447,11 @@ export class PortalField {
     p.ring.position.z = 0.012;
     p.group.add(p.disc);
     p.group.add(p.ring);
-    p.light = new THREE.PointLight(p.color, 2.4, 7);
-    p.light.position.set(0, 0, 0.4);
-    p.group.add(p.light);
+    // No lamp. A mouth used to carry a coloured point light, which lit whatever
+    // it was near: put one on the floor beside a wall and the wall — and you
+    // standing at it — turned into a spotlight. The ring is additively blended
+    // and glows on its own, so the portal still reads in a dark corner without
+    // throwing light onto anything solid.
     p.group.renderOrder = 4;
     p.target = null;             // its view of the far side, made on first use
     this.group.add(p.group);
@@ -470,7 +478,6 @@ export class PortalField {
     p.color = color;
     p.ring?.material.color.setHex(color);
     p.disc?.material.uniforms.uTint.value.setHex(color);
-    if (p.light) p.light.color.setHex(color);
   }
 
   _dispose(p) {

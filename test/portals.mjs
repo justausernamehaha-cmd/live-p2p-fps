@@ -11,6 +11,7 @@
 //
 //   ./serve.sh 8080 &   then   node test/portals.mjs
 import { chromium } from 'playwright';
+import { PNG } from 'pngjs';
 
 const URL = process.env.GAME_URL || 'http://127.0.0.1:8080/';
 const browser = await chromium.launch({
@@ -267,7 +268,275 @@ const R = await page.evaluate(async () => {
   out.selfNotSeenWithoutBody = await magentaIn(false);
   g.portals.selfView = g.selfAvatar.group;
   out.viewIsLive = g.portals.pairs.get('me')?.a?.disc.material.uniforms.uHasView.value;
+  // A mouth carries no lamp. It used to, and a portal on the floor beside a wall
+  // lit the wall — and whoever stood at it — like a spotlight.
+  out.mouthHasNoLamp = ![...g.portals.pairs.values()]
+    .some(pr => ['a', 'b'].some(k => pr[k] && pr[k].light));
+  out.sceneLightCount = g.scene.children.filter(c => c.isLight).length;
   out.selfHiddenFromOwnCamera = g.selfAvatar.group.visible === false;
+
+  // ------------------------------------- every platform's run is clear of the level
+  // Swept along its whole path against every static box, because eyeballing this
+  // is exactly what got it wrong: at head height the shuttles flew over the
+  // cover walls, and lowering them so they could be climbed onto drove them
+  // straight through the same walls.
+  out.pathHits = g.world.movers.map(m => {
+    const sh = m.shape;
+    const hw = (sh.max.x - sh.min.x) / 2, hh = (sh.max.y - sh.min.y) / 2,
+          hd = (sh.max.z - sh.min.z) / 2;
+    const statics = g.world.boxes.filter(b =>
+      b.mover === undefined && !(b.max.y <= 0.001 && b.min.y < -0.5));   // not the floor slab
+    let n = 0;
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
+      const c = { x: m.p0.x + (m.p1.x - m.p0.x) * t, y: m.p0.y + (m.p1.y - m.p0.y) * t,
+                  z: m.p0.z + (m.p1.z - m.p0.z) * t };
+      const box = { min: { x: c.x - hw, y: c.y - hh, z: c.z - hd },
+                    max: { x: c.x + hw, y: c.y + hh, z: c.z + hd } };
+      for (const b of statics) {
+        if (box.min.x < b.max.x - 1e-6 && box.max.x > b.min.x + 1e-6 &&
+            box.min.y < b.max.y - 1e-6 && box.max.y > b.min.y + 1e-6 &&
+            box.min.z < b.max.z - 1e-6 && box.max.z > b.min.z + 1e-6) n++;
+      }
+    }
+    return n;
+  });
+
+  // -------------------------------------------- riding a platform, and leaving it
+  const ride = g.world.movers.find(m => Math.abs(m.p1.x - m.p0.x) > 10);
+  out.foundRide = !!ride;
+  if (ride) {
+    ride.at = 0.3; ride.dir = 1;
+    await sleep(100);
+    const rb = ride.shape;
+    park((rb.min.x + rb.max.x) / 2, rb.max.y + 0.02, (rb.min.z + rb.max.z) / 2, 0);
+    keys();
+    await sleep(250);
+    out.ridingSpeed = round(ride.vel.x);
+    out.rideVel = g.player.rideVel ? round(g.player.rideVel.x) : null;
+    out.stoodOnIt = round(g.player.pos.y) === round(rb.max.y);
+    keys('jump');
+    await sleep(100);
+    out.velAfterJump = round(g.player.vel.x);
+    keys();
+    await sleep(500);
+
+    // it arrives while you stand in its way: you end up on it, not shoved along
+    ride.at = 0.25; ride.dir = 1;
+    await sleep(80);
+    const rb2 = ride.shape;
+    park(rb2.max.x + 1.2, 0.05, (rb2.min.z + rb2.max.z) / 2, 0);
+    keys();
+    await sleep(150);
+    const sx = g.player.pos.x;
+    let onIt = false, shoved = 0;
+    for (let i = 0; i < 90 && !onIt; i++) {
+      await sleep(16);
+      shoved = Math.max(shoved, g.player.pos.x - sx);
+      if (g.player.pos.y > rb2.max.y - 0.1) onIt = true;
+    }
+    out.boardedWhenItArrived = onIt;
+    out.shovedInstead = round(shoved);
+
+    // ...and walking into one head on
+    ride.at = 0.6; ride.dir = -1;
+    await sleep(80);
+    const rb3 = ride.shape;
+    park(rb3.min.x - 2.5, 0.05, (rb3.min.z + rb3.max.z) / 2, -Math.PI / 2);
+    await sleep(120);
+    keys('fwd');
+    let onIt2 = false;
+    for (let i = 0; i < 90 && !onIt2; i++) {
+      await sleep(16);
+      if (g.player.pos.y > rb3.max.y - 0.1) onIt2 = true;
+    }
+    keys();
+    out.walkedOnto = onIt2;
+  }
+
+  // ------------------------------- standing on the edge of a rising lift
+  // The feet sink into a platform coming up under them, and the next horizontal
+  // move used to resolve that overlap the only way _axis() knows: by ejecting the
+  // player clear of the whole box. One step on the edge flung you to an edge.
+  const edgeLift = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
+  if (edgeLift) {
+    edgeLift.at = 0.2; edgeLift.dir = 1;
+    await sleep(80);
+    const es = edgeLift.shape;
+    park(es.max.x - 0.3, es.max.y, (es.min.z + es.max.z) / 2, 0);
+    await sleep(150);
+    const ex = g.player.pos.x;
+    keys('fwd');
+    let flung = 0;
+    for (let i = 0; i < 40; i++) {
+      await sleep(16);
+      flung = Math.max(flung, Math.abs(g.player.pos.x - ex));
+    }
+    keys();
+    out.edgeFling = round(flung);
+  }
+
+  // ---------------------------------- portals on the top and bottom of things
+  // A portal is 1.36 by 2 and the top of a crate is 2 by 2, so laid diagonally
+  // it did not fit on its own surface and the shot exploded — which way you
+  // happened to be standing decided whether a box would take one. Floor and
+  // ceiling mouths are snapped to the surface's own axes now.
+  g.portals.clear();
+  const crate = g.world.boxes.find(b => b.max.x - b.min.x < 2.2 && b.max.z - b.min.z < 2.2 &&
+    b.min.y >= 0 && b.max.y > 1.5);
+  out.foundCrate = !!crate;
+  if (crate) {
+    const cx = (crate.min.x + crate.max.x) / 2, cz = (crate.min.z + crate.max.z) / 2;
+    let placed = 0;
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2;
+      g.portals.clear();
+      g.portals.fire('me', { x: cx, y: crate.max.y + 5, z: cz },
+        { x: Math.cos(ang) * 0.01, y: -1, z: Math.sin(ang) * 0.01 }, 'a');
+      await sleep(380);
+      if (g.portals.pairs.get('me')?.a) placed++;
+    }
+    out.topFaceFromEveryAngle = placed;
+  }
+  // the underside of a lift, which is the one that has to ride as well
+  const liftForBottom = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
+  if (liftForBottom) {
+    liftForBottom.at = 0.8;
+    await sleep(80);
+    const ls = liftForBottom.shape;
+    g.portals.clear();
+    g.portals.fire('me', { x: (ls.min.x + ls.max.x) / 2, y: 0.3, z: (ls.min.z + ls.max.z) / 2 },
+      { x: 0, y: 1, z: 0 }, 'b');
+    await sleep(600);
+    const under = g.portals.pairs.get('me')?.b;
+    out.bottomFace = under ? { n: round(under.n.y), rides: under.mover === liftForBottom.index } : null;
+  }
+
+  // ------------------------------------------------- crushed by a platform
+  // Two stages, so it can be seen coming: a lift closing on your head pushes you
+  // into a crouch first, and only once it has come half a head further are you
+  // dead. The killfeed says who did it, and a platform is a who.
+  g.portals.clear();
+  const lift2 = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
+  if (lift2) {
+    const sh = lift2.shape;
+    lift2.at = 1; lift2.dir = -1;
+    await sleep(80);
+    park((sh.min.x + sh.max.x) / 2, 0.05, (sh.min.z + sh.max.z) / 2, 0);
+    g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
+    g.player.crouchT = 0; g.player.height = 1.8; g.player.deaths = 0;
+    g.protectedUntil = 0;
+    keys();
+    const seen = { crouchedAt: null, died: false };
+    for (let i = 0; i < 220 && !seen.died; i++) {
+      await sleep(16);
+      const headroom = sh.min.y - g.player.pos.y;
+      if (seen.crouchedAt === null && g.player.crouchT > 0.25) seen.crouchedAt = round(headroom);
+      if (!g.player.alive) seen.died = true;
+    }
+    out.crushVertical = seen;
+    out.crushFeed = [...document.querySelectorAll('#killfeed > div')].map(e => e.textContent).slice(-1)[0] || '';
+  }
+
+  // ...and sideways, pressed into something that is not going anywhere
+  const shuttle = g.world.movers.find(m => Math.abs(m.p1.x - m.p0.x) > 10);
+  if (shuttle) {
+    // A knee-high platform is meant to be stepped onto, not to shove anybody, so
+    // the crusher here is a tall one — what the designer can build, and what the
+    // arena's own shuttles deliberately are not.
+    shuttle.at = 0; shuttle.dir = 1;
+    await sleep(120);
+    const b = shuttle.shape;
+    const wasTop = b.max.y;
+    b.max.y = b.min.y + 2.6;
+    const wallX = b.max.x + 0.9;
+    g.world.boxes.push({ min: { x: wallX, y: -1, z: b.min.z - 4 },
+                         max: { x: wallX + 1, y: 6, z: b.max.z + 4 }, color: 0x888888, src: {} });
+    park(b.max.x + 0.45, 0.05, (b.min.z + b.max.z) / 2, 0);
+    g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
+    g.player.crouchT = 0; g.player.height = 1.8; g.player.deaths = 0;
+    g.protectedUntil = 0;
+    keys();
+    let crushed = false, shoved = 0;
+    const x0 = g.player.pos.x;
+    for (let i = 0; i < 150 && !crushed; i++) {
+      await sleep(16);
+      shoved = Math.max(shoved, g.player.pos.x - x0);
+      if (!g.player.alive) crushed = true;
+    }
+    out.crushSideways = { crushed, shovedFirst: round(shoved) };
+    g.world.boxes.pop();
+    b.max.y = wasTop;
+  }
+
+  // ------------------------------------------- the killfeed uses your name
+  g.player.hp = 100; g.player.alive = true; g.protectedUntil = 0;
+  g.hud.feed('---mark---');
+  g._takeHit('nobody', { dmg: 500 });
+  await sleep(80);
+  const lines = [...document.querySelectorAll('#killfeed > div')].map(e => e.textContent);
+  out.deathLine = lines[lines.length - 1] || '';
+  out.usesMyName = out.deathLine.includes('portal') && !/\byou\b/i.test(out.deathLine);
+  g.player.hp = 100; g.player.alive = true;
+
+  // ------------------------------------------- a portal on a moving platform
+  // A mouth on a lift hands over the lift's own motion. Caught at the instant of
+  // the traversal, because gravity reverses an upward throw in a third of a
+  // second and measuring afterwards measures nothing.
+  let exitVel = null;
+  const origTry = g.player._tryPortal.bind(g.player);
+  g.player._tryPortal = function (dt) {
+    const r = origTry(dt);
+    if (r) exitVel = { ...this.vel };
+    return r;
+  };
+  const lift = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
+  out.foundLift = !!lift;
+  if (lift) {
+    const runIntoWall = async (attached) => {
+      exitVel = null;
+      g.portals.clear();
+      const sh = lift.shape;
+      const cx = (sh.min.x + sh.max.x) / 2, cz = (sh.min.z + sh.max.z) / 2;
+      lift.at = 0.4; lift.dir = 1;                 // on its way up
+      g.portals.place('me', 'b', { c: { x: cx, y: sh.max.y, z: cz }, n: { x: 0, y: 1, z: 0 },
+        u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: attached ? lift.index : -1 });
+      g.portals.place('me', 'a', { c: { x: -59.5, y: 1.2, z: -40 }, n: { x: 1, y: 0, z: 0 },
+        u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+      park(-57, 0.05, -40, Math.PI / 2);           // yaw pi/2 walks along -x
+      g.player.portalCooldown = 0;
+      keys('fwd');
+      await sleep(700);
+      keys();
+      return exitVel ? round(exitVel.y) : null;
+    };
+    out.liftSpeed = round(lift.vel.y);
+    out.exitOnLift = await runIntoWall(true);
+    out.exitOffLift = await runIntoWall(false);
+  }
+
+  // --------------------------------- a portal on a wall you are pressed against
+  // Walk along a wall into a mouth on that same wall. Collision holds the body a
+  // radius clear of the surface, which is *behind* the plane the crossing test
+  // uses — so this used to slide straight past the mouth and never go in.
+  g.portals.clear();
+  g.portals.fire('me', { x: -30, y: 1.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
+  g.portals.fire('me', { x: 0, y: 1.6, z: -20 }, { x: 0, y: 0, z: 1 }, 'b');
+  await sleep(900);
+  const wallMouth = g.portals.pairs.get('me')?.a;
+  out.mouthOnWall = !!wallMouth;
+  if (wallMouth) {
+    park(wallMouth.c.x - 2.5, 0.05, wallMouth.c.z + 0.2, 0);
+    keys('fwd');
+    await sleep(400);                              // press into the wall
+    out.pressedAgainstWall = round(Math.abs(g.player.pos.z - wallMouth.c.z));
+    const before = g.player.portalCount;
+    g.player.yaw = -Math.PI / 2;                   // now walk along the wall
+    keys('fwd');
+    await sleep(1400);
+    keys();
+    out.hugWalkedIn = g.player.portalCount - before > 0;
+  }
 
   // ------------------------------------------------------- moving platforms
   g.portals.clear();
@@ -321,7 +590,63 @@ const R = await page.evaluate(async () => {
 
   g.portals.clear();
   keys();
+  g.portals.selfView = g.selfAvatar.group;
   return out;
+});
+
+// ------------------------------- what you see through it is what is behind it
+// The strongest form of "the view should be clear": put both mouths in the same
+// place facing opposite ways, which makes the portal transform the identity, and
+// the disc must then show *precisely* what it is covering. Any difference at all
+// is the view being wrong — a tint, a gamma slip, a stale frame.
+//
+// This is what caught the real one: the render target is written in sRGB and
+// sampled back as linear, and a raw ShaderMaterial gets none of the conversions
+// three.js appends to its own materials, so everything through a mouth came out
+// at about a third of its brightness.
+const identityScene = async (withPortals) => await page.evaluate(async (on) => {
+  const g = window.game, P = g.player, sleep = ms => new Promise(f => setTimeout(f, ms));
+  g.portals.clear();
+  g.portals.selfView = null;               // no body, so both sides are the same
+  const X = -52, EYE = 1.67;               // open floor; the mouth at eye height
+  if (on) {
+    g.portals.place('me', 'a', { c: { x: X, y: EYE, z: -3 }, n: { x: 0, y: 0, z: 1 },
+      u: { x: -1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    g.portals.place('me', 'b', { c: { x: X, y: EYE, z: -3 }, n: { x: 0, y: 0, z: -1 },
+      u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+    // the coloured lamp each mouth carries lights the floor, which is a real
+    // difference but not one the view is answerable for
+    for (const pr of g.portals.pairs.values()) {
+      for (const side of ['a', 'b']) if (pr[side]?.light) pr[side].light.intensity = 0;
+    }
+  }
+  P.pos = { x: X, y: 0.05, z: 0 }; P.vel = { x: 0, y: 0, z: 0 };
+  P.yaw = 0; P.pitch = 0; P.portalCooldown = 0;
+  await sleep(900);
+}, withPortals);
+
+const centrePatch = async () => {
+  const png = PNG.sync.read(await page.screenshot());
+  const cx = png.width >> 1, cy = png.height >> 1;
+  let sum = [0, 0, 0], n = 0;
+  for (let y = cy - 20; y < cy + 20; y++) {
+    for (let x = cx - 20; x < cx + 20; x++) {
+      const i = (y * png.width + x) * 4;
+      sum[0] += png.data[i]; sum[1] += png.data[i + 1]; sum[2] += png.data[i + 2];
+      n++;
+    }
+  }
+  return sum.map(v => +(v / n).toFixed(1));
+};
+
+await identityScene(false);
+R.directView = await centrePatch();
+await identityScene(true);
+R.viewThroughPortal = await centrePatch();
+R.viewDifference = R.directView.map((v, i) => +Math.abs(R.viewThroughPortal[i] - v).toFixed(1));
+await page.evaluate(() => {
+  window.game.portals.clear();
+  window.game.portals.selfView = window.game.selfAvatar.group;
 });
 
 const fail = [];
@@ -366,11 +691,49 @@ want('standing between two portals teleports nobody', R.stoodBetween.teleports =
 want('...and leaves them where they stood', R.stoodBetween.stayed, R.stoodBetween);
 
 want('a portal in view is rendering its far side', R.viewIsLive === 1, R.viewIsLive);
+want('what you see through a mouth is exactly what it covers',
+  Math.max(...R.viewDifference) <= 2,
+  { direct: R.directView, through: R.viewThroughPortal, off: R.viewDifference });
 want('you can see yourself through a portal', R.selfSeenThroughPortal > 200,
   { seen: R.selfSeenThroughPortal, control: R.selfNotSeenWithoutBody });
 want('...and it really is the body you are seeing', R.selfNotSeenWithoutBody === 0,
   R.selfNotSeenWithoutBody);
 want('your body never shows in your own camera', R.selfHiddenFromOwnCamera, R.selfHiddenFromOwnCamera);
+want('a mouth throws no light onto anything solid', R.mouthHasNoLamp,
+  { lamp: R.mouthHasNoLamp, sceneLights: R.sceneLightCount });
+
+want('a mouth on a lift hands over the lift\'s motion',
+  R.exitOnLift !== null && R.exitOffLift !== null && R.exitOnLift - R.exitOffLift > 1.5,
+  { onLift: R.exitOnLift, offLift: R.exitOffLift, liftSpeed: R.liftSpeed });
+want('walking along a wall into a mouth on it goes in', R.hugWalkedIn,
+  { pressedAt: R.pressedAgainstWall, wentIn: R.hugWalkedIn });
+
+want('no platform\'s run touches the level it runs through',
+  R.pathHits && R.pathHits.every(n => n === 0), R.pathHits);
+want('standing on a platform rides it', R.stoodOnIt && R.rideVel !== null,
+  { onIt: R.stoodOnIt, rideVel: R.rideVel, platform: R.ridingSpeed });
+want('jumping off one takes its momentum with you',
+  R.velAfterJump > R.ridingSpeed * 0.6, { afterJump: R.velAfterJump, platform: R.ridingSpeed });
+want('a platform arriving puts you on it rather than shoving you',
+  R.boardedWhenItArrived, { onIt: R.boardedWhenItArrived, shoved: R.shovedInstead });
+want('...and you can walk onto one head on', R.walkedOnto, R.walkedOnto);
+want('standing on the edge of a rising lift does not fling you',
+  R.edgeFling !== undefined && R.edgeFling < 0.6, R.edgeFling);
+
+want('a crate top takes a portal whichever way you face it',
+  R.topFaceFromEveryAngle === 8, R.topFaceFromEveryAngle + '/8');
+want('the underside of a lift takes one too, and it rides',
+  R.bottomFace && R.bottomFace.n === -1 && R.bottomFace.rides, R.bottomFace);
+
+want('a lift closing on your head crouches you first',
+  R.crushVertical && R.crushVertical.crouchedAt !== null, R.crushVertical);
+want('...and then kills you', R.crushVertical && R.crushVertical.died, R.crushVertical);
+want('...credited to the platform', /platform/.test(R.crushFeed || ''), R.crushFeed);
+want('a platform shoves you before it crushes you',
+  R.crushSideways && R.crushSideways.shovedFirst > 0.05, R.crushSideways);
+want('...and crushes you against a wall', R.crushSideways && R.crushSideways.crushed, R.crushSideways);
+
+want('the killfeed names you, not "you"', R.usesMyName, R.deathLine);
 
 want('the arena has moving platforms', R.moverCount >= 4, R.moverCount);
 want('a platform actually moves', R.moverMoved, R.moverMoved);

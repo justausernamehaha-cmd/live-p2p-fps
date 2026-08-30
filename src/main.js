@@ -24,6 +24,9 @@ const EDIT_PROTECTION = 3000;    // ms carried out of the settings panel
 // The one room code that opens the level designer instead of a match. Matched
 // before the code is normalised, so `level design` and `level-design` both work.
 const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
+// Stands in for a killer that is not a player. Peers read it out of the same
+// death message a real kill uses, so the killfeed needs no second channel.
+const CRUSHED_BY = '#platform';
 const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
                   (navigator.maxTouchPoints > 1 && !matchMedia('(pointer:fine)').matches);
 
@@ -198,6 +201,26 @@ class Game {
       showSens();
     });
 
+    // Ctrl+W and its friends belong to the browser and preventDefault() cannot
+    // reach them; only the Keyboard Lock API can, and only in fullscreen. On by
+    // default because closing the tab mid-fight is worse than a fullscreen
+    // window, and a checkbox because that is a real trade and not ours to make
+    // silently.
+    const kblock = document.getElementById('kblock');
+    const kblockVal = document.getElementById('kblockval');
+    const showKblock = () => {
+      kblockVal.textContent = kblock.checked
+        ? (document.fullscreenElement ? 'shortcuts blocked' : 'goes fullscreen')
+        : 'browser keeps them';
+    };
+    kblock.checked = this.input.wantFullscreenLock;
+    showKblock();
+    kblock.addEventListener('change', () => {
+      this.input.setFullscreenLock(kblock.checked);
+      showKblock();
+    });
+    document.addEventListener('fullscreenchange', showKblock);
+
     // F3 shows exactly what the input layer thinks is happening, so a report of
     // "it did something strange" can be answered with numbers
     addEventListener('keydown', e => {
@@ -285,7 +308,13 @@ class Game {
     // is the way back in when it has been.
     document.getElementById('menusettings').onclick = () => {
       if (!this.running) return;
-      this._resume();
+      // Deliberately not _resume(): that asks for the pointer back, and
+      // _startEdit() releases it a millisecond later. The lock can be granted
+      // after the release and the mouse stays captured over a panel that exists
+      // to be clicked. Close the menu by hand and never ask for the pointer.
+      this.menuOpen = false;
+      document.getElementById('designsetup').classList.add('hidden');
+      this.hud.showGame(this.input.hasTouch);
       this._startEdit();
     };
 
@@ -460,13 +489,18 @@ class Game {
       this.deathAt = now();
       this.net.died(fromId);
       const killer = this.remotes.get(fromId);
-      this.hud.feed(`<b>${escapeHtml(killer ? killer.name : 'someone')}</b> ▸ you`);
+      // your own name, not "you": the killfeed reads the same on every screen,
+      // and yours is the one line on it you might want to screenshot
+      this.hud.feed(`<b>${escapeHtml(killer ? killer.name : 'someone')}</b> ▸ ` +
+                    `<b>${escapeHtml(this.name)}</b>`);
     }
   }
 
   _someoneDied(victimId, m) {
     const victim = this.remotes.get(victimId);
-    const killerName = m.by === getSelfId() ? this.name : (this.remotes.get(m.by)?.name || 'someone');
+    const killerName = m.by === CRUSHED_BY ? 'platform'
+      : m.by === getSelfId() ? this.name
+      : (this.remotes.get(m.by)?.name || 'someone');
     if (m.by === getSelfId()) {
       this.player.kills++;
       this.audio.kill();
@@ -576,6 +610,8 @@ class Game {
     if (this.editing || this.menuOpen || !this.running) return;
     this.editing = true;
     this.input.editMode = true;
+    // the panel is there to be clicked: nothing may quietly take the mouse back
+    this.input.suspendLock = true;
     this.input.held.clear();
     const touch = document.body.classList.contains('touch-ui');
     document.getElementById('edittitle').textContent = touch ? 'Layout & settings' : 'Settings';
@@ -590,6 +626,7 @@ class Game {
     if (!this.editing) return;
     this.editing = false;
     this.input.editMode = false;
+    this.input.suspendLock = false;
     this.layout.exit();
     // protection does not vanish the instant the panel closes, but it does not
     // linger either: three seconds to get to cover, and the gun is dead for
@@ -770,6 +807,11 @@ class Game {
     // hitscan all have to agree on. Platforms are parked while the designer's
     // ghost is flying — a box that wanders off mid-edit cannot be built with.
     if (this.running && !this.design?.ghost) this.world.updateMovers(dt);
+    // Portals stuck to platforms ride them here, in the same breath — not after
+    // the player has moved. A frame of lag between a platform and the mouth on
+    // it sweeps the mouth's plane back and forth across whoever is near it, and
+    // a portal under a lift would throw them across the map at random.
+    this.portals.update(dt, this.world);
 
     // remote players are advanced first so their hitboxes match the pixels
     for (const r of this.remotes.values()) r.update(dt);
@@ -777,7 +819,6 @@ class Game {
     if (this.running) this._tick(t, dt);
 
     this.effects.update(dt);
-    this.portals.update(dt, this.world);
     this.hud.update(dt);
 
     const r = this.renderer;
@@ -829,6 +870,18 @@ class Game {
     this.hud.ads(this.adsT > 0.5);
 
     p.update(dt, input);
+    // A platform closed on the player. Death is dealt here rather than in the
+    // movement code, because dying is the game's business and not the body's.
+    if (p.squashed) {
+      p.squashed = false;
+      if (p.alive && !this.shielded && p.damage(1000)) {
+        this.audio.death();
+        this.deathAt = now();
+        this.hud.setHealth(0);
+        this.net?.died(CRUSHED_BY);
+        this.hud.feed(`<b>platform</b> ▸ <b>${escapeHtml(this.name)}</b>`);
+      }
+    }
     if (this.loadout.update(t)) this.audio.reload();
 
     // camera and viewmodel first: the shot is traced from where they actually
