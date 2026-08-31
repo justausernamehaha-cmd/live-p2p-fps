@@ -140,11 +140,13 @@ export class Net {
   }
 
   /** A portal ball, so the shot is visible on every screen. */
-  portalBall(from, dir, side) {
+  /** `u` is which way was up for whoever fired it: the mouth stands the way they
+   *  were standing, and a peer re-deriving the landing has to know that. */
+  portalBall(from, dir, side, up) {
     this._send(this.aPortalBall, {
       x: round2(from.x), y: round2(from.y), z: round2(from.z),
       dx: round2(dir.x), dy: round2(dir.y), dz: round2(dir.z),
-      s: side
+      s: side, u: upIndex(up || { x: 0, y: 1, z: 0 })
     });
   }
 

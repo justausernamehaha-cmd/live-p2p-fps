@@ -12,7 +12,7 @@ import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
 import { portalMap } from './portal.js';
-import { lookFrom, anglesIn, basisFor } from './frame.js';
+import { lookFrom, anglesIn, basisFor, upIndex, upFromIndex } from './frame.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
@@ -106,7 +106,13 @@ class Game {
     // beyond any sightline that matters or it hides players you should be able to see
     this.scene.fog = new THREE.Fog(0x1b2433, 150, 380);
 
-    this.camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.05, 700);
+    // Near plane at 15 mm rather than 50. A body standing in a mouth is astride the
+    // surface, and at the rim its eye can be a centimetre or two from the wall
+    // beside the hole — at 50 mm that wall was clipped away and you could see
+    // straight through it, which is "stand on the edge of a portal and you can see
+    // through the wall under it". Far comes in to 400 to pay for the depth
+    // precision; the arena is 120 m across, so nothing is lost.
+    this.camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.015, 400);
     this.scene.add(this.camera);
 
     this.scene.add(new THREE.HemisphereLight(0xc8ddf5, 0x38414f, 1.9));
@@ -156,22 +162,13 @@ class Game {
       this.input.mouseSeen = true;   // it was clicked with something
       this.input.requestLock(true);
     });
-    // ...and so does a click anywhere else on the page while the match is up and
-    // no panel is open. The canvas has always taken one; the HUD, the killfeed
-    // and the ammo counter sit on top of it, and a click that landed on one of
-    // those used to do nothing at all.
-    addEventListener('pointerdown', e => {
-      if (e.pointerType === 'touch' || e.button !== 0) return;
-      if (!this.running || this.menuOpen || this.editing || this.hud.chatOpen) return;
-      // Never ask for a lock that is already held. Every request that engages
-      // emits one settling move — the jump from wherever the cursor sat to the
-      // locked origin — and a re-lock per click is tens of degrees of view per
-      // click. See test/pointerlock.mjs.
-      if (document.pointerLockElement) return;
-      if (e.target.closest('#menu, #editpanel, #designsetup, #designhud, #joining, #chatform, #fsbtn')) return;
-      this.input.mouseSeen = true;
-      this.input.requestLock();
-    }, true);
+    // Deliberately not "a click anywhere". The canvas already lies under the
+    // whole page and takes one; everything drawn over it — the touch buttons,
+    // the fullscreen button, the panels — is drawn over it in order to be
+    // clicked, and taking the pointer out from under one of those makes it
+    // impossible to use. What was actually in the way of capturing the mouse
+    // was LEAVE THE ROOM parking the lock and never un-parking it, and a
+    // refusal the player could not see waiting out; both are fixed above.
     this._resize();
   }
 
@@ -598,7 +595,8 @@ class Game {
       onChat: (id, m) => this._chatIn(id, m),
       onPortalBall: (id, m) => this.portals.fire(
         id, { x: num(m.x), y: num(m.y), z: num(m.z) },
-        { x: num(m.dx), y: num(m.dy), z: num(m.dz) }, m.s === 'b' ? 'b' : 'a', true),
+        { x: num(m.dx), y: num(m.dy), z: num(m.dz) }, m.s === 'b' ? 'b' : 'a', true,
+        upFromIndex(num(m.u, 2))),
       onPortal: (id, m) => this._remotePortal(id, m),
       onPing: (id, rtt) => { const r = this.remotes.get(id); if (r) r.ping = rtt; },
       // somebody new wants to know what level this room is playing
@@ -1009,12 +1007,12 @@ class Game {
       if (!w) continue;
       const eye = p.eye(p.bob);
       const dir = this._aimDirection();
-      this.portals.fire(this.portals.selfId, eye, dir, side);
+      this.portals.fire(this.portals.selfId, eye, dir, side, false, this.player.up);
       this.effects.muzzle(w.shakeScale);
       this.viewmodel.fire(w.shakeScale);
       this.audio.shot(0, 0);
       p.addRecoil(w.recoil, 0);
-      this.net?.portalBall(eye, dir, side);
+      this.net?.portalBall(eye, dir, side, this.player.up);
       return;                      // one portal a frame, whatever is held
     }
   }

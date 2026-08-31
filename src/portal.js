@@ -97,10 +97,18 @@ export function faceOf(hit) {
  *  portal on a wall stands up, and one on the floor or the ceiling is turned to
  *  face the way the shooter was looking, so walking in feels like walking in
  *  rather than like being spun. */
-export function frameFor(n, look) {
-  const up = v3(0, 1, 0);
+export function frameFor(n, look, playerUp = null) {
+  // The oval is two metres tall and 1.36 across, so its long axis is the one
+  // that decides whether a portal reads as a doorway or as a letterbox — and it
+  // has to be the *shooter's* vertical, not the world's. Gravity follows a body
+  // through a mouth, so somebody standing on a wall has an up of their own, and
+  // a portal laid out along the world's y is lying on its side as far as they
+  // are concerned. Their up, flattened into the face, is the long axis.
+  const up = playerUp && Math.abs(dot(playerUp, n)) < 0.9
+    ? norm3(sub3(playerUp, scale3(n, dot(playerUp, n))))
+    : v3(0, 1, 0);
   let u;
-  if (Math.abs(n.y) > 0.9) {
+  if (Math.abs(dot(up, n)) > 0.9) {
     // Floor or ceiling. Turned to face roughly the way the shooter was looking,
     // but *snapped to the nearest world axis* rather than following the look
     // exactly. A portal is 1.36 by 2, and the top of a crate is 2 by 2: laid
@@ -139,9 +147,9 @@ export function frameFor(n, look) {
  *  The oval is inscribed in that box rather than fitted itself, so the fit is a
  *  little conservative at a slanted corner — erring toward refusing a portal that
  *  would poke over an edge, which is the right way to be wrong. */
-export function fitPortal(face, point, look) {
+export function fitPortal(face, point, look, playerUp = null) {
   if (!face || face.verts.length < 3) return null;
-  const { u, v, n } = frameFor(face.n, look);
+  const { u, v, n } = frameFor(face.n, look, playerUp);
   const origin = face.verts[0];
   const to2 = p => {
     const d = sub3(p, origin);

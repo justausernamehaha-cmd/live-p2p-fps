@@ -553,14 +553,31 @@ export class Player {
       if ((up > 0 ? s.max[k] - this.pos[k] : this.pos[k] - s.min[k]) <= STEP_HEIGHT + 0.05) continue;
       if (!s.min || !aabbOverlap(this.aabb(), s)) continue;
 
-      // Shoved along the way it is going, not out by the shortest route. A
-      // platform bearing down on you does not politely lift you over itself; it
-      // pushes you ahead of it, and whether that is survivable is a question
-      // about what is behind you.
+      // Being run down, as against being brushed past.
+      //
+      // A platform bearing down on you does not politely lift you over itself;
+      // it pushes you ahead of it, and whether that is survivable is a question
+      // about what is behind you. But it has to actually be bearing down on you:
+      //
+      //   * you have to be on the side it is coming from. This used to put the
+      //     player against whichever face the platform's *velocity* pointed at,
+      //     wherever they stood, so standing behind one that was running away
+      //     snapped you across to its far face;
+      //   * and its own path has to be the shorter way out of it. Jump beside a
+      //     shuttle and you clip its long side by a centimetre or two; shoving
+      //     you along its length for that put you four metres down the thing,
+      //     every frame, which is "I get stuck on the edge of it". A brush is
+      //     just an overlap, and ordinary collision undoes it the short way.
       const j = Math.abs(m.vel[KA]) >= Math.abs(m.vel[KB]) ? KA : KB;
-      const forward = m.vel[j] >= 0;
+      const o = j === KA ? KB : KA;
+      const box = this.aabb();
+      const depthJ = Math.min(box.max[j] - s.min[j], s.max[j] - box.min[j]);
+      const depthO = Math.min(box.max[o] - s.min[o], s.max[o] - box.min[o]);
+      const mid = (s.min[j] + s.max[j]) / 2;
+      const mySide = this.pos[j] >= mid ? 1 : -1;
+      if (m.vel[j] * mySide <= 0 || depthJ > depthO) continue;
       const wasAt = { ...this.pos };
-      this.pos[j] = forward ? s.max[j] + RADIUS + SKIN : s.min[j] - RADIUS - SKIN;
+      this.pos[j] = mySide > 0 ? s.max[j] + RADIUS + SKIN : s.min[j] - RADIUS - SKIN;
       this.beingCrushed = true;
       if (this._overlapsStatic()) {
         this.pos = wasAt;          // nowhere to be shoved to
@@ -1136,7 +1153,28 @@ export class Player {
     this.straddling = this._findStraddle(this.portals.links());
     // Anything else it landed in, though, is a real overlap: resolve it along
     // the shallowest axis rather than letting _axis() eject across a whole box.
-    if (this._overlaps(this._boxes())) this._unstick(to.n);
+    //
+    // A mouth can have something standing right in front of it — a crate, the
+    // corner of a wall — and the transform has no idea. Walk into the other one
+    // heading at that part of the oval and the body arrives inside the crate.
+    // Out the short way first, then straight out along the way the mouth faces,
+    // and if there is genuinely nowhere in front of it to be, back to a spawn:
+    // being put somewhere else is a great deal better than being put outside.
+    if (this._overlaps(this._boxes()) && !this._unstick(to.n, 12)) {
+      const from = { ...this.pos };
+      let clear = false;
+      for (let i = 1; i <= 30 && !clear; i++) {
+        this.pos.x = from.x + to.n.x * i * 0.1;
+        this.pos.y = from.y + to.n.y * i * 0.1;
+        this.pos.z = from.z + to.n.z * i * 0.1;
+        clear = !this._overlaps(this._boxes());
+      }
+      if (!clear) {
+        this.pos = from;
+        this._lostFor = 99;          // the failsafe takes it from here
+        this._wasInside = true;
+      }
+    }
   }
 
   /** Shortest way out of everything the player is currently inside.

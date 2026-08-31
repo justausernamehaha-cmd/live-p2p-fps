@@ -29,24 +29,26 @@ export const WEAPONS = [
     damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150, killAward: 30,
     spread: 0, hipSpread: 0.09, recoil: 0.013, recoilYaw: 0.004,
     reloadTime: 2.0, range: 140, color: 0xffd08a, shakeScale: 1,
-    // What the *body* is holding, seen from outside. Length and thickness only —
-    // enough to tell a stubby shotgun from a long rifle at range. Used for a
-    // peer's body and for your own, which is the point: see `makeBody`.
-    hold: { len: 0.6, thick: 0.1, tint: 0x232936 }
+    // What the *body* is holding, seen from outside. The same shape the
+    // viewmodel is, at a distance: a receiver, a barrel, a magazine and a
+    // stock, sized per weapon so a stubby shotgun and a long marksman rifle
+    // read differently across the map. Used for a peer's body and for your
+    // own, which is the point — see `makeBody` in remote.js.
+    hold: { barrel: 0.42, bore: 0.05, body: 0.5, tint: 0x2f3644, accent: 0xd9743b }
   },
   {
     id: 1, name: 'Shotgun', auto: false,
     damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42, killAward: 6,
     spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // pattern stays even aimed
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2,
-    hold: { len: 0.42, thick: 0.13, tint: 0x33261e }
+    hold: { barrel: 0.3, bore: 0.085, body: 0.42, tint: 0x3a2a1e, accent: 0xffb066 }
   },
   {
     id: 2, name: 'Marksman', auto: false,
     damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30, killAward: 5,
     spread: 0, hipSpread: 0.12, recoil: 0.09, recoilYaw: 0.01,
     reloadTime: 3.0, range: 250, color: 0x8fd8ff, shakeScale: 2.8,
-    hold: { len: 0.86, thick: 0.08, tint: 0x1d2634 }
+    hold: { barrel: 0.72, bore: 0.045, body: 0.5, tint: 0x1d2634, accent: 0x8fd8ff, scope: true }
   },
   {
     // The portal gun. Same rifle in the hand, and that is deliberate — only the
@@ -61,7 +63,7 @@ export const WEAPONS = [
     noAds: true,       // right click is the second trigger, not the sights
     infinite: true,    // no magazine, nothing to reload
     portal: true,
-    hold: { len: 0.6, thick: 0.12, tint: 0x2a3d52 }
+    hold: { barrel: 0.4, bore: 0.075, body: 0.46, tint: 0x2a3d52, accent: 0x7fd4ff, prongs: true }
   }
 ];
 

@@ -179,8 +179,8 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'ramp');
 await page.fill('#roominput', 'level design');
 await page.evaluate(() => document.getElementById('playbtn').click());
-await page.waitForFunction(() => window.game.running, { timeout: 30000 });
-await page.waitForTimeout(500);
+// the designer is a room code, not a match: nothing ever starts running
+await page.waitForSelector('#designsetup:not(.hidden)', { timeout: 30000 });
 await page.fill('#dw', '40'); await page.fill('#dl', '40'); await page.fill('#dh', '14');
 await page.click('#dstart');
 await page.waitForTimeout(600);

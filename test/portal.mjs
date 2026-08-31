@@ -273,6 +273,35 @@ function fnv(str) {
   return h >>> 0;
 }
 
+// ------------------------------------- the long axis follows the shooter
+// The oval is two metres tall and 1.36 across. Which way "tall" points is the
+// shooter's own vertical, not the world's: gravity follows a body through a
+// mouth, so somebody standing on a wall has an up of their own and a portal laid
+// out along the world's y is on its side as far as they are concerned.
+{
+  const wall = { x: -1, y: 0, z: 0 };            // a face looking along -x
+  const look = { x: -1, y: -0.2, z: 0.1 };
+  const upright = frameFor(wall, look, { x: 0, y: 1, z: 0 });
+  t('an upright player gets a vertical long axis', Math.abs(upright.v.y) > 0.99, JSON.stringify(upright.v));
+  // standing on the floor of the room but turned onto the +z wall: up is +z
+  const onZ = frameFor(wall, look, { x: 0, y: 0, z: 1 });
+  t('...and a player standing on a wall gets theirs', Math.abs(onZ.v.z) > 0.99, JSON.stringify(onZ.v));
+  t('...with the short axis across it', Math.abs(onZ.u.y) > 0.99, JSON.stringify(onZ.u));
+  // u, v, n stay a right-handed orthonormal frame whatever the up
+  for (const f of [upright, onZ]) {
+    const d = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+    t('the mouth frame stays orthonormal',
+      Math.abs(d(f.u, f.v)) < 1e-9 && Math.abs(d(f.u, f.n)) < 1e-9 && Math.abs(d(f.v, f.n)) < 1e-9,
+      [d(f.u, f.v), d(f.u, f.n), d(f.v, f.n)].join(' '));
+  }
+  // an up along the face normal has no projection into the face: fall back to
+  // the look direction, snapped, exactly as a floor mouth always has
+  const degenerate = frameFor(wall, look, { x: -1, y: 0, z: 0 });
+  t('an up along the normal falls back rather than collapsing',
+    Math.abs(degenerate.u.x) < 1e-9 && Math.abs(degenerate.v.x) < 1e-9,
+    JSON.stringify(degenerate));
+}
+
 console.log(ok.length + ' ok');
 if (bad.length) { console.log('FAILED:'); bad.forEach(b => console.log('  ' + b)); process.exit(1); }
 console.log('portal.js OK');

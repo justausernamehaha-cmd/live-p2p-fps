@@ -132,7 +132,7 @@ export class PortalField {
    *  `ghost` is a peer's ball, which is there to be watched and nothing else —
    *  where their portal ended up is their machine's business and arrives as its
    *  own message. Letting two machines both decide would let them disagree. */
-  fire(owner, origin, dir, side, ghost = false) {
+  fire(owner, origin, dir, side, ghost = false, up = null) {
     const color = this.colorFor(owner, side);
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_R, 12, 8),
@@ -150,6 +150,9 @@ export class PortalField {
       owner, side, mesh, color, ghost,
       pos: { x: origin.x, y: origin.y, z: origin.z },
       dir: { x: dir.x, y: dir.y, z: dir.z },
+      // which way was up for whoever fired it, so the mouth stands the way they
+      // were standing rather than the way the world is
+      up: up ? { x: up.x, y: up.y, z: up.z } : null,
       travelled: 0
     });
   }
@@ -202,7 +205,7 @@ export class PortalField {
   _land(ball, hit) {
     if (ball.ghost) { this.effects?.impact(hit.point, ball.dir); return; }
     const face = faceOf(hit);
-    const fitted = face && fitPortal(face, hit.point, ball.dir);
+    const fitted = face && fitPortal(face, hit.point, ball.dir, ball.up);
     // No mouth may be laid over any other, whoever it belongs to — not the
     // shooter's own partner, and not somebody else's. The one it is replacing
     // does not count: that piece of wall is about to be free again.

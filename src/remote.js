@@ -61,10 +61,10 @@ export function makeBody(colorHex) {
   body.position.y = 0.72;
   const head = new THREE.Mesh(new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H), headMat);
   head.position.y = 1.62;
-  // the weapon in their hands, as a shape rather than a stub: a stubby shotgun
-  // and a long marksman rifle read differently across the map
-  const gunMat = new THREE.MeshLambertMaterial({ color: 0x232936 });
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), gunMat);
+  // the weapon in their hands. Built as a shape rather than as the black rod it
+  // used to be: what a peer is carrying is worth reading at a distance, and it
+  // is the same silhouette the viewmodel has, seen from outside.
+  const gun = new THREE.Group();
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.45, 16),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false })
@@ -72,7 +72,38 @@ export function makeBody(colorHex) {
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.02;
   group.add(body, head, gun, shadow);
-  return { group, mat, headMat, gunMat, body, head, gun, shadow, color, weapon: -1 };
+  return { group, mat, headMat, body, head, gun, shadow, color, weapon: -1 };
+}
+
+/** The gun a body is holding, as a handful of boxes: receiver, barrel, magazine,
+ *  stock, and whatever that weapon has instead of iron sights. Rebuilt only when
+ *  the weapon changes, which is rare. */
+function buildGun(group, w) {
+  for (const c of group.children.slice()) {
+    group.remove(c);
+    c.geometry.dispose();
+    c.material.dispose();
+  }
+  const h = w.hold || { barrel: 0.42, bore: 0.05, body: 0.5, tint: 0x2f3644, accent: 0xd9743b };
+  const mk = (bw, bh, bd, color, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd),
+                             new THREE.MeshLambertMaterial({ color }));
+    m.position.set(x, y, z);
+    group.add(m);
+    return m;
+  };
+  mk(0.085, 0.1, h.body, h.tint, 0, 0, -h.body / 2);                      // receiver
+  mk(h.bore, h.bore, h.barrel, 0x1d2230, 0, 0.02, -h.body - h.barrel / 2 + 0.04);
+  mk(0.06, 0.14, 0.07, 0x232936, 0, -0.11, -h.body * 0.35);               // magazine
+  mk(0.06, 0.08, 0.16, 0x232936, 0, -0.02, 0.06);                         // stock
+  if (h.scope) mk(0.04, 0.05, 0.22, 0x11161f, 0, 0.08, -h.body * 0.55);   // glass
+  if (h.prongs) {                                                         // portal gun
+    mk(0.028, 0.028, 0.16, h.accent, -0.05, 0.03, -h.body - h.barrel + 0.1);
+    mk(0.028, 0.028, 0.16, h.accent, 0.05, 0.03, -h.body - h.barrel + 0.1);
+  } else {
+    mk(0.03, 0.03, 0.12, h.accent, 0, 0.065, -h.body * 0.5);              // rail block
+  }
+  group.userData.reach = h.body + h.barrel;
 }
 
 /** Put a body into the stance it is actually in. Height carries the crouch —
@@ -86,13 +117,10 @@ export function poseBody(b, height, pitch, weaponIndex) {
   const w = WEAPONS[weaponIndex] || WEAPONS[0];
   if (b.weapon !== w.id) {
     b.weapon = w.id;
-    const h = w.hold || { len: 0.6, thick: 0.1, tint: 0x232936 };
-    b.gun.geometry.dispose();
-    b.gun.geometry = new THREE.BoxGeometry(h.thick, h.thick, h.len);
-    b.gunMat.color.setHex(h.tint);
-    b.gunLen = h.len;
+    buildGun(b.gun, w);
   }
-  b.gun.position.set(0.22, 1.35 * s, -(b.gunLen || 0.6) * 0.67);
+  // held out in front of the near shoulder, pointing where they are looking
+  b.gun.position.set(0.22, 1.35 * s, -0.12);
   b.gun.rotation.x = -pitch;
 }
 
