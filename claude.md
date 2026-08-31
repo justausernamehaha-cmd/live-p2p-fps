@@ -40,11 +40,16 @@ against the live site.
 | `designer.mjs` | the designer builds a level a *second page* can then stand on |
 | `settings.mjs` | rebinding and stacking keys, latchable actions, the 3s protection window, pause overlay, the portal gun's two touch triggers |
 | `momentum.mjs` | every hop lands and takes off, speed bleeds, a fall is worth speed, a ramp's lip does not rob a chain |
-| `slopes.mjs` | ramps are walkable and solid; every slope is 45°; a corner fillet turns a wall-walker upright |
-| `frame.mjs` | which way is up: the basis, at all six ups, in node |
+| `slopes.mjs` | ramps are walkable and solid; every slope is 45°; a corner never turns anybody over |
+| `frame.mjs` | which way is up: the basis, at all eighteen ups, in node |
 | `solid.mjs` | the convex layer, in node — no browser, no server, about a second |
 | `portal.mjs` | portal fitting, sliding, refusal, the traversal map, colour agreement, platform seeds — also node-only |
-| `portals.mjs` | the same claims proved to the *player*: standing astride a mouth, the hand-over being exact, gravity coming through with the body, riding a platform |
+| `portals.mjs` | the same claims proved to the *player*: standing astride a mouth, the hand-over being exact, gravity coming through with the body, riding a platform, no frame drawn from behind a mouth |
+| `clipping.mjs` | the four hand-reported ways a portal put a body inside a wall or outside the map |
+| `platforms.mjs` | brushing past a platform, standing behind one, and a mouth on the underside of a descending lift |
+| `tilted.mjs` | gravity rotated 45°: a body at 45° lands, walks where its camera looks, falls the way its feet point |
+| `touch.mjs` | a finger that leaves without a release can never take the controls with it |
+| `rooms.mjs` | two real pages: an empty room is made, an existing one is joined behind a shield, and leaving works |
 
 ## Things worth not rediscovering
 
@@ -448,67 +453,174 @@ to be suspended while they do** (`Input.setHoldOverride`): a toggled aim placed 
 mouth on the tap that turned it on and nothing at all on the tap that turned it
 off, so every second tap was dead. Watched go red.
 
-## Asked for, not built yet — 2026-08-30
+## A wall with a hole in it — 2026-08-31
 
-Four things, in the user's own words:
+The four items above are done, and about twenty-five more arrived alongside
+them. The one idea worth keeping is this: **a portal is a hole in a wall, and
+collision has to be given a wall with a hole in it.**
 
-> fix a bug where when i gravity change, i have a chance to clip out of the room
-> and fall infinitely. my gravity should also change when i come out a 45 degrees
-> slope, and same for go in, too, so my gravitational force should be able to
-> rotate 45 degrees. and, make the horizontal platforms high enough for me to
-> barely jump onto it, and make it go further until hitting a wall.
+It used to be given no wall at all — the whole box was taken out of the box list
+for as long as a body was in the mouth. A wall that is entirely absent is not a
+wall with a hole in it, and that one shortcut was four separate ways out of the
+map, all four reported by hand and all four now in `test/clipping.mjs`, red
+before and green after:
 
-**1. Turning over can drop you out of the room.** Reported, not yet reproduced.
-The suspects, in order: the body turns about its feet when `up` changes, so a
-box that was 1.8 m tall along y becomes 1.8 m long along x and can end up inside
-a wall — `_through` only calls `_unstick` when it finds an overlap it did not
-carve, and `_unstick` resolves along the shallowest axis, which at the moment of
-a turn may be *through* the wall rather than back out of it. The second suspect
-is the carve itself: while a body is in a mouth the wall that mouth is cut into
-is not there for it, and if the straddle ends while the body is still inside that
-wall (walking out sideways along it, say) the only thing between the player and
-the outside is `_unstick`. A diagnostic first: log `up`, `straddling`, and the
-box the body is inside on every frame where `pos` leaves the room's bounds.
-Whatever it turns out to be, the failsafe in `_moveStep` — `pos.y < -20` — is
-wrong now: it only catches falling down the world's own y, and a player whose up
-is sideways leaves through a wall, not through the floor.
+* stand in a mouth and walk toward the edge of it. You leave the oval while
+  still inside the wall, the wall comes back, and `_axis()` pushes you clear of
+  the *whole box* — the length of the room;
+* stand **on** a wall (a portal turned you over) with a mouth on that same wall.
+  Gravity is into the wall, it switched off as soon as your feet were near the
+  oval, and you sank through it and out of the room without reaching the hole;
+* stand on the far side of the wall the mouth is on, right behind it, and walk
+  in. A portal is a hole in *one side* of a wall;
+* and a mouth that turns you over standing you inside the exit's wall with
+  nothing to push you out, because the wall was not there to push.
 
-**2. Gravity should rotate 45 degrees too.** This is the big one, and it breaks
-the assumption `src/frame.js` was built on: up is one of the **six world axes**,
-which is exactly what keeps the body's collision box axis-aligned and lets
-`_axis`, the step-up and the platform code work unchanged. Adding the twelve
-45-degree directions (or the twenty-four orientations they imply) means the body
-is no longer an AABB in the world, and every one of those falls over:
+`pierce()` in `portal.js` cuts the oval out in eight horizontal bands, so the
+hole is the shape of the mouth rather than the square it is inscribed in — a
+square hole is passable at its corners, where the picture plainly says wall.
+Each band is cut to the widest the oval gets anywhere within it, so the hole is
+never *narrower* than the mouth: whatever fits through the picture fits through
+the collision. `u` and `v` are world axes on any axis-aligned face (see
+`frameFor`), which is the whole reason bands of axis-aligned boxes can describe
+an oval at all.
 
-- `aabb()` stops being expressible; collision would have to go through
-  `capsulePush` against everything, not just the ramps, and the boxes lose their
-  fast exact path.
-- `_axis()` resolves one *world* axis at a time. In a turned frame the three
-  directions the body cares about are not world axes any more.
-- `snapAxis` becomes snap-to-24, and `northFor` needs a yaw zero for each.
+Around it:
 
-The cheap half of the ask is real though: coming out of a mouth **on** a
-45-degree face, the rigid image of your up *is* 45 degrees, and it is currently
-rounded to the nearer axis. So the honest options are (a) snap to 24
-orientations and accept a large collision rewrite, or (b) keep six and make the
-rounding explicit rather than silent — the fillets exist precisely so a
-45-degree face is a place you can walk, not a place you have to stand at 45
-degrees. Worth asking which they actually want before building either.
+* **`_axis()` can only correct a move by as much as the move was.** Anything
+  deeper is an overlap the move did not cause, and pushing clear of the whole box
+  then throws the body out the far side. Give the move back and leave it to
+  `_unstick()`.
+* **`_unstick()` picks the shortest way out that actually *is* out.** It used to
+  take the shallowest axis of whichever box, blind — and the shallowest way out
+  of one box is very often straight into the next, which on the following pass is
+  shallowest back the way it came. A body across the foot of a wall sat there
+  being shoved back and forth for as long as it lived.
+* **Entry is from the front only.** A mouth is entered while some part of the
+  body is at the front of it; once you are in, you stay in, because a body wholly
+  behind the surface is the ordinary case one step later. Without the first half,
+  standing behind a wall opened it.
+* **The failsafe watches all three axes**, one metre outside the level for a
+  quarter of a second, and puts you on a spawn point. It used to be `pos.y < -20`,
+  which only catches falling down the world's own y — and gravity follows a body
+  through a mouth, so somebody who gets out leaves *sideways*. It only ever
+  fetches back a body that was inside to begin with, so a test parking a player
+  forty metres up is left alone.
 
-**3 & 4. The shuttles.** Raise them until their top is a whisker under a jump —
-`JUMP_SPEED` 8.2 against `GRAVITY` 24 is about 1.4 m of rise, so a top around
-1.3 m — and extend each run until it meets a wall instead of stopping short.
-Both are numbers in `World._build`, but the routes are swept against every static
-box by `test/portals.mjs` for a reason: at head height these two flew over the
-cover walls, and lowering them so they could be boarded drove them straight
-through the same walls. Raising and lengthening them will need that sweep to be
-re-run, and the arena's cover may have to move.
+## The camera is the thing the player is — 2026-08-31
+
+Asked for in those words. Three consequences, all of them real:
+
+* **The crossing is judged on the eye as well as the middle**, whichever reaches
+  the far side of the surface first. A mouth on a ceiling — the underside of a
+  rising lift — is entered head first, and asking the middle of the body to get
+  there means half of you is inside the platform before anything happens. Taking
+  whichever comes first can only ever hand you over earlier, never later; the
+  middle stays because a mouth lying on a slope needs it.
+* **The crossing is asked again when the step ends.** Asked only at the top of a
+  step, the test compares the end of the *last* frame with the end of this one, so
+  a step that ended past the surface was handed over a frame late — and that
+  frame was drawn with the camera already behind the mouth, where the disc is
+  behind the lens and the wall is backface-culled. One frame of the room beyond.
+  That is the flash on the way through, and `test/portals.mjs` counts it: three
+  frames per three crossings before, none after.
+* **The near plane came in from 50 mm to 15 mm.** A body standing in a mouth is
+  astride the surface, and at the rim its eye can be a centimetre from the wall
+  beside the hole — at 50 mm that wall was clipped away and you could see straight
+  through it.
+
+The camera also builds its own basis now instead of using `lookAt`, because
+`lookAt` takes its roll from an up vector it cannot use once the look direction
+is parallel to it — which is why the pitch used to stop a hundredth of a radian
+short of straight up and straight down.
+
+## Gravity that rotates 45 degrees — 2026-08-31
+
+There are eighteen ups: the six world axes, and the twelve that sit at 45° between
+two of them. `snapUp()` rounds a portal's image of your up to the nearest of the
+eighteen; `snapAxis()` is still there for the places that genuinely cannot take a
+tilted answer.
+
+The six keep the fast path **exactly** as it was. That is the whole design:
+
+* the body's box is axis-aligned however it is standing, so collision resolves
+  one world axis at a time, exactly and cheaply;
+* the movement arithmetic is bit-identical, because it is written against two
+  flat *directions* (`flatBasis`) which for an axis up are precisely the two world
+  axes it always used, as unit vectors, in the same order.
+
+A tilted body is not an AABB in any world frame, so `_moveTilted()` collides it
+as the capsule it has always been to the ramps — against the level's boxes too,
+expressed as convex solids on demand by `boxAsSolid()`. `axisKey()` returning
+null is the whole test for "is this body tilted".
+
+Given up honestly, and only when tilted: the stair step-up, and being carried or
+crushed by a moving platform. All three are written in terms of which letter is
+up, and a tilted body has no letter — it is on 45° ground, where there are no
+stairs. `_move()` already sub-steps finely enough that nothing tunnels.
+
+## Rooms are found, not created — 2026-08-31
+
+There is no server, so "does this room already exist" cannot be asked; it can
+only be listened for. CONNECT opens the room and waits:
+
+* nobody there and it is yours — your code, your seed;
+* somebody there and the room already has a level. The seed box is discarded, the
+  room's own seed is asked for over a new pair of messages (`sq`/`sr`), and you
+  arrive behind a three-second shield with the gun locked for the same three.
+
+The scan's clock runs from when the room was **opened**, not from when CONNECT
+was pressed: the pre-join usually opened it while the name was still being typed.
+Every test therefore waits for `game.running` rather than for a fixed number of
+milliseconds — that change alone broke half the suite when the scan went in.
+
+## Things that were reported and are not obvious
+
+* **A phone that goes to the home screen with a thumb down delivers no
+  release.** The thumbstick and the look pad were singleton slots claimed by
+  pointerId and freed only by an event carrying that same id, so one missed
+  release owned the slot forever: the stick froze at whatever it last read and
+  walked the player into a wall, and no later finger could take it. Every touch
+  now lives in one map with four ways of being dropped, the last of which
+  reconciles against `TouchEvent.touches` — the browser's own count of fingers on
+  the glass, which is authoritative and free.
+* **A virtual keyboard shrinks `visualViewport`, and that is not a smaller
+  screen.** Believing it shrank the menu to 300 px while the canvas stayed fixed
+  to the whole viewport, so tapping the room field put the default arena on screen
+  under the panel. The last height measured with nothing focused is kept until the
+  field is let go of.
+* **Turning a wedge over is a half turn about the direction it *runs*.** It was
+  done about the world's y, and the rotations are applied X then Y then Z — so an
+  `rz` of π lands after the aiming turn and mirrors world x as well as y, which
+  reversed exactly the two ceiling fillets that run along x.
+* **A moving platform only shoves you when you are in its path.** It used to put
+  you against whichever face its *velocity* pointed at, wherever you stood: jump
+  beside a shuttle, clip its long side by a centimetre, and it put you four metres
+  down the thing every frame. Now it needs you on the side it is coming from *and*
+  its own path to be the shorter way out of you.
+* **Disposing a body walks its meshes rather than naming them.** The gun became
+  several meshes and `dispose()` still said `this.gun.geometry.dispose()`, which
+  threw halfway through and left LEAVE THE ROOM half done with the HUD still up.
+
+## Still open
+
+* **Shooting the portal you are standing in away.** The improved `_unstick()`
+  should push you out the short way rather than putting you on top of the wall,
+  and the failsafe backstops it, but there is no test for it yet.
+* **A mouth on a ramp is still carved whole.** A convex solid cannot be pierced
+  the way a box can — what is left of a wedge around a hole is not convex — so a
+  ramp carrying a mouth is taken out of collision entirely, gated on the middle of
+  the body being genuinely over the oval. A push-out cannot fling anyone the
+  length of a wall the way `_axis()` could, which is why that gate is the whole of
+  the fix that side needs, but it is not a hole.
 
 ## Ideas, not built
 
 - **Peers seeing edits live.** The designer is deliberately single-player: a
   seed is how a level travels. Sharing edits would need an authority for
-  conflicts, which this game does not have anywhere else either.
+  conflicts, which this game does not have anywhere else either. (Joining a room
+  now takes the room's seed, which is a different thing: it is asked for once, on
+  the way in.)
 - **Curves.** Ramps and free rotation are built — they became convex solids in
   `src/solid.js`, with axis-aligned boxes keeping their own faster exact path.
   Anything round would need a different representation again, and the convex

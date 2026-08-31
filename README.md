@@ -16,7 +16,17 @@ but any static host will do, and there is nothing to run server-side. Dropping
 this folder on GitHub Pages, Netlify, Cloudflare Pages or itch.io is enough to
 play with people who are not on your network.
 
-Everyone who opens the same **room code** ends up in the same match. The
+Everyone who opens the same **room code** ends up in the same match. Pressing
+CONNECT opens that room and listens before it does anything else — there is no
+server to ask whether a room exists, so the only way to find out is to knock:
+
+* **nobody there** — the room is yours. Your code is the code, and whatever is
+  in the `Room seed` box is the level;
+* **somebody there** — the room already has a level, so the seed box is ignored
+  and the room's own seed is fetched from whoever is in it. You drop in behind a
+  three-second shield with the gun locked for the same three seconds.
+
+`LEAVE THE ROOM` in the menu takes you back to this screen. The
 `COPY INVITE LINK` button produces a URL with the room baked into the hash.
 
 One room code is special: type **`level design`** and you get the level designer
@@ -46,7 +56,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Menu | `Esc` | `MENU` |
 | Input debug overlay | `F3` | — |
 | Fullscreen | F11 | button, top right |
-| Settings, key bindings | `` ` `` | `LAYOUT`, or `SETTINGS & KEYS` in the menu |
+| Settings, key bindings | `` ` `` | `LAYOUT`, or `SETTINGS & KEYS` while paused |
 | Rearrange the buttons | — | `LAYOUT`, above the player count |
 
 **Every key can be rebound** from that panel, including **Open settings** and
@@ -174,11 +184,16 @@ colour of your left-click portal and the right one the colour of your right.
 * **It never misses.** Accuracy is 100% standing, running, mid-hop, whatever —
   a portal that lands a foot off is not a near miss, it is the wrong wall.
 * It never runs out and never reloads.
-* The shot is a small ball, not a hitscan ray. You can watch it fly.
+* The shot is a small ball, not a hitscan ray. You can watch it fly — barely.
 
 **One pair each.** Firing a third of the same colour replaces the older one.
+**No two mouths may overlap**, whoever they belong to: a shot that would lay one
+over another explodes instead.
 
-A portal is an oval **two metres tall and 1.36 wide**, and it goes on any surface
+A portal is an oval **two metres tall and 1.36 wide** — and "tall" means tall to
+*you*: its long axis follows whichever way is up for whoever fired it, so
+somebody standing on a wall gets a doorway rather than a letterbox. It goes on
+any surface
 with room for the whole of it — walls, floors, ceilings, ramps, the side of a
 moving platform. **No part of one ever hangs off its surface**: shot too near an
 edge it slides inward until the whole oval is on the wall, and no further than it
@@ -199,10 +214,17 @@ anything goes through a hole — a bit at a time. Walk into one and the wall it 
 cut into stops being solid for you, so you can stop halfway and **stand there,
 half out of one mouth and half out of the other**; everyone else sees both halves
 of you, and so do you if you look at the mouth you are hanging out of. The moment
-the middle of you passes the surface the whole body is re-expressed on the far
-side — position, speed, view, and which way is up — so nothing on screen moves at
-all. Half of you through is the rule, which is also what makes a mouth lying on a
-ramp work: standing in one takes you through it.
+your **camera** passes the surface — or the middle of you does, whichever gets
+there first — the whole body is re-expressed on the far side: position, speed,
+view, and which way is up, so nothing on screen moves at all. The camera is what
+you are, which is why it is the one that decides; the middle is still asked as
+well, because a mouth lying on a ramp needs it.
+
+And the wall a mouth is cut into keeps every bit of itself that is not the
+mouth. Walk sideways out of a hole and the wall is there; stand on a wall and
+walk at a mouth cut into it and the wall is there until you are over the hole;
+stand *behind* a wall and a mouth on its far side is not a door for you. If you
+do not fit through the oval you do not go through it.
 
 Because it is a hole rather than a magnet, sliding along a wall *past* a mouth
 does not pull you in. You have to walk into it.
@@ -214,11 +236,20 @@ that wall with the room on its side. The horizon rolls over rather than snapping
 you over — so getting back upright means shooting your way back, which is the
 point of it.
 
+Gravity can point at **45 degrees**, not only along an axis. Every slope in the
+game is 45 degrees, so a mouth on one turns you by 45 degrees, and that is the
+answer you get rather than a guess at whichever axis was nearer. There are
+eighteen directions up can be: the six axes and the twelve diagonals between
+them. Standing at 45 degrees you still land, still walk where you are looking,
+and still fall the way your feet point — a tilted body is collided as the capsule
+it is rather than as a box that no longer fits it. What a tilted body does not
+get: the stair step-up, and being carried or crushed by a moving platform.
+
 Every inside corner of the room, floor and ceiling alike, carries a **45-degree
-fillet**. They are there because for somebody standing on a wall the corner would
-otherwise be a sheer face with nothing walkable between the wall and the floor —
-and because a portal goes on one perfectly well. Every slope in the arena is 45
-degrees, the centre stairs included.
+fillet**, sitting flush against both surfaces it joins. They are there because
+for somebody standing on a wall the corner would otherwise be a sheer face with
+nothing walkable between the wall and the floor — and because a portal goes on
+one perfectly well.
 
 The arena and every designed room are **closed boxes** — floor, four walls and a
 ceiling — so however your gravity is pointing there is always something to land
@@ -261,6 +292,20 @@ Four of them in the arena: two lifts and two shuttles. They travel between two
 points at a constant speed and turn round at each end, for ever. Stand on one and
 it carries you; step off and you keep only what you were doing yourself. A portal
 put on one **rides along with it**, mouth and all.
+
+The two lifts are plates you step onto. The two shuttles are **blocks**: 1.3 m
+from the floor to the top, which is a whisker under a jump (a jump is worth 1.40
+m of rise, and a step is only 0.55), so you have to jump onto one and a jump just
+makes it. Solid all the way down, so there is no crawlspace under one to be
+caught in — and walking into the side of one is walking into 1.3 m of moving
+wall, which shoves you along ahead of it and kills you if there is something
+solid behind you. They run the whole length of the room, wall to wall.
+
+A platform only shoves you when it is genuinely running you down: you have to be
+on the side it is coming from, and its own path has to be the shorter way out of
+you. Brushing a shuttle's long side as you jump past is a bump, not a shove. And
+a lift carrying you up into a ceiling crushes you exactly as one coming down on
+your head does — a shrinking gap is a shrinking gap.
 
 In the level designer, select an object and press **`T`**: where it is now
 becomes the start of its run and the white marker three metres in front of you
@@ -382,9 +427,20 @@ Driven in headless Chromium, two peers at once, over the real public relays:
   gone behind the near one, to a millionth of a metre, at the same speed;
 * going up through a mouth in a ceiling and out of one on a wall, and then
   accelerating **into that wall** rather than downward;
-* a wall-walker able to stand on a corner fillet and **not** be turned over by
-  it, and the same corner walked into the right way up leaving them alone;
-* a mouth on a 45-degree ramp, stood in and gone through;
+* a wall-walker reaching a corner and **not** being turned over by it, and the
+  same corner walked into the right way up leaving them alone;
+* a mouth on a 45-degree ramp, stood in and gone through — and coming out of one
+  standing at 45 degrees, where the body still lands, walks where its camera
+  looks, and falls the way its feet point;
+* the four hand-reported ways a portal used to put a body inside a wall or
+  outside the map, each of them red before the fix and green after;
+* the single frame of the room that used to flash on the way through a mouth —
+  counted rather than looked at: three frames per three crossings before, none
+  after;
+* a finger that leaves the glass without a release, four different ways, never
+  taking the thumbstick or the look pad with it;
+* two real pages making a room and joining it: the joiner's own seed discarded,
+  the room's level taken, the shield honoured, and leaving and rejoining;
 * a lift with a mouth on its underside coming down on somebody, who goes
   through it rather than being crushed — against the same lift with no portal,
   which kills them;
@@ -436,9 +492,9 @@ and a long one from the same standing start.
 
 `test/frame.mjs`, `test/solid.mjs` and `test/portal.mjs` need neither a browser
 nor a server, so they run in about a second each and are worth running first.
-`test/frame.mjs` is which way is up: it asserts the movement basis at all six
-gravity directions against the closed form the camera has always used, rather
-than against itself. `test/portal.mjs` is where the portal arithmetic is proved — that a mouth
+`test/frame.mjs` is which way is up: it asserts the movement basis at all
+eighteen gravity directions against the closed form the camera has always used,
+rather than against itself. `test/portal.mjs` is where the portal arithmetic is proved — that a mouth
 only goes where the whole of it fits, that a near miss *slides* to the nearest
 place it does, that going through one keeps every bit of the momentum that went
 in, and that the colour agreement reaches the same answer on every machine
