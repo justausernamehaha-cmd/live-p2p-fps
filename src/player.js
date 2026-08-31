@@ -202,6 +202,8 @@ export class Player {
     this.straddling = null;
     this._inMouth = null;
     this._wasAt = new Map();
+    this._wasInside = false;   // wherever you are put down, that is your starting point
+    this._lostFor = 0;
     this.height = HEIGHT;
     this.crouching = false;
     this.crouchT = 0;
@@ -724,6 +726,17 @@ export class Player {
     // never be carried into the next one and compound.
     if (this._overlaps(this._boxes())) this._unstick();
 
+    // ...and ask about the crossing again, now the step is finished.
+    //
+    // Asked only at the top of the step, the test compares where the body was at
+    // the end of the *last* frame with where it is at the end of this one — so a
+    // step that ends past the surface is handed over one frame later, and that
+    // frame is drawn with the camera already behind the mouth. Behind the mouth
+    // the disc is behind the lens and the wall it is cut into is backface-culled,
+    // so what you get is a single frame of the room on the other side of the
+    // wall. That is the flash on the way through a portal.
+    if (this._tryPortal(0)) return;
+
     this._failsafe(dt);
   }
 
@@ -742,13 +755,18 @@ export class Player {
   _failsafe(dt = 0) {
     const b = this.world.bounds;
     if (!b) return;
-    const M = 25;
-    const lost = this.pos.x < b.min.x - M || this.pos.x > b.max.x + M ||
-                 this.pos.z < b.min.z - M || this.pos.z > b.max.z + M ||
-                 this.pos.y < b.min.y - M;
-    if (!lost) { this._lostFor = 0; return; }
+    const M = 1;
+    const inside = this.pos.x > b.min.x - M && this.pos.x < b.max.x + M &&
+                   this.pos.y > b.min.y - M && this.pos.y < b.max.y + M &&
+                   this.pos.z > b.min.z - M && this.pos.z < b.max.z + M;
+    if (inside) { this._wasInside = true; this._lostFor = 0; return; }
+    // Only somebody who *got* out is fetched back. A body that has never been
+    // inside this level is being put somewhere on purpose — a test measuring a
+    // forty metre drop, a spawn arriving from above — and hauling it back would
+    // be the failsafe deciding where the game may happen.
+    if (!this._wasInside) return;
     this._lostFor = (this._lostFor || 0) + Math.max(dt, 1 / 120);
-    if (this._lostFor < 1.5) return;
+    if (this._lostFor < 0.25) return;
     this._lostFor = 0;
     const p = this.world.randomSpawn();
     this.pos = { x: p.x, y: p.y, z: p.z };
@@ -760,6 +778,7 @@ export class Player {
     this._wasAt = new Map();
     this.onGround = false;
     this.escapes++;
+    this._wasInside = false;
     this.spawnSeq++;      // peers must not interpolate across the recovery
   }
 

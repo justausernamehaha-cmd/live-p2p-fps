@@ -481,8 +481,27 @@ export class World {
     return mesh;
   }
 
+  /** A place to be put down. A spawn point where there is one — and where a
+   *  level has somehow left none, any clear spot inside its own walls, because
+   *  the caller is often the failsafe fetching somebody back from outside the
+   *  map and "there is nowhere to put you" is not an answer it can use. */
   randomSpawn() {
-    return { ...this.spawns[(Math.random() * this.spawns.length) | 0] };
+    if (this.spawns.length) {
+      return { ...this.spawns[(Math.random() * this.spawns.length) | 0] };
+    }
+    const b = this.bounds;
+    if (!b) return { x: 0, y: 2, z: 0 };
+    for (let i = 0; i < 60; i++) {
+      const p = {
+        x: b.min.x + Math.random() * (b.max.x - b.min.x),
+        y: b.min.y + Math.random() * (b.max.y - b.min.y),
+        z: b.min.z + Math.random() * (b.max.z - b.min.z)
+      };
+      const box = { min: { x: p.x - 0.2, y: p.y, z: p.z - 0.2 },
+                    max: { x: p.x + 0.2, y: p.y + 1.8, z: p.z + 0.2 } };
+      if (!this.boxes.some(q => aabbOverlap(box, q))) return p;
+    }
+    return { x: (b.min.x + b.max.x) / 2, y: b.max.y, z: (b.min.z + b.max.z) / 2 };
   }
 
   /** Distance along `dir` to the nearest box, or Infinity. */

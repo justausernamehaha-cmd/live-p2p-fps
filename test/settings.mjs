@@ -27,6 +27,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'set');
 await page.fill('#roominput', 'set-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1300);
 
 const R = {};
@@ -128,6 +129,7 @@ R.survivedReload = await page.evaluate(() => window.game.input.binds.KeyO);
 await page.fill('#nameinput', 'set');
 await page.fill('#roominput', 'set2-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1300);
 
 // ------------------------------------- Open settings is itself a binding now

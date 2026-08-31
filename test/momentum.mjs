@@ -25,6 +25,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'mo');
 await page.fill('#roominput', 'mo-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1500);
 
 // Every trial runs on a bare floor: the arena's crates and stairs would deflect

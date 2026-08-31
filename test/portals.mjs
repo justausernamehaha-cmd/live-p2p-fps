@@ -26,6 +26,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'portal');
 await page.fill('#roominput', 'solo-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1500);
 
 const R = await page.evaluate(async () => {
@@ -427,6 +428,68 @@ const R = await page.evaluate(async () => {
     keys();
     g.player._through = realThrough;
     out.continuity = cont;
+  }
+
+  // --------------------------- no frame is ever drawn from behind a mouth
+  // "My eyes get flashed one frame of the scene before going through the portal."
+  //
+  // Behind a mouth the disc is behind the lens and the wall it is cut into is
+  // backface-culled, so a frame drawn from there is a frame of whatever is on
+  // the far side of that wall. It happened because the crossing was only asked
+  // at the *top* of a step: the test compared the end of the last frame with the
+  // end of this one, so a step that ended past the surface was handed over a
+  // frame late, and that frame got drawn.
+  //
+  // The invariant is exact and needs no pixels: when a frame ends, the eye is
+  // never behind a mouth's plane and inside its oval. Watched inside the physics
+  // rather than sampled on the wall clock, so no frame is missed.
+  // On the mid-field cover walls, which stand on flat floor: a mouth at the foot
+  // of a room wall is behind that wall's corner fillet, and you ride up the
+  // fillet instead of reaching it.
+  const coverZ = g.world.boxes.find(b => b.mover === undefined && b.min.y === 0 &&
+    Math.abs(b.max.y - 2.4) < 1e-6 && b.max.x - b.min.x > 20 && b.max.z - b.min.z < 1.5 && b.min.z > 40);
+  const coverX = g.world.boxes.find(b => b.mover === undefined && b.min.y === 0 &&
+    Math.abs(b.max.y - 2.4) < 1e-6 && b.max.z - b.min.z > 20 && b.max.x - b.min.x < 1.5 && b.min.x > 40);
+  g.portals.clear();
+  g.portals.place('me', 'a', { c: { x: 0, y: 1.0, z: coverZ.min.z }, n: { x: 0, y: 0, z: -1 },
+    u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  g.portals.place('me', 'b', { c: { x: coverX.min.x, y: 1.0, z: 0 }, n: { x: -1, y: 0, z: 0 },
+    u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
+  await sleep(400);
+  {
+    let behind = 0, frames = 0, crossings = 0;
+    const realUpdate = g.player.update.bind(g.player);
+    g.player.update = function (dt, input) {
+      const before = this.portalCount;
+      realUpdate(dt, input);
+      crossings += this.portalCount - before;
+      frames++;
+      const eye = this.eye();      // exactly what the camera is given
+      for (const link of (this.portals?.links() || [])) {
+        const p = link.from;
+        const dx = eye.x - p.c.x, dy = eye.y - p.c.y, dz = eye.z - p.c.z;
+        const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
+        if (d >= -1e-4) continue;                        // in front: fine
+        const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / 0.68;
+        const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / 1.0;
+        if (su * su + sv * sv <= 1) behind++;            // behind, and in the hole
+      }
+    };
+    // walk at it from a few metres out, several times, so the step lands in
+    // different places relative to the surface
+    for (let i = 0; i < 3; i++) {
+      park(0, 0.05, coverZ.min.z - 4 - i * 0.13, Math.PI);   // yaw pi walks along +z, at its front face
+      keys();
+      await sleep(120);
+      keys('fwd');
+      await sleep(1100);
+      keys();
+      await sleep(120);
+    }
+    g.player.update = realUpdate;
+    out.flashFrames = behind;
+    out.flashWalkFrames = frames;
+    out.flashCrossings = crossings;
   }
 
   // ------------------------------------------- a mouth lying on a slope
@@ -1073,6 +1136,11 @@ want('...without ever dropping back to a standstill', R.loopNeverReset, R.loopFi
 want('...up to the falling terminal', R.loopPeak > 55, R.loopPeak);
 want('a fall turned sideways keeps its speed', R.flingSpeed !== null && R.flingSpeed > 30,
   { fling: R.flingSpeed, walkingCap: 22 });
+
+want('walking through a mouth crosses it', R.flashCrossings > 0,
+  { crossings: R.flashCrossings, frames: R.flashWalkFrames });
+want('...and no frame ends with the eye behind the surface it went through',
+  R.flashFrames === 0, { framesBehind: R.flashFrames, of: R.flashWalkFrames });
 
 want('a portal never hangs off the wall it is on', R.slidClear, { slidTo: R.slidTo });
 want('standing in a mouth leaves you standing in it', R.stillStayedPut, R.stillStayedPut);

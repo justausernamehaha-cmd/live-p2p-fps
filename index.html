@@ -147,7 +147,10 @@
     </details>
 
     <button id="playbtn" class="primary">CONNECT</button>
-    <button id="menusettings" class="ghost">SETTINGS &amp; KEYS</button>
+    <!-- only while the menu is floating over a running game: on the connect
+         screen there is no layout and no game to set up, which is why it is
+         hidden there rather than deleted -->
+    <button id="menusettings" class="ghost pausedonly">SETTINGS &amp; KEYS</button>
     <button id="sharebtn" class="ghost hidden">COPY INVITE LINK</button>
     <button id="exitbtn" class="ghost hidden">LEAVE THE ROOM</button>
 

@@ -261,12 +261,11 @@ body:not(.touch-ui) .touchonly{display:none}
    right — the HUD is pointer-events:none, so this one element opts back in and
    takes the click itself. A click anywhere on the page still captures the mouse;
    this is just the part that says so, made a target. */
-#lockhint{position:absolute;left:50%;top:54%;transform:translateX(-50%);
-  font-size:16px;letter-spacing:.14em;text-transform:uppercase;color:var(--text);
-  background:#000c;padding:20px 44px;border-radius:12px;text-shadow:0 1px 2px #000;
-  border:1.5px solid #ffffff33;pointer-events:auto;cursor:pointer;
-  box-shadow:0 12px 40px #0008}
-#lockhint:hover{background:#000e;border-color:var(--accent);color:#fff}
+#lockhint{position:absolute;left:50%;top:56%;transform:translateX(-50%);
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  background:#000a;padding:7px 14px;border-radius:6px;text-shadow:0 1px 2px #000;
+  border:1px solid #ffffff26;pointer-events:auto;cursor:pointer}
+#lockhint:hover{color:var(--text);border-color:var(--accent)}
 #protection{position:absolute;left:50%;top:62%;transform:translateX(-50%);
   text-align:center;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--accent2);text-shadow:0 2px 6px #000;white-space:pre-line;line-height:1.7}
@@ -283,6 +282,8 @@ body:not(.touch-ui) .touchonly{display:none}
   -webkit-backdrop-filter:blur(10px) saturate(.85)}
 #menu.overlay .panel{background:#121924e8;box-shadow:0 24px 70px #000c}
 #menu.overlay h1,#menu.overlay .tag{display:none}
+/* buttons that only make sense over a running game */
+#menu:not(.overlay) .pausedonly{display:none}
 body.paused #hud{opacity:.35}
 
 /* ---------------- key rebinding ---------------- */

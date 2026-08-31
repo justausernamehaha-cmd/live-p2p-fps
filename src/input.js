@@ -480,10 +480,16 @@ export class Input {
   }
 
   /** Only ever locks when a real mouse is in play — a touch device that has a
-   *  keyboard attached still needs its screen for aiming. */
-  requestLock() {
+   *  keyboard attached still needs its screen for aiming.
+   *
+   *  `force` is a click the player made *at* the hint, and it clears a refusal
+   *  rather than waiting one out: Chrome refuses a re-lock for a moment after
+   *  every Escape, and somebody clicking the thing that says "click to capture
+   *  the mouse" should not be told no because of a timer they cannot see. */
+  requestLock(force = false) {
     if (this.suspendLock) return;
     if (this.hasTouch && !this.mouseSeen) return;
+    if (force) this.lockFailedAt = 0;
     if (this.lockRefused || !this.canvas.requestPointerLock) return;
     this._lock();
   }

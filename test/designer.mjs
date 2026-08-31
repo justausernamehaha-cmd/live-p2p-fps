@@ -315,6 +315,7 @@ R.seedBoxCollapsedByDefault = await page2.evaluate(() => !document.getElementByI
 await page2.evaluate(() => { document.getElementById('seedwrap').open = true; });
 await page2.fill('#seedinput', R.seed.seed);
 await page2.evaluate(() => document.getElementById('playbtn').click());
+await page2.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page2.waitForTimeout(2500);
 
 R.seeded = await page2.evaluate(async () => {

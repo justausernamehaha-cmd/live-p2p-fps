@@ -22,6 +22,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'ramp');
 await page.fill('#roominput', 'ramp-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1600);
 
 const R = {};
@@ -178,6 +179,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'ramp');
 await page.fill('#roominput', 'level design');
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(500);
 await page.fill('#dw', '40'); await page.fill('#dl', '40'); await page.fill('#dh', '14');
 await page.click('#dstart');

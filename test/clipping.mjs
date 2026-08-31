@@ -41,6 +41,7 @@ await page.waitForFunction(() => window.__paStarted);
 await page.fill('#nameinput', 'clip');
 await page.fill('#roominput', 'clip-' + Date.now());
 await page.evaluate(() => document.getElementById('playbtn').click());
+await page.waitForFunction(() => window.game.running, { timeout: 30000 });
 await page.waitForTimeout(1500);
 
 const R = await page.evaluate(async () => {

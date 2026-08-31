@@ -154,8 +154,24 @@ class Game {
     document.getElementById('lockhint').addEventListener('pointerdown', e => {
       e.preventDefault();
       this.input.mouseSeen = true;   // it was clicked with something
-      this.input.requestLock();
+      this.input.requestLock(true);
     });
+    // ...and so does a click anywhere else on the page while the match is up and
+    // no panel is open. The canvas has always taken one; the HUD, the killfeed
+    // and the ammo counter sit on top of it, and a click that landed on one of
+    // those used to do nothing at all.
+    addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      if (!this.running || this.menuOpen || this.editing || this.hud.chatOpen) return;
+      // Never ask for a lock that is already held. Every request that engages
+      // emits one settling move — the jump from wherever the cursor sat to the
+      // locked origin — and a re-lock per click is tens of degrees of view per
+      // click. See test/pointerlock.mjs.
+      if (document.pointerLockElement) return;
+      if (e.target.closest('#menu, #editpanel, #designsetup, #designhud, #joining, #chatform, #fsbtn')) return;
+      this.input.mouseSeen = true;
+      this.input.requestLock();
+    }, true);
     this._resize();
   }
 
@@ -380,7 +396,9 @@ class Game {
     document.getElementById('exitbtn').onclick = () => this.leaveRoom();
 
     // Open settings is itself a binding now, so it can be unbound. This button
-    // is the way back in when it has been.
+    // is the way back in when it has been — and it is shown only while the menu
+    // is floating over a running game, because on the connect screen there is no
+    // layout to arrange and no game to set up.
     document.getElementById('menusettings').onclick = () => {
       if (!this.running) return;
       // Deliberately not _resume(): that asks for the pointer back, and
@@ -422,6 +440,7 @@ class Game {
       await initNet(this.strategy);
       this.net = new Net(room, { name: this.name || 'player', pr: this.portals.myRandom },
                          this._netHandlers());
+      this._roomOpenedAt = now();
     } catch (err) {
       console.error(err);   // reported properly if they press CONNECT
     }
@@ -443,6 +462,10 @@ class Game {
    */
   async _enterRoom(name, room, seed) {
     this.name = name;
+    // Leaving a room parks the pointer with the menu, which is right while the
+    // menu is up and wrong the moment it is not: without this, connecting again
+    // after LEAVE THE ROOM left the mouse permanently uncapturable.
+    this.input.suspendLock = false;
     this.hud.status('');
     this.hud.joining('Looking for the room\u2026', `room code ${room}`);
     let found = false;
@@ -503,11 +526,17 @@ class Game {
       this.remotes.clear();
       this.net = new Net(room, { name: this.name || 'player', pr: this.portals.myRandom },
                          this._netHandlers());
+      this._roomOpenedAt = now();
     }
-    const started = now();
-    while (now() - started < SCAN_TIME) {
+    // The clock runs from when the room was *opened*, not from when CONNECT was
+    // pressed. The pre-join usually opened it while the name was still being
+    // typed, and time spent listening is time spent listening whoever was
+    // watching — so a room that has already been quiet for long enough needs no
+    // further wait at all.
+    const openedAt = this._roomOpenedAt || now();
+    while (now() - openedAt < SCAN_TIME) {
       if (this.net.peerCount > 0) return true;
-      await sleep(100);
+      await sleep(80);
     }
     return this.net.peerCount > 0;
   }
