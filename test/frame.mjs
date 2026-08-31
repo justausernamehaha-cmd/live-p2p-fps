@@ -8,9 +8,13 @@
 // closed form, so it is asserted against it here rather than against itself.
 
 import {
-  UPS, UP_Y, upIndex, upFromIndex, snapAxis, axisKey, axisSign, crossKeys,
+  UPS, UP_Y, upIndex, upFromIndex, snapAxis, snapUp, axisKey, axisSign, crossKeys,
   basisFor, lookFrom, anglesIn, dot3
 } from '../src/frame.js';
+
+// The first six are the world axes; the rest sit at 45 degrees between two of
+// them. Some claims are only about the six.
+const AXES = UPS.slice(0, 6);
 
 let fail = [];
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
@@ -69,10 +73,20 @@ want('snap takes the nearest axis',
   snapAxis({ x: 0.1, y: 0.9, z: -0.2 }) === UPS[2] &&
   snapAxis({ x: -0.8, y: 0.1, z: 0.3 }) === UPS[1] &&
   snapAxis({ x: 0, y: -0.4, z: -0.5 }) === UPS[5]);
-want('an exact axis snaps to itself', UPS.every(u => snapAxis(u) === u));
+want('an exact axis snaps to itself', AXES.every(u => snapAxis(u) === u));
+want('...and snapUp leaves every one of the eighteen alone', UPS.every(u => snapUp(u) === u));
+want('snapUp takes a 45-degree image at 45 degrees',
+  snapUp({ x: 0.7, y: 0.72, z: 0.02 }) === UPS.find(u => u.x > 0.7 && u.y > 0.7) &&
+  snapUp({ x: 0.02, y: -0.71, z: 0.7 }) === UPS.find(u => u.y < -0.7 && u.z > 0.7));
+want('snapUp still prefers an axis when the direction is one',
+  snapUp({ x: 0.05, y: 0.99, z: -0.02 }) === UPS[2]);
 want('keys and signs', axisKey(UPS[0]) === 'x' && axisSign(UPS[1]) === -1 &&
   crossKeys(UPS[2]).join('') === 'xz' && crossKeys(UPS[4]).join('') === 'xy');
+want('a tilted up has no world axis',
+  UPS.slice(6).every(u => axisKey(u) === null && crossKeys(u) === null && axisSign(u) === 0));
+want('north is square to every up',
+  UPS.every(u => Math.abs(dot3(u, basisFor(u, 0).f)) < 1e-12));
 
 console.log(fail.length ? 'FAIL: ' + fail.join('; ')
-                        : `${6 * 8 + 16} frames ok\nframe.js OK`);
+                        : `${UPS.length * 8 + 16} frames ok\nframe.js OK`);
 process.exit(fail.length ? 1 : 0);

@@ -12,7 +12,7 @@ import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
 import { portalMap } from './portal.js';
-import { lookFrom, anglesIn, basisFor, upIndex, upFromIndex } from './frame.js';
+import { lookFrom, anglesIn, basisFor, upIndex, upFromIndex, UPS } from './frame.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { clamp, randomRoom, now, num, PLAYER_COLORS, colorIndexFor, cssColor } from './util.js';
 
@@ -83,7 +83,7 @@ class Game {
     window.game = this;          // handy in the console; also what the test harness pokes at
     window.__spreadFor = spreadFor;
     window.__WEAPONS = WEAPONS;  // test/portals.mjs compares the guns against each other
-    window.__frame = { anglesIn, lookFrom, basisFor };   // test/slopes.mjs stands a player on a wall
+    window.__frame = { anglesIn, lookFrom, basisFor, UPS };  // test/slopes.mjs and test/tilted.mjs
     window.__air = AIR;          // movement tuning knobs, swept by test/mechanics.mjs
     window.__selfId = getSelfId;
     window.__Level = Level;      // test/designer.mjs decodes seeds with it

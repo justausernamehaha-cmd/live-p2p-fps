@@ -35,6 +35,28 @@ const SLOPE_FACES = [
   [0, 2, 5, 3]       // the ramp itself
 ];
 
+/** An axis-aligned box, expressed as a convex solid, so that the capsule
+ *  push-out can be used against it. Only the tilted movement path needs this —
+ *  an upright body is an AABB and collides with boxes exactly and much more
+ *  cheaply — so the planes are made on demand and cached on the box itself.
+ *  Movers translate their box in place, so the cached planes are re-derived when
+ *  the bounds have moved. */
+export function boxAsSolid(b) {
+  const c = b._asSolid;
+  if (c && c.min.x === b.min.x && c.min.y === b.min.y && c.min.z === b.min.z &&
+      c.max.x === b.max.x && c.max.y === b.max.y && c.max.z === b.max.z) return c;
+  const s = {
+    min: b.min, max: b.max, mover: b.mover, src: b.src || b, box: b,
+    planes: [
+      { nx: 1, ny: 0, nz: 0, d: b.max.x }, { nx: -1, ny: 0, nz: 0, d: -b.min.x },
+      { nx: 0, ny: 1, nz: 0, d: b.max.y }, { nx: 0, ny: -1, nz: 0, d: -b.min.y },
+      { nx: 0, ny: 0, nz: 1, d: b.max.z }, { nx: 0, ny: 0, nz: -1, d: -b.min.z }
+    ]
+  };
+  b._asSolid = s;
+  return s;
+}
+
 /** True when a level box still fits the fast axis-aligned path. */
 export function isAxisAligned(b) {
   return (b.shape || 0) === SHAPE_BOX && !b.rx && !b.ry && !b.rz;
@@ -171,10 +193,13 @@ export function rayConvex(ro, rd, solid, maxDist = Infinity) {
  *  close enough for a capsule: the corners come out very slightly rounded, which
  *  nobody can feel and which no other part of the game depends on. */
 export function capsulePush(ax, ay, az, bx, by, bz, radius, solid) {
-  // cheap reject first — most solids are nowhere near the player
-  if (ax + radius < solid.min.x || ax - radius > solid.max.x ||
-      az + radius < solid.min.z || az - radius > solid.max.z ||
-      by + radius < solid.min.y || ay - radius > solid.max.y) return null;
+  // Cheap reject first — most solids are nowhere near the player. Written from
+  // the two endpoints rather than assuming the capsule stands up: gravity can
+  // point along a 45-degree diagonal now, and a body lying along one of those is
+  // as wide as it is tall.
+  if (Math.max(ax, bx) + radius < solid.min.x || Math.min(ax, bx) - radius > solid.max.x ||
+      Math.max(ay, by) + radius < solid.min.y || Math.min(ay, by) - radius > solid.max.y ||
+      Math.max(az, bz) + radius < solid.min.z || Math.min(az, bz) - radius > solid.max.z) return null;
 
   let best = null;
   for (const p of solid.planes) {

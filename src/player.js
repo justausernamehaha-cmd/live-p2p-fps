@@ -1,9 +1,10 @@
 import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
-import { capsulePush } from './solid.js';
+import { capsulePush, boxAsSolid } from './solid.js';
 import { portalMap, atMouth, pierce, BODY_SAMPLES, HALF_W, HALF_H } from './portal.js';
 import {
-  UP_Y, snapAxis, axisKey, axisSign, crossKeys, basisFor, lookFrom, anglesIn
+  UP_Y, snapUp, axisKey, axisSign, crossKeys, flatBasis, basisFor, lookFrom,
+  anglesIn, dot3
 } from './frame.js';
 
 const RADIUS = 0.17;      // matches the rendered body half-width in remote.js
@@ -161,20 +162,39 @@ export class Player {
     };
   }
 
-  /** Which world axis the body is tall along, and which way its head points. */
+  /** Which world axis the body is tall along, and which way its head points.
+   *  Null and zero when the body is standing at 45 degrees — see `tilted`. */
   get upK() { return axisKey(this.up); }
   get upS() { return axisSign(this.up); }
-  /** The two axes it is wide along. */
+  /** The two axes it is wide along, or null when there are none. */
   get flatK() { return crossKeys(this.up); }
 
+  /** Is up one of the twelve 45-degree directions rather than one of the six
+   *  world axes? Everything that can only be done on an axis asks this first. */
+  get tilted() { return axisKey(this.up) === null; }
+
   /** Speed along up — what used to be simply `vel.y`. */
-  get vUp() { return this.vel[axisKey(this.up)] * axisSign(this.up); }
-  set vUp(v) { this.vel[axisKey(this.up)] = v * axisSign(this.up); }
+  get vUp() {
+    const k = axisKey(this.up);
+    return k ? this.vel[k] * axisSign(this.up) : dot3(this.vel, this.up);
+  }
+  set vUp(v) {
+    const k = axisKey(this.up);
+    if (k) { this.vel[k] = v * axisSign(this.up); return; }
+    const now = dot3(this.vel, this.up), d = v - now;
+    this.vel.x += this.up.x * d;
+    this.vel.y += this.up.y * d;
+    this.vel.z += this.up.z * d;
+  }
 
   /** Speed across the plane the player walks in. */
   flatSpeed() {
-    const [a, b] = crossKeys(this.up);
-    return Math.hypot(this.vel[a], this.vel[b]);
+    const f = this.flatK;
+    if (f) return Math.hypot(this.vel[f[0]], this.vel[f[1]]);
+    const u = dot3(this.vel, this.up);
+    return Math.hypot(this.vel.x - this.up.x * u,
+                      this.vel.y - this.up.y * u,
+                      this.vel.z - this.up.z * u);
   }
 
   /** The body's box. Still axis-aligned whichever way up the player is, which
@@ -182,7 +202,23 @@ export class Player {
    *  one axis and RADIUS wide along the other two, and which is which is the
    *  only thing that changes. */
   aabb(pos = this.pos, height = this.height) {
-    const k = axisKey(this.up), s = axisSign(this.up);
+    const k = axisKey(this.up);
+    if (!k) {
+      // Standing at 45 degrees, the body is not axis-aligned at all. This is
+      // then the box *around* it — right for a broad phase and for anything that
+      // only wants to know roughly where the player is, and deliberately not
+      // used for resolving anything: the tilted path collides the capsule
+      // itself. See _moveTilted.
+      const u = this.up;
+      const min = {}, max = {};
+      for (const a of ['x', 'y', 'z']) {
+        const lo = Math.min(pos[a], pos[a] + u[a] * height);
+        const hi = Math.max(pos[a], pos[a] + u[a] * height);
+        min[a] = lo - RADIUS; max[a] = hi + RADIUS;
+      }
+      return { min, max };
+    }
+    const s = axisSign(this.up);
     const [a, b] = crossKeys(this.up);
     const min = {}, max = {};
     min[a] = pos[a] - RADIUS; max[a] = pos[a] + RADIUS;
@@ -249,8 +285,10 @@ export class Player {
     this.recoilYaw *= Math.exp(-9 * dt);
 
     if (!this.alive) {
-      const [da, db] = crossKeys(this.up);
-      this.vel[da] = this.vel[db] = 0;
+      const u = this.vUp;             // dead bodies still fall, but go nowhere flat
+      this.vel.x = this.up.x * u;
+      this.vel.y = this.up.y * u;
+      this.vel.z = this.up.z * u;
       return;
     }
 
@@ -277,7 +315,20 @@ export class Player {
     // and right (cos yaw, -sin yaw) — and frame.js asserts exactly that; getting
     // a sign wrong mirrors the controls, W/S inverting when facing along z and
     // A/D when facing along x, which feels like a bug in the mouse.
-    const [KA, KB] = crossKeys(this.up);
+    //
+    // Everything below works in the two flat directions rather than in two world
+    // *letters*. For an up along a world axis those directions are exactly those
+    // letters, as unit vectors, so this is the same arithmetic to the last bit —
+    // and a body standing at 45 degrees, which has no letters at all, runs the
+    // same code. `va`/`vb` are the speed along each, and setFlat puts them back.
+    const [E1, E2] = flatBasis(this.up);
+    const dotV = e => this.vel.x * e.x + this.vel.y * e.y + this.vel.z * e.z;
+    const setFlat = (a, b) => {
+      const u = this.vUp;
+      this.vel.x = this.up.x * u + E1.x * a + E2.x * b;
+      this.vel.y = this.up.y * u + E1.y * a + E2.y * b;
+      this.vel.z = this.up.z * u + E1.z * a + E2.z * b;
+    };
     const { f, r } = basisFor(this.up, this.yaw);
     const w = {
       x: r.x * wish.x + f.x * wish.y,
@@ -307,11 +358,15 @@ export class Player {
     // bug, and fixing that bug on its own capped hopping at walking pace.
     const keepMomentum = wantJump && speed > maxSpeed * 0.5;
 
+    let va = dotV(E1), vb = dotV(E2);
+    const wa = w.x * E1.x + w.y * E1.y + w.z * E1.z;
+    const wb = w.x * E2.x + w.y * E2.y + w.z * E2.z;
+
     if (this.onGround && !keepMomentum) {
       if (speed <= maxSpeed + 0.05) {
         // direct control: you go exactly where you press, at once
-        this.vel[KA] = w[KA] * maxSpeed;
-        this.vel[KB] = w[KB] * maxSpeed;
+        va = wa * maxSpeed;
+        vb = wb * maxSpeed;
       } else if (wishLen > 0.02) {
         // Carrying more than a walk — off a hop chain, a heavy landing, a run
         // down some stairs. Touching the ground must not confiscate that, so the
@@ -319,19 +374,19 @@ export class Player {
         // GROUND_DRAG rather than stopping friction.
         //
         const k = Math.min(1, GROUND_STEER * dt);
-        const na = this.vel[KA] + (w[KA] * speed - this.vel[KA]) * k;
-        const nb = this.vel[KB] + (w[KB] * speed - this.vel[KB]) * k;
+        const na = va + (wa * speed - va) * k;
+        const nb = vb + (wb * speed - vb) * k;
         const m = Math.hypot(na, nb) || 1;
-        this.vel[KA] = (na / m) * speed;
-        this.vel[KB] = (nb / m) * speed;
+        va = (na / m) * speed;
+        vb = (nb / m) * speed;
         const drop = Math.max(0, 1 - GROUND_DRAG * dt);
-        this.vel[KA] *= drop;
-        this.vel[KB] *= drop;
+        va *= drop;
+        vb *= drop;
       } else {
         // you stopped asking to move, so stop
         const drop = Math.max(0, 1 - GROUND_FRICTION * dt);
-        this.vel[KA] *= drop;
-        this.vel[KB] *= drop;
+        va *= drop;
+        vb *= drop;
       }
     } else if (Math.abs(wish.x) > 0.02) {
       // Air control, and the whole of bunny hopping.
@@ -344,28 +399,31 @@ export class Player {
       // strafe key, turn the view that way, and every frame pays out.
       const strafe = Math.sign(wish.x) * Math.min(1, Math.abs(wish.x));
       const sgn = Math.sign(strafe);
-      const na = r[KA] * sgn, nb = r[KB] * sgn;   // the camera's right vector
+      // the camera's right vector, in the two flat directions
+      const na = (r.x * E1.x + r.y * E1.y + r.z * E1.z) * sgn;
+      const nb = (r.x * E2.x + r.y * E2.y + r.z * E2.z) * sgn;
 
       const wishSpeed = Math.min(Math.abs(strafe) * maxSpeed, AIR.cap);
-      const current = this.vel[KA] * na + this.vel[KB] * nb;
+      const current = va * na + vb * nb;
       const add = wishSpeed - current;
       if (add > 0) {
         const accel = Math.min(AIR.accel * wishSpeed * dt, add);
-        const beforeMag = this.flatSpeed();
-        this.vel[KA] += na * accel;
-        this.vel[KB] += nb * accel;
+        const beforeMag = Math.hypot(va, vb);
+        va += na * accel;
+        vb += nb * accel;
 
         // Air control redirects, it never brakes. Straight Quake would let the
         // budget go negative and scrub speed when you flip from A to D against
         // your own momentum; here the magnitude is restored, so swapping strafe
         // keys turns the momentum instead of throwing it away.
-        const afterMag = this.flatSpeed();
+        const afterMag = Math.hypot(va, vb);
         if (afterMag < beforeMag && afterMag > 1e-4) {
-          this.vel[KA] *= beforeMag / afterMag;
-          this.vel[KB] *= beforeMag / afterMag;
+          va *= beforeMag / afterMag;
+          vb *= beforeMag / afterMag;
         }
       }
     }
+    setFlat(va, vb);
 
     if (wantJump) {
       this.vUp = JUMP_SPEED;
@@ -375,8 +433,10 @@ export class Player {
       // carry on without you and you landed behind it, which is not what
       // standing on a moving thing feels like anywhere.
       if (this.rideVel) {
-        this.vel[KA] += this.rideVel[KA];
-        this.vel[KB] += this.rideVel[KB];
+        const ru = dot3(this.rideVel, this.up);
+        this.vel.x += this.rideVel.x - this.up.x * ru;
+        this.vel.y += this.rideVel.y - this.up.y * ru;
+        this.vel.z += this.rideVel.z - this.up.z * ru;
       }
     }
 
@@ -395,11 +455,10 @@ export class Player {
       const gain = Math.min(FALL_SPEED_MAX, (this.fellAt - FALL_MIN) * FALL_TO_SPEED);
       const sp = this.flatSpeed();
       let da, db;
-      if (sp > 0.5) { da = this.vel[KA] / sp; db = this.vel[KB] / sp; }
-      else if (wishLen > 0.02) { da = w[KA]; db = w[KB]; }
+      if (sp > 0.5) { da = dotV(E1) / sp; db = dotV(E2) / sp; }
+      else if (wishLen > 0.02) { da = wa; db = wb; }
       else { da = db = 0; }     // dropped straight down standing still: nothing
-      this.vel[KA] += da * gain;
-      this.vel[KB] += db * gain;
+      setFlat(dotV(E1) + da * gain, dotV(E2) + db * gain);
     }
 
     // Hitting something ends a hop chain: whatever you had built collapses back
@@ -409,8 +468,8 @@ export class Player {
       this.bumped = false;
       const sp = this.flatSpeed();
       if (sp > maxSpeed && sp > 1e-4) {
-        this.vel[KA] *= maxSpeed / sp;
-        this.vel[KB] *= maxSpeed / sp;
+        const k = maxSpeed / sp;
+        setFlat(dotV(E1) * k, dotV(E2) * k);
       }
     }
 
@@ -438,6 +497,9 @@ export class Player {
    *  with it. */
   _ride() {
     this.rideVel = null;
+    // A tilted body has no world axis to call "up", and every line below is
+    // written in terms of one. A 45-degree player is not carried by platforms.
+    if (this.tilted) return;
     const movers = this.world.movers;
     if (!movers || !movers.length) return;
     const k = this.upK, up = this.upS;
@@ -485,6 +547,7 @@ export class Player {
    *  their own: a ceiling only counts while something is driving you into it. */
   _crush() {
     this.beingCrushed = false;
+    if (this.tilted) return;      // see _ride: no axis, no headroom to measure
     if (!this.alive || !this.world.movers || !this.world.movers.length) return;
 
     // A platform closing on you is only a platform if it is solid to you. Shoot
@@ -649,6 +712,8 @@ export class Player {
   }
 
   _moveStep(dt) {
+    if (this.tilted) return this._moveTilted(dt);
+
     // Before anything is resolved against the level: did this step take the
     // player through a portal? It has to be asked first, because the answer is
     // "the wall in front of you is not there for you", and every line below
@@ -797,6 +862,99 @@ export class Player {
     this.escapes++;
     this._wasInside = false;
     this.spawnSeq++;      // peers must not interpolate across the recovery
+  }
+
+  /** One movement step for a body standing at 45 degrees.
+   *
+   *  The axis-aligned path above resolves one *world* axis at a time, which is
+   *  exact and cheap and works only because the body's box is axis-aligned. At
+   *  45 degrees it is not, in any world frame, so there is nothing to resolve
+   *  one axis of — and there is no point pretending otherwise. The body is a
+   *  capsule, it has always been a capsule as far as the ramps are concerned,
+   *  and here it is collided as one against everything: the level's boxes,
+   *  expressed as convex solids on demand, alongside the ramps that already are.
+   *
+   *  What is given up, honestly: the stair step-up, and being carried or crushed
+   *  by a moving platform. All three are written in terms of "which letter is
+   *  up", and a tilted body has no letter. A 45-degree body is on 45-degree
+   *  ground, where there are no stairs to climb — and _move() already sub-steps
+   *  finely enough that nothing tunnels.
+   */
+  _moveTilted(dt) {
+    if (this._tryPortal(dt)) return;
+
+    const start = { ...this.pos };
+    this.pos.x += this.vel.x * dt;
+    this.pos.y += this.vel.y * dt;
+    this.pos.z += this.vel.z * dt;
+
+    this.onGround = false;
+    const before = this.vUp;
+    this._pushOutOfEverything();
+
+    // Blocked flat, the same test the axis path makes: a move that went almost
+    // nowhere is a move that was stopped.
+    const [ux, uy, uz] = [this.up.x, this.up.y, this.up.z];
+    const wantU = (this.vel.x * ux + this.vel.y * uy + this.vel.z * uz) * dt;
+    const gotX = this.pos.x - start.x, gotY = this.pos.y - start.y, gotZ = this.pos.z - start.z;
+    const gotU = gotX * ux + gotY * uy + gotZ * uz;
+    const wantFlat = Math.hypot(this.vel.x * dt - ux * wantU,
+                                this.vel.y * dt - uy * wantU,
+                                this.vel.z * dt - uz * wantU);
+    const gotFlat = Math.hypot(gotX - ux * gotU, gotY - uy * gotU, gotZ - uz * gotU);
+    if (wantFlat > 1e-6 && gotFlat < wantFlat * 0.25) this.bumped = true;
+
+    if (this.onGround && before <= 0) this.fellAt = Math.max(this.fellAt, -before);
+
+    this._failsafe(dt);
+  }
+
+  /** Push the capsule out of everything it is inside, boxes and ramps alike, and
+   *  notice when what it was pushed off is ground. The same rule the ramps have
+   *  always used: a face the body's own up agrees with is ground and is pushed
+   *  out of straight up, so standing still on a slope does not creep downhill;
+   *  anything steeper is a wall and takes the speed that went into it. */
+  _pushOutOfEverything() {
+    const boxes = this._boxes();
+    const solids = this._solids() || [];
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      const a = this.aabb();
+      const [ax, ay, az, bx, by, bz] = this._capsule();
+      for (const list of [boxes, solids]) {
+        for (const raw of list) {
+          if (!aabbOverlap(a, raw)) continue;
+          const shape = raw.planes ? raw : boxAsSolid(raw);
+          const hit = capsulePush(ax, ay, az, bx, by, bz, RADIUS, shape);
+          if (!hit) continue;
+          moved = true;
+          const n = hit.n;
+          const facing = n.nx * this.up.x + n.ny * this.up.y + n.nz * this.up.z;
+          if (facing > 0.5) {
+            const d = hit.depth / facing;
+            this.pos.x += this.up.x * d;
+            this.pos.y += this.up.y * d;
+            this.pos.z += this.up.z * d;
+            this.onGround = true;
+            if (this.vUp < 0) this.vUp = 0;
+          } else {
+            this.pos.x += n.nx * hit.depth;
+            this.pos.y += n.ny * hit.depth;
+            this.pos.z += n.nz * hit.depth;
+            const into = this.vel.x * n.nx + this.vel.y * n.ny + this.vel.z * n.nz;
+            if (into < 0) {
+              this.vel.x -= n.nx * into;
+              this.vel.y -= n.ny * into;
+              this.vel.z -= n.nz * into;
+              if (Math.abs(facing) < 0.7) this.bumped = true;
+            }
+          }
+          break;                 // one solid at a time; the pass loop catches the rest
+        }
+        if (moved) break;
+      }
+      if (!moved) break;
+    }
   }
 
   /** The level, as collision sees it this instant.
@@ -1100,8 +1258,9 @@ export class Player {
     const look = map.dir(lookFrom(this.up, this.yaw, this.pitch));
     // Gravity follows the body. Where your feet point is where you fall, so the
     // exit decides which way is down for you from here — a mouth on a wall
-    // stands you on that wall. Rounded to an axis: see frame.js.
-    const turned = snapAxis(map.dir(this.up));
+    // stands you on that wall, and a mouth on a 45-degree face stands you at 45
+    // degrees. Rounded to the nearest of eighteen: see frame.js.
+    const turned = snapUp(map.dir(this.up));
     if (turned !== this.up) { this.upFrom = this.up; this.upBlend = 1; }
     this.up = turned;
     const ang = anglesIn(this.up, look);
@@ -1187,6 +1346,10 @@ export class Player {
    *  tie toward the way out of a portal, so a mouth flush with a wall lets you
    *  out in front of it rather than behind. */
   _unstick(prefer = null, passes = 8) {
+    // A tilted body's AABB is the box *around* the capsule, so shortest-way-out
+    // along a world axis would be measured from a shape it is not. Pushing the
+    // capsule out of everything is the tilted path's own answer to this.
+    if (this.tilted) { this._pushOutOfEverything(); return !this._overlaps(this._boxes()); }
     const boxes = this._boxes();
     for (let i = 0; i < passes; i++) {
       const a = this.aabb();
@@ -1231,6 +1394,16 @@ export class Player {
 
   _overlaps(boxes) {
     const a = this.aabb();
+    if (this.tilted) {
+      // the box around a tilted capsule is much bigger than the capsule, so ask
+      // the capsule itself rather than reporting an overlap it does not have
+      const [ax, ay, az, bx, by, bz] = this._capsule();
+      for (const b of boxes) {
+        if (!aabbOverlap(a, b)) continue;
+        if (capsulePush(ax, ay, az, bx, by, bz, RADIUS, boxAsSolid(b))) return true;
+      }
+      return this._inSolid();
+    }
     for (const b of boxes) if (aabbOverlap(a, b)) return true;
     return this._inSolid();
   }

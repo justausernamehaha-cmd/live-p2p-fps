@@ -339,6 +339,19 @@ export class RemotePlayer {
       };
     };
     const H = HEAD_H / 2;
+    // A body standing at 45 degrees is not axis-aligned, so the pair of boxes
+    // below cannot describe it. One box around the whole of it is honest about
+    // that: a little generous, and never in the wrong place.
+    if (!u.x && !u.y && !u.z) return [];
+    if (Math.abs(u.x) < 0.999 && Math.abs(u.y) < 0.999 && Math.abs(u.z) < 0.999) {
+      const top = { x: p.x + u.x * 1.8 * s, y: p.y + u.y * 1.8 * s, z: p.z + u.z * 1.8 * s };
+      const box = { min: {}, max: {} };
+      for (const a of ['x', 'y', 'z']) {
+        box.min[a] = Math.min(p[a], top[a]) - BODY_R;
+        box.max[a] = Math.max(p[a], top[a]) + BODY_R;
+      }
+      return [{ head: false, ...box }];
+    }
     const head = at(1.62 * s, { x: H, y: H, z: H });
     const bodyTop = 1.62 * s - H;
     const bodyR = {
@@ -363,13 +376,17 @@ export class RemotePlayer {
   dispose() {
     this.scene.remove(this.group);
     this.scene.remove(this.ghost);
-    this.body.geometry.dispose();
-    this.head.geometry.dispose();
-    this.gun.geometry.dispose();
-    this.shadow.geometry.dispose();
-    this.label.material.map?.dispose();
-    this.label.material.dispose();
-    this.mat.dispose();
+    // Walked rather than listed. The gun is a group of several meshes now, and
+    // naming each piece here is how disposing a body came to throw halfway
+    // through — which left LEAVE THE ROOM half done, with the HUD still up.
+    for (const root of [this.group, this.ghost]) {
+      root.traverse(o => {
+        o.geometry?.dispose?.();
+        const m = o.material;
+        if (!m) return;
+        for (const one of Array.isArray(m) ? m : [m]) { one.map?.dispose?.(); one.dispose?.(); }
+      });
+    }
   }
 }
 

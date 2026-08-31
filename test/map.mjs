@@ -105,8 +105,20 @@ const R = await page.evaluate(() => {
       // This is the half the reversed ceiling fillets got wrong: they were the
       // right shape, hung the right way up, and pointing the wrong way.
       Math.min(Math.abs(tip.lo - wall), Math.abs(tip.hi - wall)) < 0.12;
-    if (!ok) {
+    // ...and the two faces that are *not* the incline sit flat against the
+    // surfaces the wedge joins, with no gap behind it: the vertical one on the
+    // wall's inner face, the horizontal one on the floor or the ceiling.
+    const alongX = (s.max.x - s.min.x) < 5;
+    const a = alongX ? 'x' : 'z';
+    const wallFace = Math.abs(s.min[a]) > Math.abs(s.max[a]) ? s.min[a] : s.max[a];
+    // the walls are 1 m thick and `span` is their outside, so the room's own
+    // inner face is one metre in
+    const roomFace = span - 1;
+    const flatOnTheWall = Math.abs(Math.abs(wallFace) - roomFace) < 1e-6;
+    const flatOnTheSurface = ceiling ? Math.abs(s.max.y - 12) < 1e-6 : Math.abs(s.min.y) < 1e-6;
+    if (!ok || !flatOnTheWall || !flatOnTheSurface) {
       backwards.push({
+        flatOnTheWall, flatOnTheSurface, wallFace: +wallFace.toFixed(2),
         ceiling, y: +s.min.y.toFixed(1), wall: wall === undefined ? null : +wall.toFixed(1),
         wideAt: wide ? [+wide.lo.toFixed(2), +wide.hi.toFixed(2)] : null,
         tipAt: tip ? [+tip.lo.toFixed(2), +tip.hi.toFixed(2)] : null
