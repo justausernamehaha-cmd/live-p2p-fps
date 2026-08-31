@@ -274,8 +274,15 @@ export class World {
     const wz = axis === 'z' ? cz + (run / 2) * dir : cz;
     const ry = axis === 'x' ? (dir > 0 ? Math.PI : 0)
                             : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+    // Turning a wedge over is a half turn about the direction it *runs*, not
+    // about the world's y. The rotations are applied X then Y then Z, so an rz
+    // of pi lands after the aiming turn and mirrors world x as well as y — which
+    // reversed exactly the two ceiling fillets that run along x, leaving them
+    // tall in the middle of the room and thin against the wall. rx comes before
+    // the aiming turn, flips the wedge upside down in its own frame, and leaves
+    // which way it climbs alone.
     return this.add(wx, y, wz, run, height, width, color, SHAPE_SLOPE,
-                    [0, ry, flip ? Math.PI : 0]);
+                    [flip ? Math.PI : 0, ry, 0]);
   }
 
   /** Fillet every inside corner of the room, floor and ceiling alike.

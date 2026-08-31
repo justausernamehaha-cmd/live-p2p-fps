@@ -73,6 +73,12 @@ export class Net {
     // that disagreed by a millimetre would have portals in different places.
     this.aPortalBall = act('pb', (d, id) => this.h.onPortalBall?.(id, d));
     this.aPortal = act('pt', (d, id) => this.h.onPortal?.(id, d));
+    // Which level this room is playing. A room that already exists has a level,
+    // and it is not the joiner's business to bring one — so they ask, and the
+    // first person to answer decides. `sq` is the question, `sr` the answer,
+    // sent to the one who asked rather than to everybody.
+    this.aSeedAsk = act('sq', (d, id) => this.h.onSeedAsk?.(id));
+    this.aSeedTell = act('sr', (d, id) => this.h.onSeedTell?.(id, d));
 
     this.room.onPeerJoin = id => {
       this.h.onJoin?.(id);
@@ -156,6 +162,9 @@ export class Net {
       m: p.mover
     });
   }
+
+  askSeed() { this._send(this.aSeedAsk, { }); }
+  tellSeed(peerId, seed) { this._send(this.aSeedTell, { sd: String(seed || '') }, { target: peerId }); }
 
   died(killerId) { this._send(this.aDied, { by: killerId || '' }); }
   chat(text) { this._send(this.aChat, { t: String(text).slice(0, 120) }); }

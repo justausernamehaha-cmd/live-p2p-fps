@@ -12,6 +12,7 @@ export class Hud {
       peercount: $('peercount'), ping: $('ping'), roomtag: $('roomtag'),
       chatform: $('chatform'), chatinput: $('chatinput'), status: $('status'),
       protection: $('protection'), lockhint: $('lockhint'), debug: $('debug'),
+      joining: $('joining'), jtitle: $('jtitle'), jsub: $('jsub'),
       btnFire: document.querySelector('.tbtn[data-btn=fire]'),
       btnAds: document.querySelector('.tbtn[data-btn=ads]')
     };
@@ -43,6 +44,18 @@ export class Hud {
   }
 
   hideLoading() { this.el.loading.classList.add('hidden'); }
+
+  /** The screen between pressing CONNECT and being in the match: first while the
+   *  room is being looked for, then while an existing one is being joined. Pass
+   *  null to take it away. */
+  joining(title, sub = '') {
+    const el = this.el.joining;
+    if (!el) return;
+    el.classList.toggle('hidden', !title);
+    if (!title) return;
+    this.el.jtitle.textContent = title;
+    this.el.jsub.textContent = sub;
+  }
 
   status(text, isError = false) {
     this.el.status.textContent = text;

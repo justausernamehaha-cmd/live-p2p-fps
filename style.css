@@ -371,3 +371,16 @@ body.editing #designhud{display:none}
 /* a design room has no peers, no ping and nothing to shield against */
 body.designing #netstat{display:none}
 body.design-play #dswatches,body.design-play #dseed,body.design-play .drow{display:none}
+
+/* ---------------- looking for / joining a room ---------------- */
+#joining{position:fixed;inset:0;z-index:24;display:grid;place-items:center;
+  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 72%);
+  height:var(--appvh,100dvh);touch-action:none}
+#joining.hidden{display:none}
+.jpanel{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:24px}
+.jpanel b{font-size:17px;letter-spacing:.18em;text-transform:uppercase}
+.jpanel span{font-size:13px;color:var(--dim);letter-spacing:.06em;max-width:34ch;line-height:1.6}
+.jspin{width:38px;height:38px;border-radius:50%;border:3px solid #ffffff22;
+  border-top-color:var(--accent);animation:jspin 0.9s linear infinite}
+@keyframes jspin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.jspin{animation-duration:3s}}

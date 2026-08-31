@@ -64,7 +64,59 @@ const R = await page.evaluate(() => {
   const badSpawns = g.world.spawns.filter(s => overlaps(s.x, s.y, s.z, H));
   const spawnFloors = g.world.spawns.map(s => supportAt(s.x, s.z));
 
+  // ---------------------------------------- every corner fillet faces its wall
+  // A fillet is a wedge that is thickest where it meets the wall and tapers to
+  // nothing as it reaches into the room — on the floor and on the ceiling
+  // alike. Two of the four ceiling ones were built backwards, thick out in the
+  // room and thin at the wall, because turning a wedge over was done as a half
+  // turn about the world's y and that reverses the way it climbs as well as
+  // which way up it is. Measured, not read off the rotation: the solid's own
+  // thickness where it meets the surface against where it ends.
+  const solids = g.world.solids || [];
+  const fillets = solids.filter(s =>
+    Math.max(s.max.x - s.min.x, s.max.z - s.min.z) > 100 && s.max.y - s.min.y <= 1.7);
+  const sliceAt = (s, y) => {
+    const alongX = (s.max.x - s.min.x) < 5;    // which way the wedge is thin
+    const a = alongX ? 'x' : 'z';
+    let lo = Infinity, hi = -Infinity;
+    for (let t = 0; t <= 400; t++) {
+      const v = s.min[a] + (s.max[a] - s.min[a]) * (t / 400);
+      const pt = { x: alongX ? v : 0, y, z: alongX ? 0 : v };
+      let inside = true;
+      for (const pl of s.planes) {
+        if (pl.nx * pt.x + pl.ny * pt.y + pl.nz * pt.z - pl.d > 1e-6) { inside = false; break; }
+      }
+      if (inside) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    }
+    return lo === Infinity ? null : { lo, hi, axis: a };
+  };
+  const backwards = [];
+  for (const s of fillets) {
+    const ceiling = s.min.y > 6;
+    const wide = sliceAt(s, ceiling ? s.max.y - 0.05 : s.min.y + 0.05);
+    const tip = sliceAt(s, ceiling ? s.min.y + 0.05 : s.max.y - 0.05);
+    // The wall face is whichever end of the wedge's own box is further out.
+    const wall = wide && (Math.abs(s.min[wide.axis]) > Math.abs(s.max[wide.axis])
+      ? s.min[wide.axis] : s.max[wide.axis]);
+    const ok = wide && tip &&
+      (wide.hi - wide.lo) > 1.4 &&                       // thick where it joins
+      (tip.hi - tip.lo) < 0.2 &&                         // and tapering to nothing
+      // ...and the last sliver of it is against the wall, not out in the room.
+      // This is the half the reversed ceiling fillets got wrong: they were the
+      // right shape, hung the right way up, and pointing the wrong way.
+      Math.min(Math.abs(tip.lo - wall), Math.abs(tip.hi - wall)) < 0.12;
+    if (!ok) {
+      backwards.push({
+        ceiling, y: +s.min.y.toFixed(1), wall: wall === undefined ? null : +wall.toFixed(1),
+        wideAt: wide ? [+wide.lo.toFixed(2), +wide.hi.toFixed(2)] : null,
+        tipAt: tip ? [+tip.lo.toFixed(2), +tip.hi.toFixed(2)] : null
+      });
+    }
+  }
+
   return {
+    filletCount: fillets.length,
+    filletsBackwards: backwards,
     arenaSpan: +(span * 2).toFixed(0),
     boxCount: boxes.length,
     sampled: Math.pow(Math.floor((2 * edge) / step) + 1, 2),
@@ -79,6 +131,9 @@ const fail = [];
 if (R.trapped.length) fail.push(`${R.trapped.length} spots where a player cannot even crouch: ${JSON.stringify(R.trapped.slice(0, 6))}`);
 if (R.noFloor.length) fail.push(`${R.noFloor.length} sampled spots have no floor at all`);
 if (R.badSpawns) fail.push(`${R.badSpawns} spawn points are inside geometry`);
+if (R.filletCount !== 8) fail.push(`expected 8 corner fillets, found ${R.filletCount}`);
+if (R.filletsBackwards.length)
+  fail.push(`${R.filletsBackwards.length} corner fillets are built backwards: ${JSON.stringify(R.filletsBackwards)}`);
 if (!R.spawnsOnGround) fail.push('a spawn point has nothing under it');
 
 console.log(JSON.stringify(R, null, 2));

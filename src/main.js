@@ -23,6 +23,17 @@ const RESPAWN_TIME = 3;
 // possible for them to disagree — and gave the player two numbers to read where
 // there was one thing happening.
 const EDIT_PROTECTION = 3000;    // ms carried out of the settings panel
+// Joining a room somebody is already playing. Three seconds of shield, with the
+// gun locked for the same three, so nobody can drop in and immediately shoot and
+// nobody can be shot before the level has finished appearing.
+const JOIN_PROTECTION = 3000;
+// How long to listen before deciding a room is empty and therefore yours. The
+// pre-join usually has the answer before CONNECT is even pressed, so this is the
+// cost of making a *new* room, not of joining one.
+const SCAN_TIME = 2500;
+// ...and how long to wait for somebody in it to say what level it is playing.
+const SEED_WAIT = 2500;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The one room code that opens the level designer instead of a match. Matched
 // before the code is normalised, so `level design` and `level-design` both work.
 const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
@@ -346,25 +357,27 @@ class Game {
       // the designer is a room code, not a button, so it is one word to remember
       if (DESIGN_CODE.test(roomInput.value.trim())) return this.openDesignSetup();
 
-      let level = null;
       const seed = seedInput.value.trim();
       if (seed) {
-        try { level = Level.decode(seed); }
+        // decoded now only so a broken paste is caught before anything happens;
+        // whether it is the level actually played is decided below
+        try { Level.decode(seed); }
         catch (err) { this.hud.status(err.message, true); return; }
       }
       const room = this._roomFrom(roomInput.value);
       localStorage.setItem('pa.room', room);
       try { localStorage.setItem('pa.seed', seed); } catch { /* private mode */ }
-      this.seed = seed;
-      this.world.setLevel(level);
       playBtn.disabled = true;
-      this._connect(name, room).then(ok => {
+      this._enterRoom(name, room, seed).then(ok => {
         playBtn.disabled = false;
         if (!ok) return;
         playBtn.textContent = 'RESUME';
         shareBtn.classList.remove('hidden');
+        document.getElementById('exitbtn').classList.remove('hidden');
       });
     };
+
+    document.getElementById('exitbtn').onclick = () => this.leaveRoom();
 
     // Open settings is itself a binding now, so it can be unbound. This button
     // is the way back in when it has been.
@@ -414,6 +427,131 @@ class Game {
     }
   }
 
+  /** CONNECT, from the room code to standing in the match.
+   *
+   *  A room is not created or joined, it is *found or not found*: there is no
+   *  server to ask, so the only way to know whether anybody is already playing
+   *  the code you typed is to open it and listen. That is what the scan is.
+   *
+   *    * nobody there — the room is yours. Your seed is the level, and your code
+   *      is the code;
+   *    * somebody there — the room already has a level, and it is not a joiner's
+   *      business to bring one. Whatever is in the seed box is discarded, the
+   *      room's own seed is asked for, and you go in behind a three-second
+   *      shield with the gun locked, because dropping into a firefight you have
+   *      not seen yet is not a fair way to arrive.
+   */
+  async _enterRoom(name, room, seed) {
+    this.name = name;
+    this.hud.status('');
+    this.hud.joining('Looking for the room\u2026', `room code ${room}`);
+    let found = false;
+    try {
+      found = await this._scanRoom(room);
+    } catch (err) {
+      console.error(err);
+      this.hud.joining(null);
+      this.hud.status('could not reach the signalling relays \u2014 try ' +
+        'adding &strategy=torrent to the address: ' + err.message, true);
+      return false;
+    }
+
+    let level = null;
+    this.joinedExisting = found;
+    if (!found) {
+      // Ours to make. The seed typed in is the level.
+      if (seed) {
+        try { level = Level.decode(seed); }
+        catch (err) { this.hud.joining(null); this.hud.status(err.message, true); return false; }
+      }
+      this.seed = seed;
+    } else {
+      this.hud.joining('Joining the room\u2026', 'somebody is already playing this room, so its level is the one you get');
+      const theirs = await this._askRoomSeed();
+      this.seed = theirs || '';
+      if (theirs) {
+        try { level = Level.decode(theirs); }
+        catch { level = null; this.seed = ''; }    // unreadable: the default arena
+      }
+    }
+    this.world.setLevel(level);
+    this.hud.joining(null);
+    const ok = await this._connect(name, room);
+    if (!ok) return false;
+    if (found) {
+      // three seconds of shield, and the gun locked for exactly as long
+      this.protectedUntil = now() + JOIN_PROTECTION;
+      this.hud.feed('joined an existing room \u2014 shielded for three seconds', 'chat');
+      if (seed && seed !== this.seed) {
+        this.hud.feed('the room already had a level, so the seed you pasted was not used', 'chat');
+      }
+    }
+    return true;
+  }
+
+  /** Open the room and listen. True if anybody else is in it.
+   *
+   *  The pre-join means this is usually already answered before CONNECT is
+   *  pressed — the room was opened while the name was still being typed — so a
+   *  peer already known is an immediate yes, and only an empty room costs the
+   *  full wait. */
+  async _scanRoom(room) {
+    await initNet(this.strategy);
+    if (!this.net || this.net.roomCode !== room) {
+      this.net?.leave();
+      for (const r of this.remotes.values()) r.dispose();
+      this.remotes.clear();
+      this.net = new Net(room, { name: this.name || 'player', pr: this.portals.myRandom },
+                         this._netHandlers());
+    }
+    const started = now();
+    while (now() - started < SCAN_TIME) {
+      if (this.net.peerCount > 0) return true;
+      await sleep(100);
+    }
+    return this.net.peerCount > 0;
+  }
+
+  /** Ask the room what level it is playing. The first answer wins; silence
+   *  means the default arena, which is what a room with no seed is. */
+  async _askRoomSeed() {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = v => { if (!done) { done = true; this._onSeed = null; resolve(v); } };
+      this._onSeed = finish;
+      this.net?.askSeed();
+      setTimeout(() => finish(null), SEED_WAIT);
+    });
+  }
+
+  /** Leave the match and go back to the connect screen. */
+  leaveRoom() {
+    this.net?.leave();
+    this.net = null;
+    for (const r of this.remotes.values()) r.dispose();
+    this.remotes.clear();
+    this.portals.clear();
+    this.running = false;
+    this.menuOpen = false;
+    this.joinedExisting = false;
+    this.protectedUntil = 0;
+    this.hud.joining(null);
+    this.hud.respawn(null);
+    this.hud.status('left the room');
+    document.getElementById('playbtn').textContent = 'CONNECT';
+    document.getElementById('sharebtn').classList.add('hidden');
+    document.getElementById('exitbtn').classList.add('hidden');
+    this.hud.showMenu(false);
+    document.getElementById('menu').classList.remove('hidden');
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('touch').classList.add('hidden');
+    document.body.classList.remove('touch-ui', 'paused');
+    document.exitPointerLock?.();
+    this.input.suspendLock = true;      // the menu is to be clicked, not aimed with
+    this.player.spawn(this.world.randomSpawn());
+    this.loadout.refill();
+  }
+
   _netHandlers() {
     return {
       onJoin: id => this._peerJoin(id),
@@ -434,6 +572,9 @@ class Game {
         { x: num(m.dx), y: num(m.dy), z: num(m.dz) }, m.s === 'b' ? 'b' : 'a', true),
       onPortal: (id, m) => this._remotePortal(id, m),
       onPing: (id, rtt) => { const r = this.remotes.get(id); if (r) r.ping = rtt; },
+      // somebody new wants to know what level this room is playing
+      onSeedAsk: id => this.net?.tellSeed(id, this.seed || ''),
+      onSeedTell: (id, m) => this._onSeed?.(typeof m?.sd === 'string' ? m.sd : ''),
       onJoinError: e => this.hud.feed('signalling error: ' + escapeHtml(e.error || ''), 'chat')
     };
   }
