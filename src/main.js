@@ -132,14 +132,64 @@ class Game {
     addEventListener('resize', () => this._resize());
     addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
     visualViewport?.addEventListener('resize', () => this._resize());
+    // A field gaining or losing focus is a keyboard coming and going, which is
+    // the one viewport change that must not be believed. See _resize().
+    addEventListener('focusin', () => this._resize());
+    addEventListener('focusout', () => setTimeout(() => this._resize(), 50));
+    this._pinScroll();
+    // The hint is a button as well as a message: it is the one part of the HUD
+    // that takes pointer events, so clicking it captures the mouse rather than
+    // falling through to a canvas that is behind it.
+    document.getElementById('lockhint').addEventListener('pointerdown', e => {
+      e.preventDefault();
+      this.input.mouseSeen = true;   // it was clicked with something
+      this.input.requestLock();
+    });
     this._resize();
+  }
+
+  /** The page itself never scrolls, on any device.
+   *
+   *  html and body are already fixed and overflow:hidden, and that is still not
+   *  enough: focusing a field scrolls it into view whatever the overflow says,
+   *  a phone scrolls the document under a virtual keyboard on its own, and on a
+   *  desktop Home, PageDown or a stray wheel over a corner of the page will do
+   *  the same. Any of those slides the whole UI up the screen. So the scroll
+   *  offset is put back the instant anything moves it.
+   *
+   *  Only the document is pinned. The menu panel is taller than a phone screen
+   *  and scrolls inside itself — that is the only way to reach the CONNECT
+   *  button — and pinning it would make the game unstartable. */
+  _pinScroll() {
+    const pin = () => {
+      if (scrollX || scrollY) scrollTo(0, 0);
+      for (const el of [document.documentElement, document.body]) {
+        if (el.scrollTop) el.scrollTop = 0;
+        if (el.scrollLeft) el.scrollLeft = 0;
+      }
+    };
+    addEventListener('scroll', pin, { passive: true });
+    // capture, so a scroll inside the menu is seen too: that event does not
+    // bubble, and the document may have been dragged along with it
+    document.addEventListener('scroll', pin, { capture: true, passive: true });
+    pin();
   }
 
   _resize() {
     // visualViewport is the only measurement that excludes a phone's collapsing
     // URL bar; innerHeight can be taller than what you can actually see
     const w = Math.round(visualViewport?.width || innerWidth);
-    const h = Math.round(visualViewport?.height || innerHeight);
+    let h = Math.round(visualViewport?.height || innerHeight);
+    // ...but a virtual keyboard shrinks the visual viewport too, and that is not
+    // a smaller screen. Believing it was is what put the arena on screen the
+    // moment anyone tapped the room field on a phone: --appvh drives the height
+    // of the menu, the canvas behind it is fixed to the whole viewport, and a
+    // menu suddenly 300px tall left the default level showing underneath.
+    //
+    // So while a text field has focus the last height measured without one is
+    // kept. focusout re-measures, a moment later, once the keyboard has gone.
+    if (isTyping({ target: document.activeElement })) h = this._viewH || h;
+    else this._viewH = h;
     document.documentElement.style.setProperty('--appvh', h + 'px');
     const aspect = w / h;
     this.camera.aspect = aspect;
@@ -947,8 +997,9 @@ class Game {
     // camera and viewmodel first: the shot is traced from where they actually
     // are this frame, not from where they were on the last one
     this._camera(dt);
-    this.selfAvatar.update(p);
+    this.selfAvatar.update(p, this.loadout.index);
     this.selfAvatar.setColor(this.myColor ?? PLAYER_COLORS[0]);
+    this.selfAvatar.setName(this.name || 'player');
     this.viewmodel.update(dt, p, this.loadout.reloading, this.adsT);
     this._fire(t, input);
 
@@ -994,28 +1045,48 @@ class Game {
       e.z + (Math.random() - 0.5) * shake * 0.1
     );
     // The horizon is the player's own, not the world's: come out of a portal
-    // standing on a wall and the room is what has turned over, not you. lookAt
-    // takes the roll from `cam.up`, and pitch is clamped short of straight up so
-    // the look direction is never parallel to it.
-    const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    // standing on a wall and the room is what has turned over, not you.
+    const pitch = clamp(p.pitch + p.recoil, -Math.PI / 2, Math.PI / 2);
     const d = lookFrom(p.up, p.yaw + p.recoilYaw, pitch);
     // The horizon rolls into place rather than snapping: `upBlend` runs 1 -> 0
     // over the fifth of a second after the body turned over, and only the camera
     // ever sees the in-between.
+    const u = this._camUp = this._camUp || new THREE.Vector3();
     if (p.upBlend > 0 && p.upFrom) {
       const k = p.upBlend;
-      cam.up.set(
-        p.up.x * (1 - k) + p.upFrom.x * k,
-        p.up.y * (1 - k) + p.upFrom.y * k,
-        p.up.z * (1 - k) + p.upFrom.z * k
-      );
+      u.set(p.up.x * (1 - k) + p.upFrom.x * k,
+            p.up.y * (1 - k) + p.upFrom.y * k,
+            p.up.z * (1 - k) + p.upFrom.z * k);
       // two opposite ups have no plane between them; lean on the look direction
-      if (cam.up.lengthSq() < 1e-6) cam.up.set(p.up.x, p.up.y, p.up.z);
-      else cam.up.normalize();
+      if (u.lengthSq() < 1e-6) u.set(p.up.x, p.up.y, p.up.z);
+      else u.normalize();
     } else {
-      cam.up.set(p.up.x, p.up.y, p.up.z);
+      u.set(p.up.x, p.up.y, p.up.z);
     }
-    cam.lookAt(cam.position.x + d.x, cam.position.y + d.y, cam.position.z + d.z);
+    cam.up.copy(u);
+
+    // The basis, written out rather than left to lookAt().
+    //
+    // lookAt takes the roll from `cam.up` by crossing it with the look
+    // direction, which is exactly zero when you look straight up or straight
+    // down — so the pitch had to stop a hundredth of a radian short of both, and
+    // "I should be able to look directly down and up" was not possible. Across
+    // the view is the player's own flat right vector, which is defined at every
+    // pitch: at 90 degrees it is still the direction yaw says is to your right.
+    const X = this._camX = this._camX || new THREE.Vector3();
+    const Y = this._camY = this._camY || new THREE.Vector3();
+    const Z = this._camZ = this._camZ || new THREE.Vector3();
+    Z.set(-d.x, -d.y, -d.z).normalize();      // a camera looks along its own -Z
+    X.crossVectors(new THREE.Vector3(d.x, d.y, d.z), u);
+    if (X.lengthSq() < 1e-8) {                // looking along the horizon's axis
+      const r = basisFor(p.up, p.yaw + p.recoilYaw).r;
+      X.set(r.x, r.y, r.z);
+    }
+    X.normalize();
+    Y.crossVectors(Z, X);
+    this._camM = this._camM || new THREE.Matrix4();
+    this._camM.makeBasis(X, Y, Z);
+    cam.quaternion.setFromRotationMatrix(this._camM);
     if (!p.alive) cam.rotateZ(0.9);        // drop the view on death
   }
 

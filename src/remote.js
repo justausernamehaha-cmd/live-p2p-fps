@@ -3,6 +3,7 @@ import { lerp, lerpAngle, PLAYER_COLORS, cssColor, hash, now, num } from './util
 import { rayAABB } from './world.js';
 import { UP_Y, upFromIndex, basisFor } from './frame.js';
 import { mouthAround, portalMap } from './portal.js';
+import { WEAPONS } from './weapons.js';
 
 // How near a mouth a body has to be for the other half of it to be drawn out of
 // the far one. The same numbers the player's own collision uses, and they have
@@ -34,6 +35,65 @@ export function ghostOf(links, pos, up, yaw, height) {
     up: map.dir(up),
     back: map.dir({ x: -f.f.x, y: -f.f.y, z: -f.f.z })
   };
+}
+
+/** One player's body, built once and posed every frame.
+ *
+ *  Both a peer's body and your own — the one you see through a portal — come
+ *  from here, and that is the whole point of it being a function. "I should look
+ *  the exact same in other people's eyes and in my own": if there are two
+ *  constructors there are two bodies, and they drift. Now the only difference
+ *  between the two is which player's numbers are fed in.
+ */
+export function makeBody(colorHex) {
+  const color = new THREE.Color(colorHex);
+  const group = new THREE.Group();
+  // emissive so a player never blends into the grey-blue level
+  const mat = new THREE.MeshLambertMaterial({
+    color, emissive: color.clone().multiplyScalar(0.35)
+  });
+  const headMat = new THREE.MeshLambertMaterial({
+    color: color.clone().offsetHSL(0, 0, 0.12),
+    emissive: color.clone().multiplyScalar(0.3)
+  });
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(BODY_R, 1.8 - HEAD_H - BODY_R * 2, 4, 12), mat);
+  body.position.y = 0.72;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H), headMat);
+  head.position.y = 1.62;
+  // the weapon in their hands, as a shape rather than a stub: a stubby shotgun
+  // and a long marksman rifle read differently across the map
+  const gunMat = new THREE.MeshLambertMaterial({ color: 0x232936 });
+  const gun = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), gunMat);
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.45, 16),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false })
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.02;
+  group.add(body, head, gun, shadow);
+  return { group, mat, headMat, gunMat, body, head, gun, shadow, color, weapon: -1 };
+}
+
+/** Put a body into the stance it is actually in. Height carries the crouch —
+ *  standing and sprinting are the same stance, which is why nothing here reads
+ *  a speed — and the weapon carries what is in their hands. */
+export function poseBody(b, height, pitch, weaponIndex) {
+  const s = height / 1.8;
+  b.body.scale.y = s;
+  b.body.position.y = 0.72 * s;
+  b.head.position.y = 1.62 * s;
+  const w = WEAPONS[weaponIndex] || WEAPONS[0];
+  if (b.weapon !== w.id) {
+    b.weapon = w.id;
+    const h = w.hold || { len: 0.6, thick: 0.1, tint: 0x232936 };
+    b.gun.geometry.dispose();
+    b.gun.geometry = new THREE.BoxGeometry(h.thick, h.thick, h.len);
+    b.gunMat.color.setHex(h.tint);
+    b.gunLen = h.len;
+  }
+  b.gun.position.set(0.22, 1.35 * s, -(b.gunLen || 0.6) * 0.67);
+  b.gun.rotation.x = -pitch;
 }
 
 const INTERP_DELAY = 110;    // ms of buffered lag; smooths jitter between peers
@@ -73,43 +133,14 @@ export class RemotePlayer {
     this._vu = new THREE.Vector3();
     this._vb = new THREE.Vector3();
 
-    this.group = new THREE.Group();
-    // emissive so an enemy never blends into the grey-blue level
-    const mat = new THREE.MeshLambertMaterial({
-      color: this.color,
-      emissive: this.color.clone().multiplyScalar(0.35)
-    });
-    this.mat = mat;
-
-    this.body = new THREE.Mesh(new THREE.CapsuleGeometry(BODY_R, 1.8 - HEAD_H - BODY_R * 2, 4, 12), mat);
-    this.body.position.y = 0.72;
-    this.group.add(this.body);
-
-    this.head = new THREE.Mesh(
-      new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H),
-      new THREE.MeshLambertMaterial({
-        color: this.color.clone().offsetHSL(0, 0, 0.12),
-        emissive: this.color.clone().multiplyScalar(0.3)
-      })
-    );
-    this.head.position.y = 1.62;
-    this.group.add(this.head);
-
-    // gun stub so you can read which way they are aiming
-    this.gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 0.6),
-      new THREE.MeshLambertMaterial({ color: 0x232936 })
-    );
-    this.gun.position.set(0.22, 1.35, -0.4);
-    this.group.add(this.gun);
-
-    this.shadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.45, 16),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false })
-    );
-    this.shadow.rotation.x = -Math.PI / 2;
-    this.shadow.position.y = 0.02;
-    this.group.add(this.shadow);
+    this.parts = makeBody(this.colorHex);
+    this.group = this.parts.group;
+    this.mat = this.parts.mat;
+    this.body = this.parts.body;
+    this.head = this.parts.head;
+    this.gun = this.parts.gun;
+    this.shadow = this.parts.shadow;
+    this.weapon = 0;
 
     this.label = makeLabel(this.name, cssColor(this.colorHex));
     this.label.position.y = 2.25;
@@ -121,11 +152,12 @@ export class RemotePlayer {
 
     // the half of them that is out of the other mouth, when they are standing
     // in a portal: the same three meshes, the same materials, somewhere else
-    this.ghost = new THREE.Group();
-    this.gBody = new THREE.Mesh(this.body.geometry, mat);
-    this.gHead = new THREE.Mesh(this.head.geometry, this.head.material);
-    this.gGun = new THREE.Mesh(this.gun.geometry, this.gun.material);
-    this.ghost.add(this.gBody, this.gHead, this.gGun);
+    this.gparts = makeBody(this.colorHex);
+    this.ghost = this.gparts.group;
+    this.gparts.shadow.visible = false;    // one shadow, on the real body
+    this.gBody = this.gparts.body;
+    this.gHead = this.gparts.head;
+    this.gGun = this.gparts.gun;
     this.ghost.visible = false;
     scene.add(this.ghost);
     this.portals = null;          // set by the game
@@ -146,10 +178,12 @@ export class RemotePlayer {
     if (hex === this.colorHex) return;
     this.colorHex = hex;
     this.color.setHex(hex);
-    this.mat.color.copy(this.color);
-    this.mat.emissive.copy(this.color).multiplyScalar(0.35);
-    this.head.material.color.copy(this.color).offsetHSL(0, 0, 0.12);
-    this.head.material.emissive.copy(this.color).multiplyScalar(0.3);
+    for (const b of [this.parts, this.gparts]) {
+      b.mat.color.copy(this.color);
+      b.mat.emissive.copy(this.color).multiplyScalar(0.35);
+      b.headMat.color.copy(this.color).offsetHSL(0, 0, 0.12);
+      b.headMat.emissive.copy(this.color).multiplyScalar(0.3);
+    }
     this._rebuildLabel();
   }
 
@@ -182,6 +216,7 @@ export class RemotePlayer {
       x: num(s.x), y: num(s.y), z: num(s.z),
       yaw: num(s.a), pitch: num(s.b), h: num(s.h, 1.8), u: num(s.u, 2)
     });
+    this.weapon = num(s.w, this.weapon);
     if (this.buffer.length > BUFFER) this.buffer.shift();
     if (this.settling && this.buffer.length >= 2) this.settling = false;
     this.hp = num(s.hp);
@@ -227,11 +262,7 @@ export class RemotePlayer {
     );
     this.group.quaternion.setFromRotationMatrix(this._basis);
     const scaleY = this.height / 1.8;
-    this.body.scale.y = scaleY;
-    this.body.position.y = 0.72 * scaleY;
-    this.head.position.y = 1.62 * scaleY;
-    this.gun.position.y = 1.35 * scaleY;
-    this.gun.rotation.x = -this.pitch;
+    poseBody(this.parts, this.height, this.pitch, this.weapon);
     this.label.position.y = 2.25 * scaleY + 0.1;
     this.group.visible = this.alive && !this.settling;
     this._ghost(scaleY);
@@ -239,8 +270,10 @@ export class RemotePlayer {
     if (this.flash > 0) {
       this.flash -= dt;
       const on = this.flash > 0;
-      this.mat.color.copy(on ? WHITE : this.color);
-      this.head.material.color.copy(on ? WHITE : this.color.clone().offsetHSL(0, 0, 0.12));
+      for (const b of [this.parts, this.gparts]) {
+        b.mat.color.copy(on ? WHITE : this.color);
+        b.headMat.color.copy(on ? WHITE : this.color.clone().offsetHSL(0, 0, 0.12));
+      }
     }
   }
 
@@ -261,11 +294,7 @@ export class RemotePlayer {
       this._g3.set(g.back.x, g.back.y, g.back.z)
     );
     this.ghost.quaternion.setFromRotationMatrix(this._gm);
-    this.gBody.scale.y = scaleY;
-    this.gBody.position.y = 0.72 * scaleY;
-    this.gHead.position.y = 1.62 * scaleY;
-    this.gGun.position.set(0.22, 1.35 * scaleY, -0.4);
-    this.gGun.rotation.x = -this.pitch;
+    poseBody(this.gparts, this.height, this.pitch, this.weapon);
   }
 
   /** hit boxes match what is drawn on this screen, so what you see is what you shoot */
@@ -349,45 +378,38 @@ function makeLabel(text, color) {
  *  It is deliberately the same silhouette as a RemotePlayer, so what you see of
  *  yourself is what everyone else sees of you. */
 export class SelfAvatar {
+  /** Your own body, as everybody else sees it.
+   *
+   *  Built by the same factory a peer's body is, and posed by the same function,
+   *  because that is the requirement: what you catch of yourself through a
+   *  portal has to be exactly what the person on the other side of the map is
+   *  looking at — the same stance (standing and sprinting are one stance; only a
+   *  crouch is different), the same shadow, the same name over your head, and
+   *  the same weapon in your hands. Anything built twice ends up different. */
   constructor(scene) {
-    this.group = new THREE.Group();
     this._m = new THREE.Matrix4();
     this._a = new THREE.Vector3();
     this._b = new THREE.Vector3();
     this._c = new THREE.Vector3();
-    this.color = new THREE.Color(PLAYER_COLORS[0]);
-    const mat = new THREE.MeshLambertMaterial({
-      color: this.color, emissive: this.color.clone().multiplyScalar(0.35)
-    });
-    this.mat = mat;
-    this.body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(BODY_R, 1.8 - HEAD_H - BODY_R * 2, 4, 12), mat);
-    this.body.position.y = 0.72;
-    this.head = new THREE.Mesh(
-      new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H),
-      new THREE.MeshLambertMaterial({
-        color: this.color.clone().offsetHSL(0, 0, 0.12),
-        emissive: this.color.clone().multiplyScalar(0.3)
-      })
-    );
-    this.head.position.y = 1.62;
-    this.gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 0.6),
-      new THREE.MeshLambertMaterial({ color: 0x232936 })
-    );
-    this.gun.position.set(0.22, 1.35, -0.4);
-    this.group.add(this.body, this.head, this.gun);
+    this.colorHex = PLAYER_COLORS[0];
+    this.name = '';
+
+    this.parts = makeBody(this.colorHex);
+    this.group = this.parts.group;
+    this.mat = this.parts.mat;
+    this.body = this.parts.body;
+    this.head = this.parts.head;
+    this.gun = this.parts.gun;
 
     // your own other half, for when you are standing in a mouth and looking at
     // the one you are hanging out of
-    this.ghost = new THREE.Group();
-    this.gBody = new THREE.Mesh(this.body.geometry, mat);
-    this.gHead = new THREE.Mesh(this.head.geometry, this.head.material);
-    this.gGun = new THREE.Mesh(this.gun.geometry, this.gun.material);
-    this.gBody.position.y = 0.72;
-    this.gHead.position.y = 1.62;
-    this.gGun.position.set(0.22, 1.35, -0.4);
-    this.ghost.add(this.gBody, this.gHead, this.gGun);
+    this.gparts = makeBody(this.colorHex);
+    this.ghost = this.gparts.group;
+    this.gparts.shadow.visible = false;
+
+    this.label = makeLabel(this.name, cssColor(this.colorHex));
+    this.label.position.y = 2.25;
+    this.group.add(this.label);
 
     // One root for both halves, because what the portal views turn on and off is
     // "the player's own body", and that is two pieces now.
@@ -397,17 +419,36 @@ export class SelfAvatar {
     scene.add(this.root);
   }
 
+  setName(name) {
+    if (!name || name === this.name) return;
+    this.name = name;
+    this._rebuildLabel();
+  }
+
   setColor(hex) {
     if (hex === undefined || hex === this.colorHex) return;
     this.colorHex = hex;
-    this.color.setHex(hex);
-    this.mat.color.copy(this.color);
-    this.mat.emissive.copy(this.color).multiplyScalar(0.35);
-    this.head.material.color.copy(this.color).offsetHSL(0, 0, 0.12);
-    this.head.material.emissive.copy(this.color).multiplyScalar(0.3);
+    const color = new THREE.Color(hex);
+    for (const b of [this.parts, this.gparts]) {
+      b.color.setHex(hex);
+      b.mat.color.copy(color);
+      b.mat.emissive.copy(color).multiplyScalar(0.35);
+      b.headMat.color.copy(color).offsetHSL(0, 0, 0.12);
+      b.headMat.emissive.copy(color).multiplyScalar(0.3);
+    }
+    this._rebuildLabel();
   }
 
-  update(player) {
+  _rebuildLabel() {
+    this.group.remove(this.label);
+    this.label.material.map?.dispose();
+    this.label.material.dispose();
+    this.label = makeLabel(this.name, cssColor(this.colorHex));
+    this.label.position.y = 2.25;
+    this.group.add(this.label);
+  }
+
+  update(player, weaponIndex = 0) {
     const s = player.height / 1.8;
     this.group.position.set(player.pos.x, player.pos.y, player.pos.z);
     const f = basisFor(player.up, player.yaw);
@@ -417,11 +458,8 @@ export class SelfAvatar {
       this._c.set(-f.f.x, -f.f.y, -f.f.z)
     );
     this.group.quaternion.setFromRotationMatrix(this._m);
-    this.body.scale.y = s;
-    this.body.position.y = 0.72 * s;
-    this.head.position.y = 1.62 * s;
-    this.gun.position.y = 1.35 * s;
-    this.gun.rotation.x = -player.pitch;
+    poseBody(this.parts, player.height, player.pitch, weaponIndex);
+    this.label.position.y = 2.25 * s + 0.1;
 
     const g = player.portals
       ? ghostOf(player.portals.links(), player.pos, player.up, player.yaw, player.height)
@@ -435,10 +473,6 @@ export class SelfAvatar {
       this._c.set(g.back.x, g.back.y, g.back.z)
     );
     this.ghost.quaternion.setFromRotationMatrix(this._m);
-    this.gBody.scale.y = s;
-    this.gBody.position.y = 0.72 * s;
-    this.gHead.position.y = 1.62 * s;
-    this.gGun.position.y = 1.35 * s;
-    this.gGun.rotation.x = -player.pitch;
+    poseBody(this.gparts, player.height, player.pitch, weaponIndex);
   }
 }

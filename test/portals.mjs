@@ -351,26 +351,37 @@ const R = await page.evaluate(async () => {
   // A portal is a hole, not a doorway that grabs you. Stand with the body
   // astride the surface and you stay there, half out of each mouth, for as long
   // as you like — which is only possible because the wall the mouth is cut into
-  // stops being solid while you are in it.
+  // has a hole in it while you are in it.
+  //
+  // The body goes *in the hole*, not merely near it. This used to stand the
+  // player on the corner fillet with the mouth's bottom edge two thirds of a
+  // metre above their feet, and their legs simply buried in the wall — which
+  // was possible only because the whole wall was being taken out of collision.
+  // A mouth is two metres and a player is 1.8, so a hole they are actually
+  // inside is a hole they fit in.
   g.portals.clear();
   g.portals.fire('me', { x: -30, y: 3.2, z: -55 }, { x: 0, y: 0, z: -1 }, 'a');
   g.portals.fire('me', { x: 0, y: 1.6, z: -20 }, { x: 0, y: 0, z: 1 }, 'b');
   await sleep(900);
   const wm = g.portals.pairs.get('me')?.a;
   if (wm) {
-    // eye a hair in front of the surface, so the front of the body is past it.
-    // The mouth is above the corner fillet, so stand on the fillet's own top.
-    park(wm.c.x, wm.c.y - 1.62, wm.c.z + 0.1, 0);
+    // eye a hair in front of the surface, so the front of the body is past it
+    park(wm.c.x, wm.c.y - 0.95, wm.c.z + 0.1, 0);
     keys();
     const before = g.player.portalCount;
-    await sleep(600);
-    out.stillStayedPut = g.player.portalCount - before === 0;
+    await sleep(120);
     out.stillStraddles = !!g.player.straddling;
-    out.stillCarvedTheWall = g.player._boxes().length === g.world.boxes.length - 1;
+    const bs = g.player._boxes();
+    // the wall is still in collision — with a hole cut in it, not removed
+    out.stillPiercedTheWall = !bs.includes(g.player.straddling?.host) &&
+                              bs.some(b => b.pierced) &&
+                              bs.length > g.world.boxes.length - 1;
     const box = g.player.aabb();
     // the body genuinely crosses the plane: some of it in front, some behind
     out.stillHalfIn = box.min.z < wm.c.z - 0.02 && box.max.z > wm.c.z + 0.02;
     out.stillFrontDepth = round(wm.c.z - box.min.z);
+    await sleep(480);
+    out.stillStayedPut = g.player.portalCount - before === 0;
   }
 
   // -------------------------------------- and the hand-over is not a teleport
@@ -588,7 +599,10 @@ const R = await page.evaluate(async () => {
     keys();
     await sleep(500);
 
-    // it arrives while you stand in its way: you end up on it, not shoved along
+    // It arrives while you stand in its way. A shuttle is 1.3 m of solid block
+    // now, not a plate you can step onto, so it does not lift you over itself:
+    // it shoves you ahead of it, which is the whole reason a horizontal platform
+    // is something to get out of the way of.
     ride.at = 0.25; ride.dir = 1;
     await sleep(80);
     const rb2 = ride.shape;
@@ -597,7 +611,7 @@ const R = await page.evaluate(async () => {
     await sleep(150);
     const sx = g.player.pos.x;
     let onIt = false, shoved = 0;
-    for (let i = 0; i < 90 && !onIt; i++) {
+    for (let i = 0; i < 90; i++) {
       await sleep(16);
       shoved = Math.max(shoved, g.player.pos.x - sx);
       if (g.player.pos.y > rb2.max.y - 0.1) onIt = true;
@@ -605,13 +619,41 @@ const R = await page.evaluate(async () => {
     out.boardedWhenItArrived = onIt;
     out.shovedInstead = round(shoved);
 
-    // ...and walking into one head on
+    // ...and with something solid behind you, being shoved is being killed.
+    // Nothing on the shuttle's own lane can do that — it runs an empty edge of
+    // the room — so the wall is put there, which is the rule under test rather
+    // than the arena.
+    ride.at = 0.3; ride.dir = 1;
+    await sleep(80);
+    const rb4 = ride.shape;
+    const cz = (rb4.min.z + rb4.max.z) / 2;
+    const wall = { min: { x: rb4.max.x + 1.6, y: 0, z: cz - 3 },
+                   max: { x: rb4.max.x + 2.6, y: 3, z: cz + 3 } };
+    g.world.boxes.push(wall);
+    park(rb4.max.x + 1.0, 0.05, cz, 0);
+    keys();
+    g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
+    g.protectedUntil = 0;
+    let crushed = false;
+    for (let i = 0; i < 120 && !crushed; i++) {
+      await sleep(16);
+      crushed = !g.player.alive || g.player.squashed;
+    }
+    out.crushedAgainstAWall = crushed;
+    g.world.boxes.splice(g.world.boxes.indexOf(wall), 1);
+    g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
+    park(0, 3, 0, 0);
+    await sleep(200);
+
+    // ...and you get onto one by jumping. 1.3 m is deliberately just inside a
+    // jump — JUMP_SPEED 8.2 against GRAVITY 24 is 1.40 m of rise — and well
+    // outside a step, which is 0.55.
     ride.at = 0.6; ride.dir = -1;
     await sleep(80);
     const rb3 = ride.shape;
-    park(rb3.min.x - 2.5, 0.05, (rb3.min.z + rb3.max.z) / 2, -Math.PI / 2);
+    park(rb3.min.x - 3.0, 0.05, (rb3.min.z + rb3.max.z) / 2, -Math.PI / 2);
     await sleep(120);
-    keys('fwd');
+    keys('fwd', 'jump');            // holding jump auto-hops
     let onIt2 = false;
     // Long enough that it does not matter whether the shuttle happens to be
     // running away at the time: it turns round at the end of its own run.
@@ -620,7 +662,8 @@ const R = await page.evaluate(async () => {
       if (g.player.pos.y > rb3.max.y - 0.1) onIt2 = true;
     }
     keys();
-    out.walkedOnto = onIt2;
+    out.jumpedOnto = onIt2;
+    out.shuttleTop = round(rb3.max.y);
   }
 
   // ------------------------------- standing on the edge of a rising lift
@@ -1035,9 +1078,9 @@ want('a portal never hangs off the wall it is on', R.slidClear, { slidTo: R.slid
 want('standing in a mouth leaves you standing in it', R.stillStayedPut, R.stillStayedPut);
 want('...with the body genuinely astride the surface', R.stillHalfIn,
   { half: R.stillHalfIn, frontDepth: R.stillFrontDepth });
-want('...because the wall it is cut into stops being solid',
-  R.stillStraddles && R.stillCarvedTheWall,
-  { straddling: R.stillStraddles, carved: R.stillCarvedTheWall });
+want('...because the wall it is cut into has a hole in it',
+  R.stillStraddles && R.stillPiercedTheWall,
+  { straddling: R.stillStraddles, pierced: R.stillPiercedTheWall });
 
 // the hand-over is a change of frame, not a jump
 want('the eye comes out exactly as far in as it went',
@@ -1080,9 +1123,14 @@ want('standing on a platform rides it', R.stoodOnIt && R.rideVel !== null,
   { onIt: R.stoodOnIt, rideVel: R.rideVel, platform: R.ridingSpeed });
 want('jumping off one takes its momentum with you',
   R.velAfterJump > R.ridingSpeed * 0.6, { afterJump: R.velAfterJump, platform: R.ridingSpeed });
-want('a platform arriving puts you on it rather than shoving you',
-  R.boardedWhenItArrived, { onIt: R.boardedWhenItArrived, shoved: R.shovedInstead });
-want('...and you can walk onto one head on', R.walkedOnto, R.walkedOnto);
+want('a platform arriving shoves you ahead of it rather than lifting you over',
+  R.shovedInstead > 0.5, { onIt: R.boardedWhenItArrived, shoved: R.shovedInstead });
+want('...and shoving you into something solid kills you', R.crushedAgainstAWall,
+  R.crushedAgainstAWall);
+want('...and you get onto one by jumping, which its 1.3 m top just allows',
+  R.jumpedOnto, { onIt: R.jumpedOnto, top: R.shuttleTop });
+want('a shuttle is high enough to have to be jumped and low enough to be jumped',
+  R.shuttleTop > 0.55 && R.shuttleTop < 1.4, R.shuttleTop);
 want('standing on the edge of a rising lift does not fling you',
   R.edgeFling !== undefined && R.edgeFling < 0.6, R.edgeFling);
 

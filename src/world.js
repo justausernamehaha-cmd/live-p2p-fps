@@ -67,6 +67,29 @@ export class World {
 
   /** Upright boxes keep the exact, cheap axis-aligned path; ramps and anything
    *  turned become convex solids. Nothing is in both lists. */
+  /** The level's own extent, which is how the player's failsafe knows it has
+   *  left. Recomputed with the box list; movers travel inside it by definition,
+   *  since both ends of every run are part of the level. */
+  _bounds() {
+    const b = { min: { x: Infinity, y: Infinity, z: Infinity },
+                max: { x: -Infinity, y: -Infinity, z: -Infinity } };
+    const seen = [...this.boxes, ...this.solids];
+    if (!seen.length) return null;
+    for (const s of seen) {
+      for (const k of ['x', 'y', 'z']) {
+        if (s.min[k] < b.min[k]) b.min[k] = s.min[k];
+        if (s.max[k] > b.max[k]) b.max[k] = s.max[k];
+      }
+    }
+    for (const m of this.movers) {
+      for (const k of ['x', 'y', 'z']) {
+        b.min[k] = Math.min(b.min[k], m.p0[k], m.p1[k]);
+        b.max[k] = Math.max(b.max[k], m.p0[k], m.p1[k]);
+      }
+    }
+    return b;
+  }
+
   _split() {
     this.boxes = [];
     this.solids = [];
@@ -105,6 +128,7 @@ export class World {
         }
       }
     }
+    this.bounds = this._bounds();
   }
 
   /** Walk every platform along its run and drag its collision shape with it.
@@ -345,21 +369,40 @@ export class World {
     // The two shuttles run along the floor rather than overhead. Up at four
     // metres there was no way onto them — a jump is worth 1.4 m — and anything
     // low enough to climb onto is also low enough to trap someone underneath.
-    // On the ground there is nothing to be under, and you board one by walking.
-    // Routes chosen by sweeping each one along its whole run against every
-    // static box in the arena, not by eye: at head height these two flew over
-    // the cover, and on the floor they drove straight through it.
-    const shuttle = this.add(-30, 0, 56, 8, 0.5, 4, PALETTE.accent2);
-    shuttle.mv = { x: 30, y: 0.25, z: 56, sp: 5 };        // along the north edge
+    //
+    // So they are blocks, not platforms: 1.3 m from the floor to the top, which
+    // is a whisker under a jump (JUMP_SPEED 8.2 against GRAVITY 24 is 1.40 m of
+    // rise, and STEP_HEIGHT is only 0.55, so it has to be jumped and a jump just
+    // makes it). Solid all the way down, so there is no crawlspace under one to
+    // be caught in — and walking into the side of one is walking into something
+    // 1.3 m tall, which shoves you along the way it is going and kills you if
+    // there is a wall behind you. That is the point of them being blocks.
+    //
+    // Both runs go until they meet the room, and both were found by sweeping the
+    // whole path against every static box *and* every ramp — the corner fillets
+    // are what stops them, 1.6 m out from each wall at floor level. The four
+    // corner crates that used to sit at ±54 have moved inboard to let them past.
+    // Nothing here was chosen by eye: at head height these two flew over the
+    // cover, and on the floor they drove straight through it.
+    const shuttle = this.add(-53.9, 0, 55, 8, 1.3, 4, PALETTE.accent2);
+    shuttle.mv = { x: 53.9, y: 0.65, z: 55, sp: 5 };      // wall to wall, north edge
 
-    const crossing = this.add(56, 0, -30, 4, 0.5, 8, PALETTE.accent2);
-    crossing.mv = { x: 56, y: 0.25, z: 30, sp: 4.5 };     // and up the east one
+    // ...and the same up the east one, stopped short of the north shuttle's own
+    // lane. Two full-length runs at right angles at the same height must cross
+    // somewhere, and two platforms passing through each other is worse than one
+    // that turns round a few metres early.
+    const crossing = this.add(55, 0, -53.9, 4, 1.3, 8, PALETTE.accent2);
+    crossing.mv = { x: 55, y: 0.65, z: 49, sp: 4.5 };
 
     // ---- scattered crates: repositioned, but still crate-sized ----
     const crates = [
       [8, 18], [10, 20], [8.6, 19.2, 2], [-8, -18], [-10, -20], [-8.6, -19.2, 2],
       [18, -8], [20, -10], [-18, 8], [-20, 10],
-      [16, 16], [-16, -16], [27, 27], [-27, -27], [27, -27], [-27, 27]
+      // The four that used to sit at ±54 have come in to ±38: out there they were
+      // the only thing standing between the shuttles and the wall, and a shuttle
+      // that stops two thirds of the way along its edge is not a way across the
+      // map. In here they still break up the run out to a bunker.
+      [16, 16], [-16, -16], [19, 19], [-19, -19], [19, -19], [-19, 19]
     ];
     for (const [x, z, y = 0] of crates) this.add(x * S, y, z * S, 2, 2, 2, PALETTE.block);
   }

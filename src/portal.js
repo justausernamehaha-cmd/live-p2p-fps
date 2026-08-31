@@ -179,13 +179,37 @@ export function fitPortal(face, point, look) {
   return { c, u, v, n };
 }
 
-/** Would this portal swallow its own partner? Two mouths of one pair sitting on
- *  top of each other is a loop with no way out of it. */
-export function overlapsPartner(portal, partner) {
-  if (!partner) return false;
-  const d = Math.hypot(portal.c.x - partner.c.x, portal.c.y - partner.c.y, portal.c.z - partner.c.z);
-  return d < MIN_PAIR_SEP && dot(portal.n, partner.n) > 0.7;
+/** Do two mouths overlap?
+ *
+ *  Nothing about two portals sharing a piece of wall makes sense. Two mouths of
+ *  one pair on top of each other is a loop with no way out of it, and two of
+ *  different pairs is worse: the wall is cut through twice, either crossing
+ *  wins by whichever is nearer, and a body in the shared part is in both. So no
+ *  mouth may be laid over any other, whoever it belongs to.
+ *
+ *  Coplanar mouths are compared as the ovals they are — a portal may sit right
+ *  beside another as long as they do not touch, which on a long wall matters.
+ *  Mouths on different planes only have to keep their centres apart, since the
+ *  wall between them is what separates them. */
+export function overlapsMouth(portal, other) {
+  if (!other || other === portal) return false;
+  const dx = portal.c.x - other.c.x, dy = portal.c.y - other.c.y, dz = portal.c.z - other.c.z;
+  const d = Math.hypot(dx, dy, dz);
+  const sameFace = dot(portal.n, other.n) > 0.99 &&
+                   Math.abs(dx * portal.n.x + dy * portal.n.y + dz * portal.n.z) < 0.02;
+  if (sameFace) {
+    // in the other mouth's own frame, two ellipses of the same size: they miss
+    // each other exactly when the centres are more than one full width apart
+    const su = (dx * other.u.x + dy * other.u.y + dz * other.u.z) / (2 * HALF_W);
+    const sv = (dx * other.v.x + dy * other.v.y + dz * other.v.z) / (2 * HALF_H);
+    return su * su + sv * sv < 1;
+  }
+  return d < MIN_PAIR_SEP && dot(portal.n, other.n) > 0.7;
 }
+
+/** Back-compatible name: the partner is just the first mouth anything is
+ *  checked against. */
+export function overlapsPartner(portal, partner) { return overlapsMouth(portal, partner); }
 
 // --------------------------------------------------------------- traversal
 
@@ -237,6 +261,88 @@ export function atMouth(p, pos, up, height, reach, edge) {
     if (su * su + sv * sv <= 1) return true;
   }
   return false;
+}
+
+/** The pieces of an axis-aligned box that are left once a mouth is cut into it.
+ *
+ *  A portal is a hole in a wall. Collision used to be told that by taking the
+ *  whole wall away for as long as a body was in the mouth, and a wall that is
+ *  entirely absent is not a wall with a hole in it — it is a doorway the size of
+ *  the room. Three separate ways out of the map came from that, all of them
+ *  reported by hand:
+ *
+ *    * stand on a wall, put a mouth on that same wall, and walk toward it. The
+ *      wall switches off as soon as your feet are *near* the oval, gravity is
+ *      into the wall because you are standing on it, and you sink through it and
+ *      out of the room without ever reaching the hole;
+ *    * stand between two mouths and walk toward the edge of one. You leave the
+ *      oval while still inside the wall, the wall comes back, and the next axis
+ *      resolved pushes you clear of the whole box — the length of the room;
+ *    * and a mouth that turns you over can stand you inside the exit's wall,
+ *      where nothing pushes you out because the wall is not there to push.
+ *
+ *  So cut the hole instead. The oval is opened through the full thickness of the
+ *  box and what is left around it stays as solid as it ever was — in bands, so
+ *  the hole is the shape of the mouth rather than the square it is inscribed in.
+ *  A square hole is passable at its corners, where the picture plainly says
+ *  wall, and "if I do not fit the portal exactly I should not be able to go
+ *  through" is the whole point of the exercise.
+ *
+ *  Each band is cut to the widest the oval gets anywhere within it, so the hole
+ *  is never narrower than the mouth: whatever fits through the picture fits
+ *  through the collision. `pad` widens it further, and both u and v are world
+ *  axes on any axis-aligned face — see frameFor() — which is what lets bands of
+ *  axis-aligned boxes describe an oval at all. */
+export const HOLE_BANDS = 8;
+
+/** Which world axis a unit vector lies along, or null if it does not. */
+function axisOf(d) {
+  if (Math.abs(d.x) > 0.999) return 'x';
+  if (Math.abs(d.y) > 0.999) return 'y';
+  if (Math.abs(d.z) > 0.999) return 'z';
+  return null;
+}
+
+export function pierce(box, p, pad = 0) {
+  const k = axisOf(p.n);
+  const ua = axisOf(p.u), va = axisOf(p.v);
+  if (!k || !ua || !va) {
+    // Not an axis-aligned face. frameFor() never produces one on a box, so this
+    // is only reachable from a level that has been turned; take the whole thing
+    // out rather than cut a hole in the wrong place.
+    return [];
+  }
+  const out = [];
+  const piece = (uLo, uHi, vLo, vHi) => {
+    if (uHi - uLo < 1e-4 || vHi - vLo < 1e-4) return;
+    const min = {}, max = {};
+    min[k] = box.min[k]; max[k] = box.max[k];
+    min[ua] = uLo; max[ua] = uHi;
+    min[va] = vLo; max[va] = vHi;
+    out.push({ min, max, color: box.color, src: box.src, pierced: true });
+  };
+  const cu = p.c[ua], cv = p.c[va];
+  const V = HALF_H + pad, U = HALF_W + pad;
+  const v0 = Math.max(box.min[va], cv - V), v1 = Math.min(box.max[va], cv + V);
+  // everything above and below the oval, full width
+  piece(box.min[ua], box.max[ua], box.min[va], v0);
+  piece(box.min[ua], box.max[ua], v1, box.max[va]);
+  // ...and one band at a time beside it, following the oval outward so the hole
+  // is the shape the mouth is drawn as rather than the square it is inscribed
+  // in. A square hole is passable at its corners, where the picture says wall.
+  const step = (v1 - v0) / HOLE_BANDS;
+  for (let i = 0; i < HOLE_BANDS; i++) {
+    const bLo = v0 + step * i, bHi = bLo + step;
+    // the widest the oval gets anywhere in this band: the hole is never
+    // narrower than the mouth, so anything that fits the mouth fits the hole
+    const near = Math.min(Math.abs(bLo - cv), Math.abs(bHi - cv),
+                          (bLo - cv) * (bHi - cv) <= 0 ? 0 : Infinity);
+    const t = Math.min(1, near / V);
+    const w = U * Math.sqrt(Math.max(0, 1 - t * t));
+    piece(box.min[ua], Math.max(box.min[ua], cu - w), bLo, bHi);
+    piece(Math.min(box.max[ua], cu + w), box.max[ua], bLo, bHi);
+  }
+  return out;
 }
 
 /** The link a body is standing in, if any — the mouth it is half out of, and

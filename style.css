@@ -135,8 +135,14 @@ body.touch-ui #healthbar{width:150px;height:22px}
   display:flex;gap:8px}
 
 /* ---------------- menu ---------------- */
+/* The document never scrolls (see Game._pinScroll), but this panel is taller
+   than a phone screen and has to: touch-action is none on body, which on a
+   phone means a thumb drag here moves nothing at all and the CONNECT button
+   below the fold is simply unreachable. pan-y gives back exactly that one
+   gesture, inside this element, and nothing else. */
 #menu{position:fixed;inset:0;display:grid;place-items:center;z-index:20;padding:16px;
-  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 70%);overflow:auto}
+  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 70%);
+  overflow:auto;overscroll-behavior:contain;touch-action:pan-y}
 #menu.hidden{display:none}
 .panel{width:min(560px,100%);background:var(--panel);border:1px solid var(--line);border-radius:14px;
   padding:26px 26px 22px;box-shadow:0 30px 80px #0009}
@@ -251,9 +257,16 @@ body:not(.touch-ui) .touchonly{display:none}
   font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8bf03a;
   background:#000a;padding:8px 10px;border-radius:5px;white-space:pre;
   pointer-events:none;letter-spacing:0}
-#lockhint{position:absolute;left:50%;top:57%;transform:translateX(-50%);
-  font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
-  background:#0009;padding:6px 12px;border-radius:5px;text-shadow:0 1px 2px #000}
+/* Big enough to be aimed at without thinking about it, and clickable in its own
+   right — the HUD is pointer-events:none, so this one element opts back in and
+   takes the click itself. A click anywhere on the page still captures the mouse;
+   this is just the part that says so, made a target. */
+#lockhint{position:absolute;left:50%;top:54%;transform:translateX(-50%);
+  font-size:16px;letter-spacing:.14em;text-transform:uppercase;color:var(--text);
+  background:#000c;padding:20px 44px;border-radius:12px;text-shadow:0 1px 2px #000;
+  border:1.5px solid #ffffff33;pointer-events:auto;cursor:pointer;
+  box-shadow:0 12px 40px #0008}
+#lockhint:hover{background:#000e;border-color:var(--accent);color:#fff}
 #protection{position:absolute;left:50%;top:62%;transform:translateX(-50%);
   text-align:center;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
   color:var(--accent2);text-shadow:0 2px 6px #000;white-space:pre-line;line-height:1.7}
@@ -305,10 +318,12 @@ body.designing:not(.touch-ui) .designonly{display:flex}
   background:transparent;color:var(--dim);font-size:11px;letter-spacing:.1em;font-weight:700}
 /* the panel has grown a keyboard section, so let it use the height it needs */
 body:not(.touch-ui) #editpanel{width:min(94vw,458px);max-height:94vh;overflow:auto}
+#editpanel{overscroll-behavior:contain}
 
 /* ---------------- level designer ---------------- */
 #designsetup{position:fixed;inset:0;display:grid;place-items:center;z-index:22;padding:16px;
-  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 70%);overflow:auto}
+  background:radial-gradient(120% 100% at 50% 0%,#16202e 0%,#080b10 70%);
+  overflow:auto;overscroll-behavior:contain;touch-action:pan-y}
 #designsetup.hidden{display:none}
 #designsetup h2{font-size:20px;letter-spacing:.14em;text-transform:uppercase}
 #designsetup .panel{width:min(460px,100%)}

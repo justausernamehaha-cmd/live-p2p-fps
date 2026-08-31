@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  HALF_W, HALF_H, faceOf, fitPortal, overlapsPartner, assignHues, SOLO_PAIR, rayPortal
+  HALF_W, HALF_H, faceOf, fitPortal, overlapsMouth, assignHues, SOLO_PAIR, rayPortal
 } from './portal.js';
 
 // Everything you can see about a portal, and the ball that puts one there.
@@ -8,7 +8,10 @@ import {
 // without a browser; this one is the three.js half plus the bookkeeping of who
 // owns which pair.
 
-const BALL_SPEED = 78;        // fast enough to read as a shot, not a lob
+// Twice what it was, at the user's asking. It was fast enough to read as a shot
+// rather than a lob; now it barely reads as a flight at all, which is the point
+// — you look where you want a portal and it is there.
+const BALL_SPEED = 156;
 const BALL_RANGE = 220;       // beyond this it simply fizzles out
 const BALL_R = 0.09;          // "a perfect small ball"
 const BALL_STEP = 1.2;        // metres per collision query along its flight
@@ -200,9 +203,12 @@ export class PortalField {
     if (ball.ghost) { this.effects?.impact(hit.point, ball.dir); return; }
     const face = faceOf(hit);
     const fitted = face && fitPortal(face, hit.point, ball.dir);
-    const mine = this.pairs.get(ball.owner);
-    const partner = mine && mine[ball.side === 'a' ? 'b' : 'a'];
-    if (!fitted || (partner && overlapsPartner(fitted, partner))) {
+    // No mouth may be laid over any other, whoever it belongs to — not the
+    // shooter's own partner, and not somebody else's. The one it is replacing
+    // does not count: that piece of wall is about to be free again.
+    const replacing = this.pairs.get(ball.owner)?.[ball.side] || null;
+    const clash = fitted && this._all().some(q => q !== replacing && overlapsMouth(fitted, q));
+    if (!fitted || clash) {
       this._explode(hit.point || ball.pos, ball.color);
       return;
     }

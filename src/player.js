@@ -1,7 +1,7 @@
 import { clamp, lerp } from './util.js';
 import { aabbOverlap } from './world.js';
 import { capsulePush } from './solid.js';
-import { portalMap, atMouth, BODY_SAMPLES, HALF_W, HALF_H } from './portal.js';
+import { portalMap, atMouth, pierce, BODY_SAMPLES, HALF_W, HALF_H } from './portal.js';
 import {
   UP_Y, snapAxis, axisKey, axisSign, crossKeys, basisFor, lookFrom, anglesIn
 } from './frame.js';
@@ -64,7 +64,13 @@ const STEP_SMOOTH_MAX = 1.0;
 // ejects them across the whole box: walk into a four-metre wall and you end up
 // standing on top of it. A millimetre of clearance costs nothing and cannot.
 const SKIN = 1e-3;
-const MAX_PITCH = Math.PI / 2 - 0.01;
+// Straight up and straight down, exactly — at the user's asking. It used to stop
+// a hundredth of a radian short, because the camera was aimed with lookAt() and
+// lookAt takes its roll from an up vector it cannot use once the look direction
+// is parallel to it. The camera now builds its own basis from the player's yaw
+// (see Game._camera), which is defined at every pitch, so the limit is the real
+// one: past it you would be looking out of the back of your own head.
+const MAX_PITCH = Math.PI / 2;
 const CROUCH_TIME = 0.3;        // seconds to fully crouch or stand, so it cannot flicker
 // A portal is a hole in a wall that the wall does not know about. It used to be
 // a hole you were thrown through: the crossing was tested against a plane held a
@@ -127,6 +133,7 @@ export class Player {
     this.recoilYaw = 0;
     this.portals = null;      // set by the game: something with .links()
     this.straddling = null;   // the mouth the body is standing in, and its wall
+    this._inMouth = null;     // ...and which mouth that is, so it is not re-entered
     this._wasAt = new Map();  // last step's position in each mouth's own frame
     this.portalCount = 0;     // bumped on every traversal, for tests and effects
     this.upFrom = null;       // the up we are rolling out of, for the camera only
@@ -134,6 +141,7 @@ export class Player {
     this.rideVel = null;      // the platform underfoot, if any, and how fast it goes
     this.squashed = false;    // a platform closed on us: the game turns this into a death
     this.beingCrushed = false;// ...and this is the warning before it, for the HUD
+    this.escapes = 0;         // times the failsafe has had to fetch us back inside
   }
 
   /** Collision moves the body up a whole step at once; the view is dragged along
@@ -192,6 +200,7 @@ export class Player {
     this.upFrom = null;
     this.upBlend = 0;
     this.straddling = null;
+    this._inMouth = null;
     this._wasAt = new Map();
     this.height = HEIGHT;
     this.crouching = false;
@@ -467,8 +476,11 @@ export class Player {
    *  presses you into something solid and there is nowhere left to be pushed,
    *  that is the end of it.
    *
-   *  Only platforms crush. The level's own walls and ceilings have always been
-   *  there and have never killed anybody, and they are not going to start. */
+   *  Only platforms crush — but a platform is as dangerous carrying you as it is
+   *  bearing down on you. Ride a lift up into the ceiling and the gap closing on
+   *  your head is exactly the gap a lift coming down would close, and it kills
+   *  the same way. The level's own walls and ceilings never crush anybody on
+   *  their own: a ceiling only counts while something is driving you into it. */
   _crush() {
     this.beingCrushed = false;
     if (!this.alive || !this.world.movers || !this.world.movers.length) return;
@@ -479,20 +491,34 @@ export class Player {
     // and is the one way out of being crushed.
     const through = this._carvedMover();
 
-    // ---- something coming down on top of us
+    // ---- something coming down on top of us, or us coming up into something
     const k = this.upK, up = this.upS;
     const [KA, KB] = this.flatK;
+    // Are we being carried toward our own head? Then the ceiling is closing on
+    // us just as surely as if it were the thing moving, and the level's own
+    // roof counts along with every platform.
+    const carriedUp = !!this.rideVel &&
+      (this.rideVel[k] * up) > 0.05 && this.onGround;
     let lowest = Infinity;
+    const over = shape => {
+      if (this.pos[KA] + RADIUS <= shape.min[KA] || this.pos[KA] - RADIUS >= shape.max[KA]) return;
+      if (this.pos[KB] + RADIUS <= shape.min[KB] || this.pos[KB] - RADIUS >= shape.max[KB]) return;
+      // "above" is toward the head, which after a portal can be any direction
+      const near = up > 0 ? shape.min[k] : shape.max[k];
+      const gap = (near - this.pos[k]) * up;
+      if (gap <= 0.05) return;                             // not above us
+      if (gap < lowest) lowest = gap;
+    };
     for (const m of this.world.movers) {
       if (m === through) continue;
-      const s = m.shape;
-      if (this.pos[KA] + RADIUS <= s.min[KA] || this.pos[KA] - RADIUS >= s.max[KA]) continue;
-      if (this.pos[KB] + RADIUS <= s.min[KB] || this.pos[KB] - RADIUS >= s.max[KB]) continue;
-      // "above" is toward the head, which after a portal can be any direction
-      const near = up > 0 ? s.min[k] : s.max[k];
-      const over = (near - this.pos[k]) * up;
-      if (over <= 0.05) continue;                          // not above us
-      if (over < lowest) lowest = over;
+      over(m.shape);
+    }
+    if (carriedUp) {
+      // The lift is taking us somewhere, and what is over it is now our problem.
+      // Its own box is skipped: it is under our feet, not over our head, and the
+      // scan above already ignores anything not above us.
+      for (const b of this._boxes()) if (b.mover === undefined) over(b);
+      for (const q of (this._solids() || [])) over(q);
     }
     if (lowest < Infinity) {
       const headroom = lowest;
@@ -542,12 +568,20 @@ export class Player {
     }
   }
 
-  /** Overlapping anything that is not itself a moving platform. */
+  /** Overlapping anything that is not itself a moving platform — ramps and
+   *  turned boxes included. They were left out, and a corner fillet or a ramp is
+   *  exactly as unyielding to somebody being shoved into it as a wall is. */
   _overlapsStatic() {
     const a = this.aabb();
     for (const b of this._boxes()) {
       if (b.mover !== undefined) continue;
       if (aabbOverlap(a, b)) return true;
+    }
+    const [ax, ay, az, bx, by, bz] = this._capsule();
+    for (const s of (this._solids() || [])) {
+      if (s.mover !== undefined) continue;
+      if (!aabbOverlap(a, s)) continue;
+      if (capsulePush(ax, ay, az, bx, by, bz, RADIUS, s)) return true;
     }
     return false;
   }
@@ -684,40 +718,113 @@ export class Player {
     // have to see where the axis-aligned pass actually left the player
     this._resolveSolids();
 
-    // failsafe: never let a player leak out of the arena
-    if (this.pos.y < -20) { this.pos.y = 10; this.vel.y = 0; }
+    // Anything the body is still inside is an overlap it did not walk into —
+    // _axis() gives a move back rather than ejecting across a box, and a portal
+    // can hand you over into a wall. Out the short way, every step, so it can
+    // never be carried into the next one and compound.
+    if (this._overlaps(this._boxes())) this._unstick();
+
+    this._failsafe(dt);
+  }
+
+  /** Never let a player leak out of the level.
+   *
+   *  This used to be `pos.y < -20`, which only catches falling down the world's
+   *  own y. Gravity follows the body through a portal, so somebody standing on a
+   *  wall who gets out of the room leaves *sideways* and falls forever with y
+   *  barely changing — and nothing ever fetched them back.
+   *
+   *  Being high up is not a fault and is never caught here: the room has a lid,
+   *  but a level need not, and gravity brings anyone above it home on its own.
+   *  Being far outside it sideways, or far below it, is a fault — and only once
+   *  it has lasted, so that nothing transient during a hand-over is mistaken for
+   *  one. */
+  _failsafe(dt = 0) {
+    const b = this.world.bounds;
+    if (!b) return;
+    const M = 25;
+    const lost = this.pos.x < b.min.x - M || this.pos.x > b.max.x + M ||
+                 this.pos.z < b.min.z - M || this.pos.z > b.max.z + M ||
+                 this.pos.y < b.min.y - M;
+    if (!lost) { this._lostFor = 0; return; }
+    this._lostFor = (this._lostFor || 0) + Math.max(dt, 1 / 120);
+    if (this._lostFor < 1.5) return;
+    this._lostFor = 0;
+    const p = this.world.randomSpawn();
+    this.pos = { x: p.x, y: p.y, z: p.z };
+    this.vel = { x: 0, y: 0, z: 0 };
+    this.up = UP_Y;
+    this.upFrom = null;
+    this.upBlend = 0;
+    this.straddling = null;
+    this._wasAt = new Map();
+    this.onGround = false;
+    this.escapes++;
+    this.spawnSeq++;      // peers must not interpolate across the recovery
   }
 
   /** The level, as collision sees it this instant.
    *
    *  Which is not quite the level: a portal is a hole the wall does not know
-   *  about, and a body standing in one is inside that wall. The piece of world
-   *  carrying the mouth is taken out for exactly as long as the body is in the
-   *  mouth, so it can be half through instead of being stopped by a surface that
-   *  is not there any more. Nothing else is touched, and the body can never be
-   *  more than a radius past the plane before the crossing hands it over — so
-   *  the hole cannot be walked *along*, only through. */
+   *  about, and a body standing in one is inside that wall. So the wall carrying
+   *  the mouth is replaced, for as long as the body is in the mouth, by the
+   *  pieces of itself left around the hole — see pierce() in portal.js, which
+   *  also lists the three ways out of the map that came from taking the whole
+   *  wall away instead.
+   *
+   *  The opening is widened by PORTAL_CONTACT so it is never narrower than the
+   *  reach that decides a body is in the mouth: a hole the body is judged to be
+   *  in but cannot fit through would stop the traversal dead against its own
+   *  rim. */
   _boxes() {
-    const carve = this.straddling && this.straddling.host;
+    const st = this.straddling;
+    const carve = st && st.host;
     if (!carve) return this.world.boxes;
     if (!this.world.boxes.includes(carve)) return this.world.boxes;
-    if (this._carvedBoxes && this._carvedFor === carve) return this._carvedBoxes;
+    const p = st.link.from;
+    // The mouth can be on a moving platform, and then both it and its host move
+    // every frame; the stamp is what notices.
+    const stamp = p.c.x + p.c.y * 3 + p.c.z * 7 +
+                  carve.min.x + carve.min.y * 3 + carve.min.z * 7;
+    if (this._carvedBoxes && this._carvedFor === carve && this._carvedPortal === p &&
+        this._carvedStamp === stamp) return this._carvedBoxes;
     this._carvedFor = carve;
+    this._carvedPortal = p;
+    this._carvedStamp = stamp;
     this._carvedBoxes = this.world.boxes.filter(b => b !== carve);
+    for (const piece of pierce(carve, p, PORTAL_CONTACT)) this._carvedBoxes.push(piece);
     return this._carvedBoxes;
   }
 
   /** The same, for the ramps and turned boxes: a mouth can be cut into one of
-   *  those too. */
+   *  those too.
+   *
+   *  A convex solid cannot be pierced the way a box can — what is left of a
+   *  wedge around a hole is not convex — so this one is still taken away whole.
+   *  It is gated instead: the solid only vanishes once the *middle* of the body
+   *  is genuinely over the oval, rather than as soon as any part of it is near
+   *  the rim. Standing on a ramp beside a mouth cut into it therefore stays
+   *  standing on a ramp. A push-out cannot fling anyone the length of a wall the
+   *  way _axis() could, so this is the whole of the fix that side needs. */
   _solids() {
-    const carve = this.straddling && this.straddling.host;
+    const st = this.straddling;
+    const carve = st && st.host;
     const solids = this.world.solids;
     if (!carve || !solids || !solids.length) return solids;
     if (!solids.includes(carve)) return solids;
+    if (!this._overOval(st.link.from)) return solids;
     if (this._carvedSolids && this._carvedSolidFor === carve) return this._carvedSolids;
     this._carvedSolidFor = carve;
     this._carvedSolids = solids.filter(x => x !== carve);
     return this._carvedSolids;
+  }
+
+  /** Is the middle of the body actually over the hole, rather than merely near
+   *  it? Widened by the body's radius, the same way the mouth itself is. */
+  _overOval(p) {
+    const l = this._localOf(p, this._middle());
+    const su = l.u / (HALF_W + PORTAL_EDGE), sv = l.v / (HALF_H + PORTAL_EDGE);
+    return su * su + sv * sv <= 1;
   }
 
   /** How fast the body is moving *relative to a mouth*. Only differs from its
@@ -803,11 +910,37 @@ export class Player {
       const p = link.from;
       const v = this._relativeTo(p);
       const closing = Math.max(0, -(v.x * p.n.x + v.y * p.n.y + v.z * p.n.z));
-      if (!this._atMouth(p, PORTAL_CONTACT + closing * dt)) continue;
+      const reach = PORTAL_CONTACT + closing * dt;
+      if (!this._atMouth(p, reach)) continue;
+      // A portal is a hole in *one side* of a wall. Standing on the far side of
+      // the wall, directly behind the mouth, must not open that wall up: that is
+      // walking through a wall, not through a portal. So a mouth can only ever
+      // be entered from in front of it — and once you are in it you stay in it,
+      // because a body wholly behind the surface is the ordinary case one step
+      // later, and losing the mouth there would shut the wall on you.
+      if (this._inMouth !== p && !this._nearFront(p, reach)) continue;
       const d = Math.abs((e.x - p.c.x) * p.n.x + (e.y - p.c.y) * p.n.y + (e.z - p.c.z) * p.n.z);
       if (d < bestD) { bestD = d; best = link; }
     }
+    this._inMouth = best ? best.from : null;
     return best ? { link: best, host: this.world.hostFor(best.from) } : null;
+  }
+
+  /** Is any part of the body at the front of this mouth — on the outside of the
+   *  surface, or no more than a shoulder's depth into it? */
+  _nearFront(p, reach) {
+    for (const frac of PORTAL_SAMPLES) {
+      const h = this.height * frac;
+      const dx = this.pos.x + this.up.x * h - p.c.x;
+      const dy = this.pos.y + this.up.y * h - p.c.y;
+      const dz = this.pos.z + this.up.z * h - p.c.z;
+      const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
+      if (d > reach || d < -RADIUS) continue;
+      const su = (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + PORTAL_EDGE);
+      const sv = (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + PORTAL_EDGE);
+      if (su * su + sv * sv <= 1) return true;
+    }
+    return false;
   }
 
   /** Walk into one mouth and out of the other, without ever being teleported.
@@ -845,27 +978,56 @@ export class Player {
     //    somebody standing still crosses them; measuring only the player's own
     //    step sees no crossing at all, and the mouth's movement between frames
     //    jumps the sign without ever being caught inside one.
-    const mid = this._middle();
+    // Two points down the body decide a crossing: the eye and the middle,
+    // whichever reaches the far side of the surface first.
+    //
+    // The eye is there because it is what the player is: "everything should use
+    // my camera as the thinking point, since that's what I see". A mouth on the
+    // underside of a rising platform is the case that needs it — stand under one
+    // and it is your head that goes in, and asking the *middle* of the body to
+    // get past a ceiling means half of you is inside the platform before
+    // anything happens, which from behind the eye looks like the portal simply
+    // not working.
+    //
+    // The middle stays because it is what a mouth lying on a slope needs: the
+    // eye getting below a tilted plane means sinking an eye-height into the
+    // hill, and the ground underneath stops you at about half of that. Taking
+    // whichever comes first can only ever hand you over earlier, never later.
+    const at = { eye: this._eyePhys(), mid: this._middle() };
     const seen = new Map();
     let crossed = null;
     for (const link of links) {
       const p = link.from;
-      const cur = this._localOf(p, mid);
+      const cur = { eye: this._localOf(p, at.eye), mid: this._localOf(p, at.mid) };
       seen.set(p, cur);
       // With no sample from last step — the first one after a mouth is created —
       // step backwards to make one. That frame is exactly the expensive frame,
       // because the mouth's render target is being built on it, and a player
       // walking through a portal the instant it appears would otherwise cross it
       // in a single unwatched step and come out the other side of nothing.
-      const was = this._wasAt.get(p) || this._localOf(p, this._back(p, mid, dt));
-      // only going in. Coming back out of the surface is how you leave a mouth
-      // you are standing in, and it must not send you anywhere.
-      if (crossed || !was || was.d < 0 || cur.d >= 0) continue;
-      const t = was.d - cur.d > 1e-12 ? was.d / (was.d - cur.d) : 0;
-      const su = (was.u + (cur.u - was.u) * t) / (HALF_W + PORTAL_EDGE);
-      const sv = (was.v + (cur.v - was.v) * t) / (HALF_H + PORTAL_EDGE);
-      if (su * su + sv * sv > 1) continue;      // crossed the wall, not the hole
-      crossed = link;
+      const prev = this._wasAt.get(p);
+      const was = prev || {
+        eye: this._localOf(p, this._back(p, at.eye, dt)),
+        mid: this._localOf(p, this._back(p, at.mid, dt))
+      };
+      if (crossed) continue;
+      for (const which of ['eye', 'mid']) {
+        const a = was[which], b = cur[which];
+        // only going in. Coming back out of the surface is how you leave a mouth
+        // you are standing in, and it must not send you anywhere.
+        if (!a || a.d < 0 || b.d >= 0) continue;
+        const t = a.d - b.d > 1e-12 ? a.d / (a.d - b.d) : 0;
+        const su = (a.u + (b.u - a.u) * t) / HALF_W;
+        const sv = (a.v + (b.v - a.v) * t) / HALF_H;
+        // Crossed the wall, not the hole. The oval is taken at its own size
+        // here, not widened by a body radius as it once was: the wall now has a
+        // hole in it the shape of the mouth (see pierce()), so anything
+        // collision let this far is inside the oval already, and anything else
+        // has no business being handed over.
+        if (su * su + sv * sv > 1) continue;
+        crossed = link;
+        break;
+      }
     }
     this._wasAt = seen;
     if (!crossed) return false;
@@ -971,25 +1133,41 @@ export class Player {
     const boxes = this._boxes();
     for (let i = 0; i < passes; i++) {
       const a = this.aabb();
-      let best = null;
+      const cands = [];
       for (const b of boxes) {
         if (!aabbOverlap(a, b)) continue;
         for (const k of ['x', 'y', 'z']) {
-          const up = b.max[k] - a.min[k];        // move + to clear it
-          const dn = a.max[k] - b.min[k];        // move - to clear it
-          const positive = up < dn;
-          let depth = positive ? up : dn;
-          // a nudge in the direction the portal faces is worth a little more
-          // than one across it, all else being close
-          if (prefer && Math.abs(prefer[k]) > 0.5 &&
-              (prefer[k] > 0) === positive) depth *= 0.75;
-          if (!best || depth < best.depth) {
-            best = { k, depth, amount: positive ? up + SKIN : -(dn + SKIN) };
+          const up = b.max[k] - a.min[k] + SKIN;    // move + to clear it
+          const dn = a.max[k] - b.min[k] + SKIN;    // move - to clear it
+          for (const amount of [up, -dn]) {
+            let cost = Math.abs(amount);
+            // a nudge in the direction the portal faces is worth a little more
+            // than one across it, all else being close
+            if (prefer && Math.abs(prefer[k]) > 0.5 &&
+                (prefer[k] > 0) === (amount > 0)) cost *= 0.75;
+            cands.push({ k, amount, cost });
           }
         }
       }
-      if (!best) return true;
-      this.pos[best.k] += best.amount;
+      if (!cands.length) return true;
+      cands.sort((x, y) => x.cost - y.cost);
+      // The shortest way out that actually *is* out. The rule used to be the
+      // shallowest axis of whichever box, taken blind — and the shallowest way
+      // out of one box is very often straight into the next one, which on the
+      // following pass is shallowest back the way it came. A body lying across
+      // the foot of a wall was shoved between the wall and the floor for as long
+      // as it lived, going nowhere. Trying each candidate costs a few box tests
+      // and only ever runs on a body that is already somewhere it should not be.
+      let chosen = cands[0];
+      for (const c of cands) {
+        const was = this.pos[c.k];
+        this.pos[c.k] += c.amount;
+        const clear = !this._overlaps(boxes);
+        this.pos[c.k] = was;
+        if (clear) { chosen = c; break; }
+      }
+      this.pos[chosen.k] += chosen.amount;
+      if (!this._overlaps(boxes)) return true;
     }
     return !this._overlaps(boxes);
   }
@@ -1082,17 +1260,29 @@ export class Player {
   // corner. The fillets stay: they are still the only walkable surface between
   // a wall and a floor, and a mouth goes on one perfectly well.
 
-  /** move along one axis and push out of anything hit; returns true if blocked */
+  /** Move along one axis and push out of anything hit; returns true if blocked.
+   *
+   *  A move of `amount` can only ever be corrected by `amount`. Anything deeper
+   *  than that is an overlap the move did not cause — the body was already
+   *  inside the box — and pushing clear of the *whole* box then throws it out
+   *  the far side: the room's own walls are a hundred and twenty metres long,
+   *  so one step inside one is one step from being outside the map. Give the
+   *  move back instead and leave the overlap to _unstick(), which goes out the
+   *  short way. Blocked either way, which is the truthful answer. */
   _axis(axis, amount, boxes) {
     if (amount === 0) return false;
+    const before = this.pos[axis];
+    const cap = Math.abs(amount) + SKIN * 4;
     this.pos[axis] += amount;
     let blocked = false;
     for (const b of boxes) {
       const a = this.aabb();
       if (!aabbOverlap(a, b)) continue;
       blocked = true;
-      if (amount > 0) this.pos[axis] -= (a.max[axis] - b.min[axis]) + SKIN;
-      else this.pos[axis] += (b.max[axis] - a.min[axis]) + SKIN;
+      const push = amount > 0 ? -((a.max[axis] - b.min[axis]) + SKIN)
+                              : (b.max[axis] - a.min[axis]) + SKIN;
+      if (Math.abs(push) > cap) { this.pos[axis] = before; return true; }
+      this.pos[axis] += push;
     }
     return blocked;
   }

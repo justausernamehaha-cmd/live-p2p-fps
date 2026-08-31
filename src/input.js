@@ -164,7 +164,7 @@ export class Input {
     this.textMode = false;          // chat box has focus: swallow game keys
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     this.keyboardSeen = false;
-    this.editMode = false;   // while true the touch buttons are being rearranged
+    this._editMode = false;  // while true the touch buttons are being rearranged
     this.onKeyboardDetected = null;
     this.onAction = null;           // for UI-only buttons (chat / score / weapon)
     this.sensitivity = Number(localStorage.getItem('pa.sens')) || 1;
@@ -183,14 +183,32 @@ export class Input {
       }
     });
 
-    this._touchMove = null;         // {id, ox, oy}
-    this._touchLook = null;         // {id, x, y}
+    // Every finger currently on the glass, by pointerId. Nothing about touch is
+    // remembered outside this map, and every way a finger can go away drops its
+    // entry — see _bindTouchEnd() for why that took four separate backstops.
+    this._touch = new Map();
+    this._touchSeq = 0;
     this._mouseDrag = null;
 
     this._bindKeyboard();
     this._bindMouse();
     this._bindTouch();
+    this._bindTouchEnd();
     this._bindButtons();
+  }
+
+  /** Entering the layout editor takes the buttons away from the game, and a
+   *  finger that was already on one has to be let go of on the way in. It used
+   *  not to be: the buttons' own pointerup handler returns early while editing,
+   *  so the release never happened, and the look pad — which was owned by
+   *  whichever pointer claimed it first — stayed owned by a finger that was no
+   *  longer there. From then on the view could not be turned at all. */
+  get editMode() { return this._editMode; }
+  set editMode(v) {
+    const on = !!v;
+    if (on === this._editMode) return;
+    this._editMode = on;
+    this.dropTouches();
   }
 
   // ---------------------------------------------------------------- keyboard
@@ -242,10 +260,16 @@ export class Input {
     const release = () => {
       this.held.clear();
       this._mouseHeld.clear();
+      // Fingers go too. A phone that is put down, or swapped away from, with a
+      // thumb still on the glass delivers no pointerup at all — and the stick
+      // was left frozen at whatever it last read, walking the player into a
+      // wall with nothing able to take the controls back.
+      this.dropTouches();
       for (const a of this.toggled) this.held.add(a);   // a toggle is a state, not a key
       this._recalcKeys();
     };
     addEventListener('blur', release);
+    addEventListener('pagehide', release);
     addEventListener('visibilitychange', () => { if (document.hidden) release(); });
     this.releaseAll = release;
   }
@@ -487,11 +511,85 @@ export class Input {
   }
 
   // ------------------------------------------------------------------- touch
-  _bindTouch() {
-    const stickEl = document.getElementById('stick');
-    const base = document.getElementById('stickbase');
-    const knob = document.getElementById('stickknob');
+  //
+  // One finger is one entry in `this._touch`, and every entry has a role: it is
+  // driving the thumbstick, driving the look pad, or merely holding a button
+  // down. The roles used to be two singletons — `_touchMove` and `_touchLook` —
+  // each claimed by the first finger to ask and released only by an event
+  // carrying that same pointerId. That is the bug this rewrite is for. Miss one
+  // release and the slot was owned forever by a finger that had left the glass:
+  // the stick stayed frozen at whatever it last read, walking the player into a
+  // wall, and no later finger could ever look or move again, because the slot it
+  // needed was still taken. Backgrounding the tab mid-drag does exactly that on
+  // a phone, and so does opening the layout editor with a thumb on FIRE.
+  //
+  // Now nothing is remembered outside the map, and the map is reconciled
+  // against the browser's own count of fingers on the screen.
 
+  _stickEls() {
+    if (!this._sticky) {
+      this._sticky = {
+        el: document.getElementById('stick'),
+        base: document.getElementById('stickbase'),
+        knob: document.getElementById('stickknob')
+      };
+    }
+    return this._sticky;
+  }
+
+  /** Start tracking a finger. `role` is 'stick', 'look' or 'none'. */
+  _touchAdd(e, role, extra = {}) {
+    if (this._touch.has(e.pointerId)) return this._touch.get(e.pointerId);
+    const t = {
+      id: e.pointerId, role, seq: ++this._touchSeq, seen: now(),
+      ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY,
+      btn: null, el: null, ...extra
+    };
+    this._touch.set(e.pointerId, t);
+    return t;
+  }
+
+  /** Stop tracking one, whatever it was doing. Safe to call for a pointer that
+   *  is not tracked, which is what makes the several backstops harmless. */
+  _touchDrop(id) {
+    const t = this._touch.get(id);
+    if (!t) return;
+    this._touch.delete(id);
+    if (t.role === 'stick') {
+      this.stick.x = this.stick.y = 0;
+      this._stickEls().el?.classList.remove('on');
+    }
+    if (t.el) t.el.classList.remove('held');
+    if (t.btn) this.release(t.btn);
+  }
+
+  /** Every finger gone, and everything they were holding released. */
+  dropTouches() {
+    for (const id of [...this._touch.keys()]) this._touchDrop(id);
+    this.stick.x = this.stick.y = 0;
+    this._stickEls().el?.classList.remove('on');
+  }
+
+  /** The finger driving the stick, if there is one. */
+  _stickTouch() {
+    for (const t of this._touch.values()) if (t.role === 'stick') return t;
+    return null;
+  }
+
+  /** The finger driving the view: the first one to claim it that is still on the
+   *  glass. First-wins is the right feel — pressing JUMP with a second thumb
+   *  must not steal the view from the one already dragging — and it is safe now
+   *  only because a finger that has gone is no longer in the map to win. */
+  _lookTouch() {
+    let best = null;
+    for (const t of this._touch.values()) {
+      if (t.role === 'look' && (!best || t.seq < best.seq)) best = t;
+    }
+    return best;
+  }
+
+  _bindTouch() {
+    const { el: stickEl, base, knob } = this._stickEls();
     const place = (el, x, y) => { el.style.left = x + 'px'; el.style.top = y + 'px'; };
 
     this.canvas.addEventListener('pointerdown', e => {
@@ -499,8 +597,8 @@ export class Input {
       e.preventDefault();
       const leftZone = e.clientX < innerWidth * 0.45;
       // Once a keyboard is driving movement the whole screen becomes a look pad.
-      if (leftZone && !this._touchMove && !this.keyboardSeen) {
-        this._touchMove = { id: e.pointerId, ox: e.clientX, oy: e.clientY };
+      if (leftZone && !this._stickTouch() && !this.keyboardSeen) {
+        this._touchAdd(e, 'stick');
         stickEl.classList.add('on');
         place(base, e.clientX, e.clientY);
         place(knob, e.clientX, e.clientY);
@@ -512,30 +610,56 @@ export class Input {
     this.canvas.addEventListener('pointermove', e => {
       if (e.pointerType !== 'touch') return;
       e.preventDefault();
-      if (this._touchMove && this._touchMove.id === e.pointerId) {
-        let dx = e.clientX - this._touchMove.ox;
-        let dy = e.clientY - this._touchMove.oy;
+      const t = this._touch.get(e.pointerId);
+      if (t) t.seen = now();
+      if (t && t.role === 'stick') {
+        let dx = e.clientX - t.ox;
+        let dy = e.clientY - t.oy;
         const len = Math.hypot(dx, dy);
         if (len > STICK_RADIUS) { dx *= STICK_RADIUS / len; dy *= STICK_RADIUS / len; }
-        place(knob, this._touchMove.ox + dx, this._touchMove.oy + dy);
+        place(knob, t.ox + dx, t.oy + dy);
         this.stick.x = clamp(dx / STICK_RADIUS, -1, 1);
         this.stick.y = clamp(-dy / STICK_RADIUS, -1, 1);
       } else {
         this.lookMove(e);
       }
     }, { passive: false });
+  }
 
-    const end = e => {
-      if (e.pointerType !== 'touch') return;
-      if (this._touchMove && this._touchMove.id === e.pointerId) {
-        this._touchMove = null;
-        this.stick.x = this.stick.y = 0;
-        stickEl.classList.remove('on');
+  /** Four ways a finger stops counting, because one is not enough.
+   *
+   *  1. Its own pointerup or pointercancel — but taken on the *window*, in the
+   *     capture phase. The listeners used to sit on the canvas and on each
+   *     button, so a release that landed anywhere else was simply never seen:
+   *     on an element removed from the page, on the HUD, or on a button whose
+   *     own handler calls stopPropagation.
+   *  2. The window losing focus, or the tab being hidden. A phone delivers no
+   *     release at all when it goes to the home screen with a thumb down, and
+   *     that is the commonest way this ever went wrong.
+   *  3. The layout editor opening — see the editMode setter.
+   *  4. And a reconcile against TouchEvent.touches, which is the browser's own
+   *     authoritative list of fingers on the glass. If we are tracking more
+   *     fingers than there are, the extras are ghosts, and the least recently
+   *     active go first. touchmove fires constantly, so a ghost that survived
+   *     everything above is reaped the moment the player does anything at all.
+   */
+  _bindTouchEnd() {
+    const end = e => { if (e.pointerType === 'touch') this._touchDrop(e.pointerId); };
+    addEventListener('pointerup', end, true);
+    addEventListener('pointercancel', end, true);
+
+    const reconcile = e => {
+      const live = e.touches ? e.touches.length : 0;
+      if (this._touch.size <= live) return;
+      const stale = [...this._touch.values()].sort((a, b) => a.seen - b.seen || a.seq - b.seq);
+      for (const t of stale) {
+        if (this._touch.size <= live) break;
+        this._touchDrop(t.id);
       }
-      this.lookEnd(e);
     };
-    this.canvas.addEventListener('pointerup', end);
-    this.canvas.addEventListener('pointercancel', end);
+    for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+      addEventListener(type, reconcile, { capture: true, passive: true });
+    }
   }
 
   /** A press. In hold mode the action stays on while the input is down; in
@@ -712,22 +836,24 @@ export class Input {
   /** Touch aiming, usable from the canvas or from on top of a button. A finger
    *  that starts on FIRE must still be able to drag the view — on a phone that
    *  is the same thumb doing both. */
-  lookStart(e) {
-    if (!this._touchLook) this._touchLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
-  }
+  lookStart(e) { this._touchAdd(e, 'look'); }
 
   lookMove(e) {
-    const l = this._touchLook;
-    if (!l || l.id !== e.pointerId) return;
-    this.lookDX += (e.clientX - l.x) * TOUCH_SENS * this.sensitivity;
-    this.lookDY += (e.clientY - l.y) * TOUCH_SENS * this.sensitivity;
+    const l = this._touch.get(e.pointerId);
+    if (!l || l.role !== 'look') return;
+    l.seen = now();
+    // Only the finger that owns the view turns it. A second one still has its
+    // position followed, so when the first leaves it takes over from where it
+    // actually is rather than jumping the view by however far it has drifted.
+    if (this._lookTouch() === l) {
+      this.lookDX += (e.clientX - l.x) * TOUCH_SENS * this.sensitivity;
+      this.lookDY += (e.clientY - l.y) * TOUCH_SENS * this.sensitivity;
+    }
     l.x = e.clientX;
     l.y = e.clientY;
   }
 
-  lookEnd(e) {
-    if (this._touchLook && this._touchLook.id === e.pointerId) this._touchLook = null;
-  }
+  lookEnd(e) { this._touchDrop(e.pointerId); }
 
   // --------------------------------------------------------- on-screen buttons
   _bindButtons() {
@@ -742,9 +868,16 @@ export class Input {
         e.preventDefault();
         e.stopPropagation();
         el.classList.add('held');
-        if (UI_ONLY.has(name)) { this.onAction?.(name); return; }
-        this.press(name);
-        if (aimable && e.pointerType === 'touch') this.lookStart(e);
+        if (UI_ONLY.has(name)) this.onAction?.(name);
+        else this.press(name);
+        // A finger on a button is tracked like any other, so whatever it is
+        // holding is let go of by whichever backstop sees it leave — not only
+        // by this element's own pointerup, which is exactly the release that
+        // used to go missing.
+        if (e.pointerType === 'touch') {
+          this._touchAdd(e, aimable ? 'look' : 'none',
+                         { btn: UI_ONLY.has(name) ? null : name, el });
+        }
       });
 
       el.addEventListener('pointermove', e => {
@@ -753,12 +886,15 @@ export class Input {
       });
 
       const up = e => {
-        if (this.editMode) return;
         e.stopPropagation();
+        // The release is unconditional. It used to return early while the
+        // layout editor was open, which left the action held and the look pad
+        // owned by a finger nobody was ever going to hear from again.
+        if (e.pointerType === 'touch') { this._touchDrop(e.pointerId); return; }
         el.classList.remove('held');
+        if (this.editMode) return;
         if (name === 'score') this.onAction?.('scoreoff');
         if (!UI_ONLY.has(name)) this.release(name);
-        this.lookEnd(e);
       };
       el.addEventListener('pointerup', up);
       el.addEventListener('pointercancel', up);
