@@ -74,6 +74,10 @@ const MOUSE_SENS = 0.0022;   // radians per pixel
 const TOUCH_SENS = 0.0042;
 const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
 const STICK_RADIUS = 62;
+// How far a finger must travel before it counts as aiming rather than resting.
+// Nothing is lost below it: the move that crosses it is measured from where the
+// finger first landed.
+const TOUCH_DRAG_SLOP = 5;   // pixels
 const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
 const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
 // A locked pointer gets warped back to the centre of the screen by the browser,
@@ -549,6 +553,7 @@ export class Input {
     const t = {
       id: e.pointerId, role, seq: ++this._touchSeq, seen: now(),
       ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY,
+      drag: false, dseq: 0,   // aiming yet, and the order it started aiming in
       btn: null, el: null, ...extra
     };
     this._touch.set(e.pointerId, t);
@@ -582,14 +587,18 @@ export class Input {
     return null;
   }
 
-  /** The finger driving the view: the first one to claim it that is still on the
-   *  glass. First-wins is the right feel — pressing JUMP with a second thumb
-   *  must not steal the view from the one already dragging — and it is safe now
-   *  only because a finger that has gone is no longer in the map to win. */
+  /** The finger driving the view: the first one to start *dragging* that is
+   *  still on the glass. First-wins is the right feel — pressing JUMP with a
+   *  second thumb must not steal the view from the one already dragging — but
+   *  the order that matters is the order they began to aim, not the order they
+   *  landed. Ranking by landing order handed the view to a thumb parked on FIRE,
+   *  which never moves, so the other thumb's drags were followed and thrown
+   *  away: hold a button and the view could not be turned at all. A finger that
+   *  has gone is not in the map to win either way. */
   _lookTouch() {
     let best = null;
     for (const t of this._touch.values()) {
-      if (t.role === 'look' && (!best || t.seq < best.seq)) best = t;
+      if (t.role === 'look' && t.drag && (!best || t.dseq < best.dseq)) best = t;
     }
     return best;
   }
@@ -848,10 +857,21 @@ export class Input {
     const l = this._touch.get(e.pointerId);
     if (!l || l.role !== 'look') return;
     l.seen = now();
+    // A finger claims the view only once it has actually moved. Holding a
+    // button is not aiming, and a resting thumb that counted as the owner shut
+    // every other finger out of the view. Crossing the slop rewinds the
+    // reference point to where the finger landed, so the travel so far is paid
+    // out rather than lost.
+    if (!l.drag && Math.hypot(e.clientX - l.ox, e.clientY - l.oy) > TOUCH_DRAG_SLOP) {
+      l.drag = true;
+      l.dseq = ++this._touchSeq;
+      l.x = l.ox;
+      l.y = l.oy;
+    }
     // Only the finger that owns the view turns it. A second one still has its
     // position followed, so when the first leaves it takes over from where it
     // actually is rather than jumping the view by however far it has drifted.
-    if (this._lookTouch() === l) {
+    if (l.drag && this._lookTouch() === l) {
       this.lookDX += (e.clientX - l.x) * TOUCH_SENS * this.sensitivity;
       this.lookDY += (e.clientY - l.y) * TOUCH_SENS * this.sensitivity;
     }

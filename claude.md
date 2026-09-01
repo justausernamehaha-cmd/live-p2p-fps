@@ -48,7 +48,7 @@ against the live site.
 | `clipping.mjs` | the four hand-reported ways a portal put a body inside a wall or outside the map |
 | `platforms.mjs` | brushing past a platform, standing behind one, and a mouth on the underside of a descending lift |
 | `tilted.mjs` | gravity rotated 45°: a body at 45° lands, walks where its camera looks, falls the way its feet point |
-| `touch.mjs` | a finger that leaves without a release can never take the controls with it |
+| `touch.mjs` | a finger that leaves without a release can never take the controls with it, and a thumb parked on a button never owns the view |
 | `rooms.mjs` | two real pages: an empty room is made, an existing one is joined behind a shield, and leaving works |
 
 ## Things worth not rediscovering
@@ -573,6 +573,41 @@ The scan's clock runs from when the room was **opened**, not from when CONNECT
 was pressed: the pre-join usually opened it while the name was still being typed.
 Every test therefore waits for `game.running` rather than for a fixed number of
 milliseconds — that change alone broke half the suite when the scan went in.
+
+## A parked thumb is not aiming — 2026-09-01
+
+Reported: *"on mobile, if I first hold a button, I can't drag my view with
+another finger."* Exactly true, and the cause is one comparison.
+
+Every action button doubles as a look pad, because on a phone the thumb on FIRE
+is the same thumb that aims. So a finger that lands on a button is added to
+`_touch` with the role `look`, like a finger on the canvas. `_lookTouch()` then
+picked the owner of the view as the **earliest finger to land** — first-wins, so
+that pressing JUMP mid-drag could not snatch the view away from the thumb already
+turning it.
+
+The thumb holding FIRE lands first and never moves. It owned the view for as long
+as the button was held, and the other finger's drags were dutifully followed —
+`lookMove` keeps every look finger's position up to date so a hand-over does not
+jump the view — and then thrown away. Nothing turned.
+
+Landing order was the wrong order. What matters is the order fingers **began to
+aim**: a look finger only becomes a candidate once it has travelled more than
+`TOUCH_DRAG_SLOP` (5 px) from where it landed, and it is ranked by when it
+crossed that, not by when it arrived. A thumb resting on a button is never a
+candidate; a thumb that starts to drag from a button still is; and a second
+finger pressing a button mid-drag still cannot steal the view, because it has not
+started aiming and the finger already turning has the earlier drag order.
+
+Crossing the slop rewinds the finger's reference point to where it landed, so the
+travel already made is paid out rather than lost — there is no dead zone, only a
+deferred one. Measured: the second finger's 120 px drag turns the view 0.504 rad,
+to the digit the same as a plain canvas drag and the same as the button thumb's
+own drag.
+
+`test/touch.mjs` grew a fifth case, watched go red first (`otherFingerTurns: 0`,
+then `0.504`), which also asserts the button stays held through the other
+finger's drag and that the button's own finger can still aim.
 
 ## Things that were reported and are not obvious
 

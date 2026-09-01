@@ -128,6 +128,31 @@ const R = await page.evaluate(async () => {
   };
   clean();
 
+  // ------------------------- 5. a parked thumb must not own the view pad
+  // "If I first hold a button, I can't drag my view with another finger."
+  // A finger on FIRE is a look pad as well, because on a phone that is the same
+  // thumb doing both — but it is not aiming while it sits still, and the view
+  // used to go to whichever look finger landed first, for as long as it stayed.
+  clean();
+  out.buttonThenDrag = {};
+  ev('pointerdown', 13, 200, 500, fire);
+  await sleep(60);
+  out.buttonThenDrag.fireHeld = g.input.down('fire');
+  out.buttonThenDrag.otherFingerTurns = await yawMoved(14, 600);
+  out.buttonThenDrag.fireStillHeld = g.input.down('fire');
+  ev('pointerup', 13, 200, 500, fire);
+  await sleep(60);
+  // ...and the thumb on the button still aims when it is the one that moves.
+  {
+    const before = g.player.yaw;
+    ev('pointerdown', 15, 200, 500, fire);
+    for (let i = 1; i <= 5; i++) { ev('pointermove', 15, 200 + i * 24, 500, fire); await sleep(20); }
+    await sleep(60);
+    ev('pointerup', 15, 320, 500, fire);
+    out.buttonThenDrag.buttonFingerTurns = round(Math.abs(g.player.yaw - before));
+  }
+  clean();
+
   // ------------------------------------------------ and ordinary aiming works
   out.plainLook = await yawMoved(11, 600);
   out.plainStick = await stickMoved(12);
@@ -160,6 +185,13 @@ if (R.ghostReaped.thenANewFinger < 0.3)
 if (R.editorLeak.fireStillHeld) fail.push('FIRE stayed held through the layout editor');
 if (!turns(R.editorLeak.thenANewFinger))
   fail.push('opening the layout editor with a thumb on a button killed the look pad');
+if (!R.buttonThenDrag.fireHeld) fail.push('a finger on FIRE did not hold fire');
+if (!turns(R.buttonThenDrag.otherFingerTurns))
+  fail.push('a second finger cannot turn the view while a button is held');
+if (!R.buttonThenDrag.fireStillHeld)
+  fail.push('dragging with a second finger let go of the held button');
+if (!turns(R.buttonThenDrag.buttonFingerTurns))
+  fail.push('the finger on the button can no longer drag the view itself');
 
 console.log(JSON.stringify(R, null, 2));
 console.log('page errors:', errs.length ? errs : 'none');
