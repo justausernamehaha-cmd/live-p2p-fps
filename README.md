@@ -48,9 +48,9 @@ same one. All three are public infrastructure that only carries the handshake.
 | Left / right portal | left / right click | `LEFT PORTAL` / `RIGHT PORTAL` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
-| Sprint | `Shift` | `SPRINT`, or push the stick to its edge |
+| Sprint | `Shift` | `SPRINT` |
 | Reload | `R` | `RELOAD` |
-| Weapons | `1` `2` `3` `4`, wheel, `Q` | `WEAPON` |
+| Weapons | `1` `2` `3` `4` `5`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
 | Chat | `T` or `Enter` | `CHAT` |
 | Menu | `Esc` | `MENU` |
@@ -93,7 +93,7 @@ its field of view to compensate, but landscape is far better to play in.
 **A keyboard paired with a phone or tablet works.** The input layer is additive
 rather than modal: the first real key press retires the on-screen thumbstick and
 hands movement to `WASD`, while the whole screen stays a look pad for the thumb.
-Arrow keys also aim, and `Ctrl`/`F` fire, so a keyboard alone is playable when
+Arrow keys also aim, and `F` fires, so a keyboard alone is playable when
 there is no mouse. Pointer lock is only requested where it exists.
 
 ## Designing a level
@@ -286,6 +286,37 @@ arrived at it, so a long drop into a portal on the floor comes out of a wall as 
 long flat run, at the speed the drop was worth. Your view and your gravity are
 turned with it.
 
+## White Out
+
+The fifth weapon, on `5`. With it in hand the crosshair is replaced by a **small
+circle**. Correction fluid for the level:
+
+* **Hold fire and drag.** Everything the circle passes over is painted **solid
+  white** — still a wall, still stops bullets — as one smooth line rather than a
+  row of dots. While you hold you are **stuck where you stand**; you can only aim.
+  The HUD says `PAINTING`.
+* **No portal goes on White Out.** A portal ball that would put any part of its
+  mouth on white paint or over a hole explodes instead.
+* **Let go** and the whole white stroke becomes a **hole**, all at once. Anybody
+  the stroke covered, even an elbow, dies — decided on the shooter's screen, and
+  the killfeed says *erased*. Nobody dies while it is still paint.
+* The hole is a **real hole**: bullets and portal balls go through it, you fall
+  through one in the floor, and you walk through one in a wall. The strokes count
+  together, so a slot you dragged top to bottom is a doorway, even though any one
+  circle of it is far too small for a body.
+* It goes **all the way through**: the circle is a cone out from your eye, about a
+  metre across at 20 m and four at 80, so the wall behind the first one has a hole
+  in it too.
+* A hole stays exactly as it is for **five seconds**, then pops shut. A white rim
+  marks its edge.
+* The gun recharges for the same five seconds after you let go — the HUD counts it
+  down and the circle is dashed until it is ready. One stroke covers about 120
+  degrees of drag.
+
+**Out of bounds is death, instantly**: leave the map by more than a metre in any
+direction — through a hole in the floor, out of a hole in the outer wall — and you
+die on the spot, with *out of bounds* in the killfeed.
+
 ## Moving platforms
 
 Four of them in the arena: two lifts and two shuttles. They travel between two
@@ -354,10 +385,8 @@ Three rules hold the movement together, and all three are measured by
   is paid out as ground speed — up to 8 m/s of it, along the way you are already
   going. Height is worth momentum, which is the same bargain the hop chain makes.
 
-The arena's **stairs are ramps**. The pitch is the same as the flight of
-half-metre steps they replaced, so everything that could be climbed still can,
-but a run up no longer stutters and a hop chain no longer catches on the nose of
-every step.
+The arena has no stairs: **every slope is a 45-degree ramp**, so a run up never
+stutters and a hop chain never catches on the nose of a step.
 
 ## Shooting
 
@@ -373,11 +402,8 @@ the crosshair in. The crosshair never blooms — accuracy is a function of stanc
 not something the reticle animates. The shotgun keeps its pellet pattern even
 aimed, because that is what a shotgun is. Headshots do double damage.
 
-A kill refills the gun in your hands to its full ammo capacity — 150 rifle
-rounds, 42 shells, 30 marksman rounds. The magazine still has to be reloaded.
-
-A kill is worth **one magazine** for the gun in hand — 30 rifle, 6 shotgun,
-5 marksman — rather than the full refill it used to be.
+A kill is worth **one magazine** of reserve ammo for the gun in hand — 30 rifle,
+6 shotgun, 5 marksman — up to that gun's maximum.
 
 ## A note on mouse input
 
@@ -445,10 +471,20 @@ Driven in headless Chromium, two peers at once, over the real public relays:
   through it rather than being crushed — against the same lift with no portal,
   which kills them;
 * the portal gun's two touch triggers, including the second tap of a latched
-  `AIM` — which used to do nothing at all.
+  `AIM` — which used to do nothing at all;
+* White Out: holding paints a white stroke that bullets cannot pass while the
+  shooter cannot move; letting go turns it into holes a bullet goes through,
+  which pop shut at five seconds; a player walks through a slot painted in the
+  cover wall that stopped the same walk before; falling out of the map through a
+  hole kills on the spot; and a second page's player, painted over behind the
+  centre block, lives until the stroke is let go and then dies on their own
+  machine.
 
-Frame rate was 25 fps under a software rasteriser, which is the renderer's
-floor, not the game's.
+Frame rate, measured 2026-09-13 in headless Chromium on this laptop's Intel Arc
+GPU: 60 fps (the display cap) in the plain arena and still 60 with two portal
+views, moving platforms, a White Out hole and a peer on screen, with about 1 ms
+of JavaScript per frame. Under a software rasteriser the same busy scene is ~42
+fps, and nearly all of that is drawing the portal views, not JavaScript.
 
 ## Running the tests
 
@@ -457,23 +493,13 @@ The game itself needs nothing installed. The tests drive it in a real browser:
 ```sh
 npm install && npx playwright install chromium
 ./serve.sh 8080 &
-node test/movement.mjs
-node test/mechanics.mjs
-node test/stuckkeys.mjs
-node test/pointerlock.mjs
-node test/mouselook.mjs
-node test/mousebuttons.mjs
-node test/holdtoggle.mjs
-node test/map.mjs
-node test/designer.mjs
-node test/settings.mjs
-node test/momentum.mjs
-node test/slopes.mjs
-node test/portals.mjs
-node test/frame.mjs      # no browser and no server: the fastest ones
-node test/solid.mjs
-node test/portal.mjs
+for t in test/*.mjs; do node "$t" || echo "FAILED: $t"; done
 ```
+
+There are 23 suites; the table in `claude.md` says what each one covers.
+`frame`, `solid`, `portal` and `erase` need no browser and no server, so they run
+in about a second each. `rooms` and `whiteout` drive two pages over the real
+public relays.
 
 `test/designer.mjs` is the one that matters for the designer, because it refuses
 to assert on the designer's own bookkeeping. A drawn box is checked against the
@@ -535,7 +561,8 @@ src/level.js    a level as data: room size, shapes, colours, and the seed string
 src/designer.js the level designer — ghost flight, the tools, rotation, playtest
 src/player.js   local movement, collision, step-up, crouch
 src/input.js    keyboard + mouse + touch, combined
-src/weapons.js  four weapons and their ammo state
+src/weapons.js  five weapons and their ammo state
+src/erase.js    White Out's holes: the cone, collision and ray masks, the shader patch
 src/portal.js   portals as geometry: fitting, traversal, colours (no three.js)
 src/portalgun.js the portal gun, the ball, and seeing through a mouth
 src/remote.js   remote player rendering, interpolation, hitboxes
@@ -552,16 +579,16 @@ instead of sitting black.
 ## Tuning
 
 * `src/weapons.js` — damage, fire rate, spread, recoil, magazine sizes.
-* `src/portal.js` — the size of a portal, how forgiving its mouth is, and how
-  far outside it you are put on the way out.
+* `src/portal.js` — the size of a portal (`HALF_W`, `HALF_H`); how forgiving
+  its mouth is lives in `player.js` (`PORTAL_EDGE`, `PORTAL_CONTACT`).
 * `src/portalgun.js` — `MAX_VIEWS` and `VIEW_SCALE`: how many mouths redraw the
   world each frame and at what resolution. Seeing through a portal is by a long
   way the most expensive thing this game does.
 * `src/level.js` — `MOVE_SPEED`, how fast every moving platform travels.
 * `src/player.js` — movement constants at the top (speed, gravity, jump, step
   height), including the fall gravity multiplier and how much of a fall is paid
-  out as speed. Stair rise in `world.js` must stay under `STEP_HEIGHT`.
+  out as speed.
 * `src/world.js` — the arena. `add(cx, y, cz, w, h, d, colour)` places a box by
-  its centre in x/z and its *bottom* in y; `stairs()` builds a walkable flight.
+  its centre in x/z and its *bottom* in y; `slope()` builds a 45-degree ramp.
 * `src/remote.js` — `INTERP_DELAY` trades smoothness against how far in the
   past other players are drawn.

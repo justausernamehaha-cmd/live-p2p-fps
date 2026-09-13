@@ -1,14 +1,10 @@
 import { upIndex } from './frame.js';
-import { round2, now } from './util.js';
+import { round2 } from './util.js';
 
-// Trystero gives us WebRTC mesh networking with no server of our own: public
-// relays are used only for the initial handshake, after which every packet is
-// peer-to-peer. Nobody hosts anything.
+// Trystero: WebRTC mesh with public relays used only for the handshake.
 const APP_ID = 'peer-arena-v1';
 
-// Three interchangeable ways for peers to find each other, none of them ours.
-// Nostr is the default; the others are there for when a relay set is blocked or
-// having a bad day (append &strategy=torrent to the URL).
+// Interchangeable signalling (append &strategy=torrent to the URL if one is blocked).
 const STRATEGIES = {
   nostr: 'trystero',
   torrent: 'trystero-torrent',
@@ -21,10 +17,8 @@ let loading = null;
 
 export function getSelfId() { return selfId; }
 
-/** Loads the signalling strategy. Must be awaited before constructing a Net.
- *  Safe (and worthwhile) to call early: the module comes off a CDN, and doing it
- *  while the player is still typing a name takes that wait off the clock between
- *  pressing CONNECT and seeing anyone. Repeat calls share the one load. */
+/** Load the signalling module; await before constructing a Net. Worth calling
+ *  early, and repeat calls share one load. */
 export function initNet(strategy = 'nostr') {
   if (!loading) {
     const spec = STRATEGIES[strategy] || STRATEGIES.nostr;
@@ -37,25 +31,25 @@ export function initNet(strategy = 'nostr') {
   return loading;
 }
 
+const xyz = (p, prefix = '') =>
+  ({ [prefix + 'x']: round2(p.x), [prefix + 'y']: round2(p.y), [prefix + 'z']: round2(p.z) });
+
 export class Net {
   constructor(roomCode, profile, handlers) {
     if (!joinRoom) throw new Error('initNet() must finish before joining a room');
     this.roomCode = roomCode;
-    this.profile = profile;              // {name}
+    this.profile = profile;              // {name, pr}
     this.h = handlers;
     this.pings = new Map();
 
     this.room = joinRoom(
-      // more relays dialled at once: public ones rate-limit and drop, and the
-      // first one to carry the announcement is the one that decides how long a
-      // player waits to see anybody
+      // many relays at once: public ones rate-limit and drop
       { appId: APP_ID, relayConfig: { redundancy: 8 } },
       roomCode,
       { onJoinError: e => this.h.onJoinError?.(e) }
     );
 
-    // trystero >= 0.24: makeAction returns {send, onMessage}, and the peer
-    // callbacks are properties rather than registration functions
+    // trystero >= 0.24: makeAction returns {send, onMessage}
     const act = (name, fn) => this.room.makeAction(name, {
       onMessage: (data, ctx) => fn(data, ctx.peerId)
     });
@@ -66,17 +60,14 @@ export class Net {
     this.aHit = act('ht', (d, id) => this.h.onHit?.(id, d));
     this.aDied = act('dd', (d, id) => this.h.onDied?.(id, d));
     this.aChat = act('ch', (d, id) => this.h.onChat?.(id, d));
-    // Portals are two messages, not one. `pb` is the ball leaving the barrel, so
-    // everybody watches the same thing fly; `pt` is where it ended up, which is
-    // authoritative because the shooter's own level geometry decided it. Sending
-    // only the ball would make every peer re-derive the landing, and two peers
-    // that disagreed by a millimetre would have portals in different places.
+    // `pb` is the ball for everyone to watch; `pt` is where it landed, decided by
+    // the shooter alone so peers can never disagree about a portal's place
     this.aPortalBall = act('pb', (d, id) => this.h.onPortalBall?.(id, d));
     this.aPortal = act('pt', (d, id) => this.h.onPortal?.(id, d));
-    // Which level this room is playing. A room that already exists has a level,
-    // and it is not the joiner's business to bring one — so they ask, and the
-    // first person to answer decides. `sq` is the question, `sr` the answer,
-    // sent to the one who asked rather than to everybody.
+    // White Out: `er` is one stamp of paint, `eo` opens a whole stroke as holes
+    this.aErasePaint = act('er', (d, id) => this.h.onErasePaint?.(id, d));
+    this.aEraseOpen = act('eo', (d, id) => this.h.onEraseOpen?.(id, d));
+    // a joiner asks the room for its level seed; the first answer wins
     this.aSeedAsk = act('sq', (d, id) => this.h.onSeedAsk?.(id));
     this.aSeedTell = act('sr', (d, id) => this.h.onSeedTell?.(id, d));
 
@@ -98,14 +89,13 @@ export class Net {
         const rtt = Math.round(await this.room.ping(id));
         this.pings.set(id, rtt);
         this.h.onPing?.(id, rtt);
-      } catch { /* peer went away mid-ping */ }
+      } catch { /* peer left mid-ping */ }
     }
   }
 
   get peerCount() { return Object.keys(this.room.getPeers()).length; }
 
-  // send() returns a promise; a failed send to a peer that just left must not
-  // surface as an unhandled rejection in the middle of a frame
+  // a failed send to a peer that just left must not become an unhandled rejection
   _send(action, data, options) {
     try {
       const p = action.send(data, options);
@@ -115,60 +105,54 @@ export class Net {
 
   broadcastState(player, loadout, shielded) {
     this._send(this.aState, {
-      x: round2(player.pos.x), y: round2(player.pos.y), z: round2(player.pos.z),
+      ...xyz(player.pos),
       a: round2(player.yaw), b: round2(player.pitch),
-      u: upIndex(player.up),       // which way is up for them; a portal can change it
+      u: upIndex(player.up),
       h: round2(player.height),
       hp: player.alive ? Math.max(1, Math.round(player.hp)) : 0,
       k: player.kills, d: player.deaths,
       w: loadout.index,
-      s: player.spawnSeq,          // lets peers drop interpolation across a teleport
+      s: player.spawnSeq,          // changes on every teleport
       sf: shielded ? 1 : 0
     });
   }
 
   shot(from, to, weaponId) {
-    this._send(this.aShot, {
-      x: round2(from.x), y: round2(from.y), z: round2(from.z),
-      tx: round2(to.x), ty: round2(to.y), tz: round2(to.z),
-      w: weaponId
-    });
+    this._send(this.aShot, { ...xyz(from), ...xyz(to, 't'), w: weaponId });
   }
 
-  hit(peerId, damage, head) {
-    this._send(this.aHit, { dmg: Math.round(damage), head: head ? 1 : 0 }, { target: peerId });
+  hit(peerId, damage, head, erased = false) {
+    this._send(this.aHit, { dmg: Math.round(damage), head: head ? 1 : 0, er: erased ? 1 : 0 },
+               { target: peerId });
   }
 
-  /** A portal ball, so the shot is visible on every screen. */
-  /** `u` is which way was up for whoever fired it: the mouth stands the way they
-   *  were standing, and a peer re-deriving the landing has to know that. */
+  /** One White Out stamp. Direction at four decimals: two would put the cone half
+   *  a metre off at sixty metres. */
+  erasePaint(stroke, from, dir) {
+    const r4 = v => Math.round(v * 1e4) / 1e4;
+    this._send(this.aErasePaint, { sid: stroke, ...xyz(from), dx: r4(dir.x), dy: r4(dir.y), dz: r4(dir.z) });
+  }
+
+  eraseOpen(stroke) { this._send(this.aEraseOpen, { sid: stroke }); }
+
   portalBall(from, dir, side, up) {
     this._send(this.aPortalBall, {
-      x: round2(from.x), y: round2(from.y), z: round2(from.z),
-      dx: round2(dir.x), dy: round2(dir.y), dz: round2(dir.z),
+      ...xyz(from), ...xyz(dir, 'd'),
       s: side, u: upIndex(up || { x: 0, y: 1, z: 0 })
     });
   }
 
-  /** Where a portal actually ended up. The mover index is how a portal stuck to
-   *  a moving platform names that platform: every peer builds the same level in
-   *  the same order, so the index means the same thing everywhere without any
-   *  of them having to agree about it first. */
+  /** `m` names the platform the portal is on by index (same on every peer). */
   portal(side, p) {
     this._send(this.aPortal, {
-      s: side,
-      x: round2(p.c.x), y: round2(p.c.y), z: round2(p.c.z),
-      nx: round2(p.n.x), ny: round2(p.n.y), nz: round2(p.n.z),
-      ux: round2(p.u.x), uy: round2(p.u.y), uz: round2(p.u.z),
-      vx: round2(p.v.x), vy: round2(p.v.y), vz: round2(p.v.z),
-      m: p.mover
+      s: side, ...xyz(p.c), ...xyz(p.n, 'n'), ...xyz(p.u, 'u'), ...xyz(p.v, 'v'), m: p.mover
     });
   }
 
   askSeed() { this._send(this.aSeedAsk, { }); }
   tellSeed(peerId, seed) { this._send(this.aSeedTell, { sd: String(seed || '') }, { target: peerId }); }
 
-  died(killerId) { this._send(this.aDied, { by: killerId || '' }); }
+  died(killerId, how = '') { this._send(this.aDied, { by: killerId || '', how }); }
   chat(text) { this._send(this.aChat, { t: String(text).slice(0, 120) }); }
   hello() { this._send(this.aHello, { name: this.profile.name, pr: this.profile.pr }); }
 

@@ -5,25 +5,19 @@ import { UP_Y, upFromIndex, basisFor } from './frame.js';
 import { mouthAround, portalMap } from './portal.js';
 import { WEAPONS } from './weapons.js';
 
-// How near a mouth a body has to be for the other half of it to be drawn out of
-// the far one. The same numbers the player's own collision uses, and they have
-// to be: what is drawn is what the physics thinks is happening.
-const GHOST_REACH = 0.2;      // RADIUS + 0.03 in player.js
+// The same reach player.js collision uses: what is drawn is what physics thinks.
+const GHOST_REACH = 0.2;      // RADIUS + 0.03
 const GHOST_EDGE = 0.17;      // RADIUS
 
-/** The other half of a body: where it hangs out of the far mouth, as a position
- *  and a turn.
- *
- *  A body standing in a portal is in two places at once, and both of them are
- *  real — the half inside the wall is hidden by that wall's own geometry, and
- *  the half out of the other mouth is this. There is no clipping to do: the
- *  walls do it, because each half is behind the surface its mouth is cut into.
- *
- *  Rigid, unlike the body it copies. A player is always upright in their own
- *  frame, but their reflection through a mouth is whatever the portal's
- *  transform makes of them, so the two halves meet exactly at the surface even
- *  where the pair is not square to itself. */
-export function ghostOf(links, pos, up, yaw, height) {
+const INTERP_DELAY = 110;     // ms of buffered lag between peers
+const BUFFER = 24;
+const HEAD_H = 0.34;
+const BODY_R = HEAD_H / 2;    // hit boxes use the same constants as the mesh
+const WHITE = new THREE.Color(0xffffff);
+
+/** Where the other half of a body standing in a mouth hangs out of the far one.
+ *  Each half is behind the wall its mouth is cut into, so no clipping is needed. */
+function ghostOf(links, pos, up, yaw, height) {
   if (!links || !links.length) return null;
   const link = mouthAround(links, pos, up, height, GHOST_REACH, GHOST_EDGE);
   if (!link) return null;
@@ -37,18 +31,10 @@ export function ghostOf(links, pos, up, yaw, height) {
   };
 }
 
-/** One player's body, built once and posed every frame.
- *
- *  Both a peer's body and your own — the one you see through a portal — come
- *  from here, and that is the whole point of it being a function. "I should look
- *  the exact same in other people's eyes and in my own": if there are two
- *  constructors there are two bodies, and they drift. Now the only difference
- *  between the two is which player's numbers are fed in.
- */
-export function makeBody(colorHex) {
+function makeBody(colorHex) {
   const color = new THREE.Color(colorHex);
   const group = new THREE.Group();
-  // emissive so a player never blends into the grey-blue level
+  // emissive so a player never blends into the level
   const mat = new THREE.MeshLambertMaterial({
     color, emissive: color.clone().multiplyScalar(0.35)
   });
@@ -61,9 +47,6 @@ export function makeBody(colorHex) {
   body.position.y = 0.72;
   const head = new THREE.Mesh(new THREE.BoxGeometry(HEAD_H, HEAD_H, HEAD_H), headMat);
   head.position.y = 1.62;
-  // the weapon in their hands. Built as a shape rather than as the black rod it
-  // used to be: what a peer is carrying is worth reading at a distance, and it
-  // is the same silhouette the viewmodel has, seen from outside.
   const gun = new THREE.Group();
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.45, 16),
@@ -72,12 +55,10 @@ export function makeBody(colorHex) {
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.02;
   group.add(body, head, gun, shadow);
-  return { group, mat, headMat, body, head, gun, shadow, color, weapon: -1 };
+  return { group, mat, headMat, body, head, gun, shadow, weapon: -1 };
 }
 
-/** The gun a body is holding, as a handful of boxes: receiver, barrel, magazine,
- *  stock, and whatever that weapon has instead of iron sights. Rebuilt only when
- *  the weapon changes, which is rare. */
+/** The held gun as a few boxes, rebuilt only when the weapon changes. */
 function buildGun(group, w) {
   for (const c of group.children.slice()) {
     group.remove(c);
@@ -96,7 +77,7 @@ function buildGun(group, w) {
   mk(h.bore, h.bore, h.barrel, 0x1d2230, 0, 0.02, -h.body - h.barrel / 2 + 0.04);
   mk(0.06, 0.14, 0.07, 0x232936, 0, -0.11, -h.body * 0.35);               // magazine
   mk(0.06, 0.08, 0.16, 0x232936, 0, -0.02, 0.06);                         // stock
-  if (h.scope) mk(0.04, 0.05, 0.22, 0x11161f, 0, 0.08, -h.body * 0.55);   // glass
+  if (h.scope) mk(0.04, 0.05, 0.22, 0x11161f, 0, 0.08, -h.body * 0.55);
   if (h.prongs) {                                                         // portal gun
     mk(0.028, 0.028, 0.16, h.accent, -0.05, 0.03, -h.body - h.barrel + 0.1);
     mk(0.028, 0.028, 0.16, h.accent, 0.05, 0.03, -h.body - h.barrel + 0.1);
@@ -106,10 +87,8 @@ function buildGun(group, w) {
   group.userData.reach = h.body + h.barrel;
 }
 
-/** Put a body into the stance it is actually in. Height carries the crouch —
- *  standing and sprinting are the same stance, which is why nothing here reads
- *  a speed — and the weapon carries what is in their hands. */
-export function poseBody(b, height, pitch, weaponIndex) {
+/** Crouch comes from height, and the weapon from what is in their hands. */
+function poseBody(b, height, pitch, weaponIndex) {
   const s = height / 1.8;
   b.body.scale.y = s;
   b.body.position.y = 0.72 * s;
@@ -119,80 +98,50 @@ export function poseBody(b, height, pitch, weaponIndex) {
     b.weapon = w.id;
     buildGun(b.gun, w);
   }
-  // held out in front of the near shoulder, pointing where they are looking
   b.gun.position.set(0.22, 1.35 * s, -0.12);
   b.gun.rotation.x = -pitch;
 }
 
-const INTERP_DELAY = 110;    // ms of buffered lag; smooths jitter between peers
-const BUFFER = 24;
-const HEAD_H = 0.34;
-// The body is exactly as wide as the head is long, so the silhouette reads as one
-// consistent shape. The hit boxes below are built from the same constants, which
-// keeps the "what you see is what you shoot" promise intact.
-const BODY_R = HEAD_H / 2;
+function makeLabel(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.font = 'bold 34px ui-sans-serif, system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineWidth = 6;
+  g.strokeStyle = 'rgba(0,0,0,.85)';
+  g.strokeText(text, 128, 34);
+  g.fillStyle = color;
+  g.fillText(text, 128, 34);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // depth-tested: a name visible through walls is a wallhack
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(1.6, 0.4, 1);
+  return sprite;
+}
 
-export class RemotePlayer {
-  constructor(id, scene) {
-    this.id = id;
-    this.name = id.slice(0, 6);
-    this.colorHex = PLAYER_COLORS[hash(id) % PLAYER_COLORS.length];
-    this.color = new THREE.Color(this.colorHex);
-    this.buffer = [];
-    this.kills = 0;
-    this.deaths = 0;
-    this.hp = 100;
-    this.alive = true;
-    this.ping = 0;
-    this.lastSeen = now();
-    this.flash = 0;
-    this.spawnSeq = -1;
-    this.portalRandom = 0;  // their contribution to everybody's portal colours
-    this.settling = true;   // hide until we have real snapshots at the current spawn
-    this.shielded = false;
-
-    this.pos = new THREE.Vector3();
-    this.yaw = 0;
-    this.pitch = 0;
-    this.height = 1.8;
-    this.up = UP_Y;          // a peer standing on a wall is standing on a wall
-    this._basis = new THREE.Matrix4();
-    this._vr = new THREE.Vector3();
-    this._vu = new THREE.Vector3();
-    this._vb = new THREE.Vector3();
-
-    this.parts = makeBody(this.colorHex);
+/** A drawn body plus its other half out of a far mouth. Peers and your own body
+ *  (seen through portals) share this, so you look the same to yourself as to
+ *  everyone else. */
+class Avatar {
+  constructor(colorHex, name) {
+    this.colorHex = colorHex;
+    this.color = new THREE.Color(colorHex);
+    this.name = name;
+    this.parts = makeBody(colorHex);
     this.group = this.parts.group;
-    this.mat = this.parts.mat;
-    this.body = this.parts.body;
-    this.head = this.parts.head;
-    this.gun = this.parts.gun;
-    this.shadow = this.parts.shadow;
-    this.weapon = 0;
-
-    this.label = makeLabel(this.name, cssColor(this.colorHex));
-    this.label.position.y = 2.25;
-    this.group.add(this.label);
-
-    this.group.visible = false;   // nothing to draw until a snapshot arrives
-    scene.add(this.group);
-    this.scene = scene;
-
-    // the half of them that is out of the other mouth, when they are standing
-    // in a portal: the same three meshes, the same materials, somewhere else
-    this.gparts = makeBody(this.colorHex);
+    this.gparts = makeBody(colorHex);
     this.ghost = this.gparts.group;
     this.gparts.shadow.visible = false;    // one shadow, on the real body
-    this.gBody = this.gparts.body;
-    this.gHead = this.gparts.head;
-    this.gGun = this.gparts.gun;
     this.ghost.visible = false;
-    scene.add(this.ghost);
-    this.portals = null;          // set by the game
-    this._gm = new THREE.Matrix4();
-    this._g1 = new THREE.Vector3();
-    this._g2 = new THREE.Vector3();
-    this._g3 = new THREE.Vector3();
+    this.label = null;
+    this._rebuildLabel();
+    this._m = new THREE.Matrix4();
+    this._a = new THREE.Vector3();
+    this._b = new THREE.Vector3();
+    this._c = new THREE.Vector3();
   }
 
   setName(name) {
@@ -201,9 +150,8 @@ export class RemotePlayer {
     this._rebuildLabel();
   }
 
-  /** Room membership decides colours, so this changes as people come and go. */
   setColor(hex) {
-    if (hex === this.colorHex) return;
+    if (hex === undefined || hex === this.colorHex) return;
     this.colorHex = hex;
     this.color.setHex(hex);
     for (const b of [this.parts, this.gparts]) {
@@ -216,20 +164,76 @@ export class RemotePlayer {
   }
 
   _rebuildLabel() {
-    this.group.remove(this.label);
-    this.label.material.map?.dispose();
-    this.label.material.dispose();
+    if (this.label) {
+      this.group.remove(this.label);
+      this.label.material.map?.dispose();
+      this.label.material.dispose();
+    }
     this.label = makeLabel(this.name, cssColor(this.colorHex));
     this.label.position.y = 2.25;
     this.group.add(this.label);
   }
 
+  /** Place and pose both halves; `links` null means no ghost. */
+  _pose(pos, up, yaw, pitch, height, weapon, links) {
+    this.group.position.set(pos.x, pos.y, pos.z);
+    // modelled standing up +y and looking down -z
+    const f = basisFor(up, yaw);
+    this._orient(this.group, f.r, up, { x: -f.f.x, y: -f.f.y, z: -f.f.z });
+    poseBody(this.parts, height, pitch, weapon);
+    this.label.position.y = 2.25 * (height / 1.8) + 0.1;
+
+    const g = links ? ghostOf(links, pos, up, yaw, height) : null;
+    this.ghost.visible = !!g;
+    if (!g) return;
+    this.ghost.position.set(g.pos.x, g.pos.y, g.pos.z);
+    this._orient(this.ghost, g.right, g.up, g.back);
+    poseBody(this.gparts, height, pitch, weapon);
+  }
+
+  _orient(obj, right, up, back) {
+    this._m.makeBasis(
+      this._a.set(right.x, right.y, right.z),
+      this._b.set(up.x, up.y, up.z),
+      this._c.set(back.x, back.y, back.z)
+    );
+    obj.quaternion.setFromRotationMatrix(this._m);
+  }
+}
+
+export class RemotePlayer extends Avatar {
+  constructor(id, scene) {
+    super(PLAYER_COLORS[hash(id) % PLAYER_COLORS.length], id.slice(0, 6));
+    this.id = id;
+    this.scene = scene;
+    this.buffer = [];
+    this.kills = 0;
+    this.deaths = 0;
+    this.hp = 100;
+    this.alive = true;
+    this.ping = 0;
+    this.lastSeen = now();
+    this.flash = 0;
+    this.spawnSeq = -1;
+    this.portalRandom = 0;  // their share of everybody's portal colours
+    this.settling = true;   // hidden until there are snapshots at the current spawn
+    this.shielded = false;
+    this.pos = new THREE.Vector3();
+    this.yaw = 0;
+    this.pitch = 0;
+    this.height = 1.8;
+    this.up = UP_Y;
+    this.weapon = 0;
+    this.portals = null;    // set by the game
+
+    this.group.visible = false;
+    scene.add(this.group);
+    scene.add(this.ghost);
+  }
+
   onState(s) {
     this.lastSeen = now();
-
-    // A respawn teleports them. Interpolating across that would drag the body
-    // through the level, so throw the old samples away and stay hidden until
-    // there are enough new ones to interpolate between at the new position.
+    // a teleport (respawn, portal): drop old samples rather than interpolate across
     const seq = num(s.s, 0);
     if (seq !== this.spawnSeq) {
       this.spawnSeq = seq;
@@ -260,8 +264,7 @@ export class RemotePlayer {
     const buf = this.buffer;
     if (buf.length === 0) return;
 
-    // default to the newest pair (i.e. extrapolate) when the target time is
-    // past everything we have received
+    // extrapolate from the newest pair when past everything received
     let a = buf.length > 1 ? buf[buf.length - 2] : buf[0];
     let b = buf[buf.length - 1];
     for (let i = 0; i < buf.length - 1; i++) {
@@ -274,63 +277,26 @@ export class RemotePlayer {
     this.yaw = lerpAngle(a.yaw, b.yaw, k);
     this.pitch = lerp(a.pitch, b.pitch, k);
     this.height = lerp(a.h, b.h, k);
+    this.up = upFromIndex(b.u ?? 2);     // never interpolated: a change empties the buffer
 
-    // Up never interpolates: it changes only by going through a portal, which
-    // bumps the sequence number and empties this buffer anyway, so the newer
-    // sample is the answer and a half-turned body is never drawn.
-    this.up = upFromIndex(b.u ?? 2);
-    this.group.position.copy(this.pos);
-    // The body is modelled standing up its own local +y and looking down its
-    // own -z; put that frame where the player's actually is.
-    const f = basisFor(this.up, this.yaw);
-    this._basis.makeBasis(
-      this._vr.set(f.r.x, f.r.y, f.r.z),
-      this._vu.set(this.up.x, this.up.y, this.up.z),
-      this._vb.set(-f.f.x, -f.f.y, -f.f.z)
-    );
-    this.group.quaternion.setFromRotationMatrix(this._basis);
-    const scaleY = this.height / 1.8;
-    poseBody(this.parts, this.height, this.pitch, this.weapon);
-    this.label.position.y = 2.25 * scaleY + 0.1;
     this.group.visible = this.alive && !this.settling;
-    this._ghost(scaleY);
+    // hit boxes stay on the real body, never the ghost
+    this._pose(this.pos, this.up, this.yaw, this.pitch, this.height, this.weapon,
+               this.group.visible && this.portals ? this.portals.links() : null);
 
     if (this.flash > 0) {
       this.flash -= dt;
       const on = this.flash > 0;
-      for (const b of [this.parts, this.gparts]) {
-        b.mat.color.copy(on ? WHITE : this.color);
-        b.headMat.color.copy(on ? WHITE : this.color.clone().offsetHSL(0, 0, 0.12));
+      for (const p of [this.parts, this.gparts]) {
+        p.mat.color.copy(on ? WHITE : this.color);
+        p.headMat.color.copy(on ? WHITE : this.color.clone().offsetHSL(0, 0, 0.12));
       }
     }
   }
 
-  /** Draw the half of them that is out of the far mouth, if they are standing
-   *  in one. Hit boxes deliberately stay on the real body: shooting a reflection
-   *  would be shooting somebody who is not there, and a bullet has its own way
-   *  through a portal already. */
-  _ghost(scaleY) {
-    const g = this.group.visible && this.portals
-      ? ghostOf(this.portals.links(), this.pos, this.up, this.yaw, this.height)
-      : null;
-    this.ghost.visible = !!g;
-    if (!g) return;
-    this.ghost.position.set(g.pos.x, g.pos.y, g.pos.z);
-    this._gm.makeBasis(
-      this._g1.set(g.right.x, g.right.y, g.right.z),
-      this._g2.set(g.up.x, g.up.y, g.up.z),
-      this._g3.set(g.back.x, g.back.y, g.back.z)
-    );
-    this.ghost.quaternion.setFromRotationMatrix(this._gm);
-    poseBody(this.gparts, this.height, this.pitch, this.weapon);
-  }
-
-  /** hit boxes match what is drawn on this screen, so what you see is what you shoot */
+  /** Hit boxes matching what this screen draws. */
   boxes() {
     const p = this.pos, s = this.height / 1.8, u = this.up;
-    // Boxes along whichever axis they are standing up. Up is always a world
-    // axis, so these stay axis-aligned however the body is turned, and what you
-    // see is still exactly what you shoot.
     const at = (d, r) => {
       const c = { x: p.x + u.x * d, y: p.y + u.y * d, z: p.z + u.z * d };
       return {
@@ -339,11 +305,9 @@ export class RemotePlayer {
       };
     };
     const H = HEAD_H / 2;
-    // A body standing at 45 degrees is not axis-aligned, so the pair of boxes
-    // below cannot describe it. One box around the whole of it is honest about
-    // that: a little generous, and never in the wrong place.
     if (!u.x && !u.y && !u.z) return [];
     if (Math.abs(u.x) < 0.999 && Math.abs(u.y) < 0.999 && Math.abs(u.z) < 0.999) {
+      // tilted: one box around the whole body
       const top = { x: p.x + u.x * 1.8 * s, y: p.y + u.y * 1.8 * s, z: p.z + u.z * 1.8 * s };
       const box = { min: {}, max: {} };
       for (const a of ['x', 'y', 'z']) {
@@ -376,9 +340,6 @@ export class RemotePlayer {
   dispose() {
     this.scene.remove(this.group);
     this.scene.remove(this.ghost);
-    // Walked rather than listed. The gun is a group of several meshes now, and
-    // naming each piece here is how disposing a body came to throw halfway
-    // through — which left LEAVE THE ROOM half done, with the HUD still up.
     for (const root of [this.group, this.ghost]) {
       root.traverse(o => {
         o.geometry?.dispose?.();
@@ -390,134 +351,18 @@ export class RemotePlayer {
   }
 }
 
-const WHITE = new THREE.Color(0xffffff);
-
-function makeLabel(text, color) {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 64;
-  const g = c.getContext('2d');
-  g.font = 'bold 34px ui-sans-serif, system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.lineWidth = 6;
-  g.strokeStyle = 'rgba(0,0,0,.85)';
-  g.strokeText(text, 128, 34);
-  g.fillStyle = color;
-  g.fillText(text, 128, 34);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  // depth-tested on purpose: a name tag visible through a wall is a wallhack
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set(1.6, 0.4, 1);
-  return sprite;
-}
-
-/** The local player's own body.
- *
- *  There has never been one: this is a first-person game and the only thing on
- *  screen was the gun. Seeing yourself through a portal needs something to see,
- *  so this follows the player around and is drawn *only* into portal views —
- *  PortalField hides it for the player's own camera, where it would be a torso
- *  hanging in front of their face.
- *
- *  It is deliberately the same silhouette as a RemotePlayer, so what you see of
- *  yourself is what everyone else sees of you. */
-export class SelfAvatar {
-  /** Your own body, as everybody else sees it.
-   *
-   *  Built by the same factory a peer's body is, and posed by the same function,
-   *  because that is the requirement: what you catch of yourself through a
-   *  portal has to be exactly what the person on the other side of the map is
-   *  looking at — the same stance (standing and sprinting are one stance; only a
-   *  crouch is different), the same shadow, the same name over your head, and
-   *  the same weapon in your hands. Anything built twice ends up different. */
+/** Your own body, drawn only into portal views (PortalField shows `root` there). */
+export class SelfAvatar extends Avatar {
   constructor(scene) {
-    this._m = new THREE.Matrix4();
-    this._a = new THREE.Vector3();
-    this._b = new THREE.Vector3();
-    this._c = new THREE.Vector3();
-    this.colorHex = PLAYER_COLORS[0];
-    this.name = '';
-
-    this.parts = makeBody(this.colorHex);
-    this.group = this.parts.group;
-    this.mat = this.parts.mat;
-    this.body = this.parts.body;
-    this.head = this.parts.head;
-    this.gun = this.parts.gun;
-
-    // your own other half, for when you are standing in a mouth and looking at
-    // the one you are hanging out of
-    this.gparts = makeBody(this.colorHex);
-    this.ghost = this.gparts.group;
-    this.gparts.shadow.visible = false;
-
-    this.label = makeLabel(this.name, cssColor(this.colorHex));
-    this.label.position.y = 2.25;
-    this.group.add(this.label);
-
-    // One root for both halves, because what the portal views turn on and off is
-    // "the player's own body", and that is two pieces now.
+    super(PLAYER_COLORS[0], '');
     this.root = new THREE.Group();
     this.root.add(this.group, this.ghost);
-    this.root.visible = false;       // portal views only
+    this.root.visible = false;
     scene.add(this.root);
   }
 
-  setName(name) {
-    if (!name || name === this.name) return;
-    this.name = name;
-    this._rebuildLabel();
-  }
-
-  setColor(hex) {
-    if (hex === undefined || hex === this.colorHex) return;
-    this.colorHex = hex;
-    const color = new THREE.Color(hex);
-    for (const b of [this.parts, this.gparts]) {
-      b.color.setHex(hex);
-      b.mat.color.copy(color);
-      b.mat.emissive.copy(color).multiplyScalar(0.35);
-      b.headMat.color.copy(color).offsetHSL(0, 0, 0.12);
-      b.headMat.emissive.copy(color).multiplyScalar(0.3);
-    }
-    this._rebuildLabel();
-  }
-
-  _rebuildLabel() {
-    this.group.remove(this.label);
-    this.label.material.map?.dispose();
-    this.label.material.dispose();
-    this.label = makeLabel(this.name, cssColor(this.colorHex));
-    this.label.position.y = 2.25;
-    this.group.add(this.label);
-  }
-
   update(player, weaponIndex = 0) {
-    const s = player.height / 1.8;
-    this.group.position.set(player.pos.x, player.pos.y, player.pos.z);
-    const f = basisFor(player.up, player.yaw);
-    this._m.makeBasis(
-      this._a.set(f.r.x, f.r.y, f.r.z),
-      this._b.set(player.up.x, player.up.y, player.up.z),
-      this._c.set(-f.f.x, -f.f.y, -f.f.z)
-    );
-    this.group.quaternion.setFromRotationMatrix(this._m);
-    poseBody(this.parts, player.height, player.pitch, weaponIndex);
-    this.label.position.y = 2.25 * s + 0.1;
-
-    const g = player.portals
-      ? ghostOf(player.portals.links(), player.pos, player.up, player.yaw, player.height)
-      : null;
-    this.ghost.visible = !!g;
-    if (!g) return;
-    this.ghost.position.set(g.pos.x, g.pos.y, g.pos.z);
-    this._m.makeBasis(
-      this._a.set(g.right.x, g.right.y, g.right.z),
-      this._b.set(g.up.x, g.up.y, g.up.z),
-      this._c.set(g.back.x, g.back.y, g.back.z)
-    );
-    this.ghost.quaternion.setFromRotationMatrix(this._m);
-    poseBody(this.gparts, player.height, player.pitch, weaponIndex);
+    this._pose(player.pos, player.up, player.yaw, player.pitch, player.height, weaponIndex,
+               player.portals ? player.portals.links() : null);
   }
 }

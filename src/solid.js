@@ -1,16 +1,9 @@
-// Everything in the world used to be an axis-aligned box, which made collision
-// and hitscan trivial and identical on every peer. Slopes and free rotation
-// break that, so anything that is not an AABB becomes a **convex solid**: a list
-// of world-space vertices, the faces between them, and the outward planes that
-// bound it.
-//
-// AABBs keep their own faster, exact path in world.js and player.js. This file
-// only ever sees the shapes that could not stay one.
+// Convex solids: ramps and anything rotated. Plain boxes keep the faster
+// axis-aligned path in world.js and player.js.
 
 export const SHAPE_BOX = 0;
 export const SHAPE_SLOPE = 1;
 
-// Unit-cube corners, in the order the face lists below index them.
 const BOX_VERTS = [
   [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
   [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
@@ -20,9 +13,7 @@ const BOX_FACES = [
   [3, 2, 6, 7], [1, 2, 6, 5], [0, 3, 7, 4]
 ];
 
-// A wedge: full height at local +x, nothing at local -x, so it rises along +x.
-// The designer aims it with the box's rotation rather than with a direction
-// field, which keeps one shape and one transform instead of two of each.
+// A wedge, full height at local +x: it climbs along +x.
 const SLOPE_VERTS = [
   [-1, -1, -1], [1, -1, -1], [1, 1, -1],
   [-1, -1, 1], [1, -1, 1], [1, 1, 1]
@@ -32,15 +23,11 @@ const SLOPE_FACES = [
   [1, 2, 5, 4],      // the tall end
   [0, 1, 2],         // -z side
   [3, 4, 5],         // +z side
-  [0, 2, 5, 3]       // the ramp itself
+  [0, 2, 5, 3]       // the ramp
 ];
 
-/** An axis-aligned box, expressed as a convex solid, so that the capsule
- *  push-out can be used against it. Only the tilted movement path needs this —
- *  an upright body is an AABB and collides with boxes exactly and much more
- *  cheaply — so the planes are made on demand and cached on the box itself.
- *  Movers translate their box in place, so the cached planes are re-derived when
- *  the bounds have moved. */
+/** An AABB as a convex solid, for the tilted capsule path. Cached on the box and
+ *  rebuilt if a mover has shifted it. */
 export function boxAsSolid(b) {
   const c = b._asSolid;
   if (c && c.min.x === b.min.x && c.min.y === b.min.y && c.min.z === b.min.z &&
@@ -57,13 +44,11 @@ export function boxAsSolid(b) {
   return s;
 }
 
-/** True when a level box still fits the fast axis-aligned path. */
 export function isAxisAligned(b) {
   return (b.shape || 0) === SHAPE_BOX && !b.rx && !b.ry && !b.rz;
 }
 
-/** Rotation matrix for the stored Euler angles, applied X then Y then Z.
- *  Rows, so that m[r][0..2] dotted with a point gives that component. */
+/** Rotation matrix (rows) for Euler angles applied X, then Y, then Z. */
 export function eulerMatrix(rx, ry, rz) {
   const ca = Math.cos(rx), sa = Math.sin(rx);
   const cb = Math.cos(ry), sb = Math.sin(ry);
@@ -75,12 +60,11 @@ export function eulerMatrix(rx, ry, rz) {
   ];
 }
 
-/** The inverse of eulerMatrix: the angles that would rebuild this rotation. */
+/** Inverse of eulerMatrix. Angles are not unique: compare footprints, not angles. */
 export function eulerFromMatrix(m) {
   const sb = Math.min(1, Math.max(-1, -m[2][0]));
   const ry = Math.asin(sb);
-  // Near straight up or straight down the X and Z rotations become the same
-  // turn and cannot be told apart; pin X and put all of it into Z.
+  // gimbal lock: X and Z are the same turn, so put all of it into Z
   if (Math.abs(m[2][0]) > 0.99999) {
     return [0, ry, Math.atan2(-m[0][1], m[1][1])];
   }
@@ -97,7 +81,6 @@ export function matMul(a, b) {
   return out;
 }
 
-/** Rotation of `angle` about a world axis, as a matrix. */
 export function axisMatrix(axis, angle) {
   const c = Math.cos(angle), s = Math.sin(angle);
   if (axis === 0) return [[1, 0, 0], [0, c, -s], [0, s, c]];
@@ -105,7 +88,7 @@ export function axisMatrix(axis, angle) {
   return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
 }
 
-/** Turn a level box into a world-space convex solid. */
+/** A level box as a world-space convex solid. */
 export function makeSolid(b) {
   const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, cz = (b.z0 + b.z1) / 2;
   const hx = (b.x1 - b.x0) / 2, hy = (b.y1 - b.y0) / 2, hz = (b.z1 - b.z0) / 2;
@@ -131,11 +114,9 @@ export function makeSolid(b) {
     if (z < min.z) min.z = z; if (z > max.z) max.z = z;
   }
 
-  const centre = { x: cx, y: cy, z: cz };     // the pivot: rotation turns about it
-  // A wedge's bounding-box centre lies exactly ON its ramp plane, so it cannot
-  // be used to decide which way that face points — the test comes out zero and
-  // the normal is left pointing into the solid. The mean of the vertices is
-  // strictly inside every convex shape, so it can.
+  const centre = { x: cx, y: cy, z: cz };     // the pivot
+  // Orient normals from the vertex mean: a wedge's bounding-box centre lies ON
+  // its ramp plane and cannot decide which way that face points.
   let ix = 0, iy = 0, iz = 0;
   for (const v of verts) { ix += v[0]; iy += v[1]; iz += v[2]; }
   ix /= verts.length; iy /= verts.length; iz /= verts.length;
@@ -149,8 +130,6 @@ export function makeSolid(b) {
     let nz = (p[0] - a[0]) * (q[1] - a[1]) - (p[1] - a[1]) * (q[0] - a[0]);
     const len = Math.hypot(nx, ny, nz) || 1;
     nx /= len; ny /= len; nz /= len;
-    // Point every normal away from the middle rather than trusting the winding
-    // of the tables above — a mirrored or degenerate box would flip one silently.
     if (nx * (a[0] - ix) + ny * (a[1] - iy) + nz * (a[2] - iz) < 0) {
       nx = -nx; ny = -ny; nz = -nz;
       idx = idx.slice().reverse();
@@ -162,8 +141,7 @@ export function makeSolid(b) {
   return { verts, faces, planes, min, max, centre, shape, color: b.color, src: b };
 }
 
-/** Distance along `dir` to where the ray enters the solid, and the face it came
- *  in through. Null if it misses, or if the solid is behind the origin. */
+/** Where a ray enters the solid and through which face; null on a miss. */
 export function rayConvex(ro, rd, solid, maxDist = Infinity) {
   let tmin = 0, tmax = maxDist, face = -1;
   const o = [ro.x, ro.y, ro.z], d = [rd.x, rd.y, rd.z];
@@ -172,31 +150,24 @@ export function rayConvex(ro, rd, solid, maxDist = Infinity) {
     const denom = p.nx * d[0] + p.ny * d[1] + p.nz * d[2];
     const dist = p.d - (p.nx * o[0] + p.ny * o[1] + p.nz * o[2]);
     if (Math.abs(denom) < 1e-9) {
-      if (dist < 0) return null;          // parallel to this face and outside it
+      if (dist < 0) return null;          // parallel and outside
       continue;
     }
     const t = dist / denom;
-    if (denom < 0) {                       // entering through this face
+    if (denom < 0) {                       // entering
       if (t > tmin) { tmin = t; face = i; }
-    } else if (t < tmax) {                 // leaving through it
+    } else if (t < tmax) {                 // leaving
       tmax = t;
     }
     if (tmin > tmax) return null;
   }
-  // face < 0 means the origin was already inside: there is no entry face
+  // face < 0: the origin was already inside
   return { t: tmin, face, n: face < 0 ? null : solid.planes[face], inside: face < 0 };
 }
 
-/** How deep a vertical capsule is inside the solid, and the way out.
- *
- *  Separating-axis over the face normals only. That is exact for a sphere and
- *  close enough for a capsule: the corners come out very slightly rounded, which
- *  nobody can feel and which no other part of the game depends on. */
+/** Depth and way out of a capsule inside the solid (separating axis over the
+ *  face normals), or null. */
 export function capsulePush(ax, ay, az, bx, by, bz, radius, solid) {
-  // Cheap reject first — most solids are nowhere near the player. Written from
-  // the two endpoints rather than assuming the capsule stands up: gravity can
-  // point along a 45-degree diagonal now, and a body lying along one of those is
-  // as wide as it is tall.
   if (Math.max(ax, bx) + radius < solid.min.x || Math.min(ax, bx) - radius > solid.max.x ||
       Math.max(ay, by) + radius < solid.min.y || Math.min(ay, by) - radius > solid.max.y ||
       Math.max(az, bz) + radius < solid.min.z || Math.min(az, bz) - radius > solid.max.z) return null;
@@ -212,10 +183,7 @@ export function capsulePush(ax, ay, az, bx, by, bz, radius, solid) {
   return best;
 }
 
-/** Slide a built solid bodily through space. A moving platform is rebuilt every
- *  frame otherwise, and rebuilding is where all the cost is: the vertices, the
- *  bounds and the pivot simply shift, and a plane's normal is untouched while
- *  its offset moves by the component of the shift along it. */
+/** Move a built solid without rebuilding it (moving platforms). */
 export function translateSolid(s, dx, dy, dz) {
   for (const v of s.verts) { v[0] += dx; v[1] += dy; v[2] += dz; }
   for (const p of s.planes) p.d += p.nx * dx + p.ny * dy + p.nz * dz;

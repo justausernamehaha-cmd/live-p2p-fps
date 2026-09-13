@@ -1,22 +1,15 @@
 import * as THREE from 'three';
 import { makeSolid, rayConvex, isAxisAligned, translateSolid, SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
+import { Erasures, eraseMaterial } from './erase.js';
 
-// Almost everything here is an axis-aligned box, which keeps collision and
-// hitscan trivial and identical on every peer. The exceptions — ramps, and
-// anything the level designer has turned — go through solid.js as convex solids
-// instead. Both lists are hard-coded or seeded, so there is still nothing to
-// synchronise at runtime.
+// The level: axis-aligned boxes (exact, cheap collision) plus convex solids for
+// ramps and anything turned. Built from the hand-written arena or from a Level,
+// identically on every peer, so nothing is synchronised at runtime.
 
-// Everything is laid out at S times the original distances. Heights and
-// player-scale props (crates, stair rises, wall thickness) deliberately do not
-// scale: a 4m crate would be unclimbable and a 1m step unwalkable. So the map
-// gets twice as big to cross without any of it becoming twice as tall.
+// Distances are laid out at S times; heights and player-scale props are not.
 const S = 2;
 const ARENA = 60 * S;  // floor is ARENA x ARENA, centred on the origin
-// The room is closed, so this is its height and not merely how tall the walls
-// are. Twelve rather than nine: a player standing on the centre block has their
-// feet at 5.9, and a nine-metre lid put the ceiling within a jump of their head.
-const WALL_H = 12;
+const WALL_H = 12;     // the room is closed; this is the ceiling height
 const PALETTE = {
   floor: 0x3d4757,
   wall: 0x4c586f,
@@ -24,31 +17,38 @@ const PALETTE = {
   accent: 0xd9743b,
   accent2: 0x3aa89c,
   plate: 0x76849f,
-  ceil: 0x333c4d,     // darker than the walls, so up still reads as up
+  ceil: 0x333c4d,
   fillet: 0x5a6884
 };
-
-// How far a corner fillet reaches along each of the two surfaces it joins. Big
-// enough to stand on with room to turn round; small enough that it takes nothing
-// worth having off the floor.
-const FILLET = 1.6;
+const FILLET = 1.6;    // how far a corner fillet reaches along each surface
 
 export class World {
-  /** With no level, the hand-written arena below. With one, its data instead. */
   constructor(scene, level = null) {
-    this.parts = [];       // every piece, before it is sorted into the two below
-    this.boxes = [];       // {min:{x,y,z}, max:{x,y,z}} — the axis-aligned ones
-    this.solids = [];      // convex solids — ramps, and anything turned
-    this.movers = [];      // the subset of both that travels; see updateMovers()
+    this.parts = [];       // every piece, before it is sorted into the lists below
+    this.boxes = [];       // {min, max} axis-aligned
+    this.solids = [];      // convex solids
+    this.movers = [];      // the subset of both that travels
     this.spawns = [];
     this.level = null;
+    this.erase = new Erasures();   // White Out holes, subtracted everywhere
     this.group = new THREE.Group();
     scene.add(this.group);
     this.setLevel(level);
   }
 
+  /** A Level, or null for the default arena. */
   setLevel(level) {
+    this.erase.clear();
     this.level = level || null;
+    this._load();
+  }
+
+  /** Rebuild from the level after the designer changed it. */
+  syncLevel() {
+    if (this.level) this._load();
+  }
+
+  _load() {
     this.parts = [];
     if (this.level) this.parts = this.level.worldBoxes();
     else this._build();
@@ -65,11 +65,7 @@ export class World {
     this.refresh();
   }
 
-  /** Upright boxes keep the exact, cheap axis-aligned path; ramps and anything
-   *  turned become convex solids. Nothing is in both lists. */
-  /** The level's own extent, which is how the player's failsafe knows it has
-   *  left. Recomputed with the box list; movers travel inside it by definition,
-   *  since both ends of every run are part of the level. */
+  /** The level's extent, for the player's failsafe. */
   _bounds() {
     const b = { min: { x: Infinity, y: Infinity, z: Infinity },
                 max: { x: -Infinity, y: -Infinity, z: -Infinity } };
@@ -108,9 +104,8 @@ export class World {
         shape.src = p.src || p;
         this.solids.push(shape);
       }
-      // The order of this list is the order of `parts`, which every peer builds
-      // from the same seed — so a platform's index is a name for it that needs
-      // no negotiation. A portal stuck to one travels by quoting that index.
+      // Every peer builds `parts` in the same order, so a mover's index names it
+      // without negotiation; a portal on a platform travels by that index.
       const mv = p.mv || (p.src && p.src.mv);
       if (mv && mv.sp > 0) {
         const p0 = centreOf(shape);
@@ -121,9 +116,9 @@ export class World {
             index: this.movers.length, shape, src: p.src || p,
             p0, p1: { x: mv.x, y: mv.y, z: mv.z },
             sp: mv.sp, dist, at: 0, dir: 1,
-            delta: { x: 0, y: 0, z: 0 },     // how far it moved this frame
-            vel: { x: 0, y: 0, z: 0 },       // ...and how fast, which a portal on
-            mesh: null                        // it hands to whatever comes out
+            delta: { x: 0, y: 0, z: 0 },     // moved this frame
+            vel: { x: 0, y: 0, z: 0 },
+            mesh: null
           });
         }
       }
@@ -131,18 +126,12 @@ export class World {
     this.bounds = this._bounds();
   }
 
-  /** Walk every platform along its run and drag its collision shape with it.
-   *
-   *  A moving platform is the first thing in this game that breaks the standing
-   *  assumption that world geometry never changes, so it is deliberately the
-   *  smallest possible break: the shape is *translated*, never rebuilt, and
-   *  `delta` records what it moved this frame so a player standing on top and a
-   *  portal stuck to its face can both be carried by exactly the same amount. */
+  /** Ping-pong every platform along its run. The shape is translated, never
+   *  rebuilt, and `delta` lets riders and portals move by the same amount. */
   updateMovers(dt) {
     if (!this.movers.length) return;
     for (const m of this.movers) {
       m.at += (m.sp / m.dist) * m.dir * dt;
-      // ping-pong: reflect off each end rather than wrapping, so it comes back
       while (m.at > 1 || m.at < 0) {
         if (m.at > 1) { m.at = 2 - m.at; m.dir = -1; }
         if (m.at < 0) { m.at = -m.at; m.dir = 1; }
@@ -167,22 +156,7 @@ export class World {
     }
   }
 
-  /** The platform a player is standing on, if any. Their feet have to be within
-   *  a hand's breadth of its top and inside its footprint — the same test for a
-   *  ramp uses its bounding box, which is close enough to carry someone. */
-  moverUnder(pos, radius = 0.17) {
-    for (const m of this.movers) {
-      const s = m.shape;
-      const min = s.min, max = s.max;
-      if (pos.x + radius < min.x || pos.x - radius > max.x) continue;
-      if (pos.z + radius < min.z || pos.z - radius > max.z) continue;
-      if (pos.y > max.y + 0.12 || pos.y < max.y - 0.4) continue;
-      return m;
-    }
-    return null;
-  }
-
-  /** Re-derive the meshes from `boxes`. Cheap enough to call on every edit. */
+  /** Re-derive the meshes. Cheap enough to call on every edit. */
   refresh() {
     for (const child of this.group.children.slice()) {
       this.group.remove(child);
@@ -192,15 +166,8 @@ export class World {
     this._mesh();
   }
 
-  /** The piece of world a portal's mouth is lying on.
-   *
-   *  Collision has to be able to take exactly that piece away while somebody is
-   *  standing in the mouth — a portal is a hole, and a body half through one is
-   *  inside the wall. Nothing records which box a portal was shot at (a peer's
-   *  portal arrives as four vectors and nothing else), so it is found from the
-   *  geometry: the surface whose face the centre is lying on, facing the way the
-   *  mouth faces. Cached on the portal, and a portal is rebuilt whenever it
-   *  moves, so the cache cannot go stale. */
+  /** The box or solid a mouth is lying on, found from geometry (a peer's portal
+   *  arrives as vectors only). Cached on the portal, which is rebuilt if moved. */
   hostFor(portal) {
     if (portal._host !== undefined) return portal._host;
     portal._host = this._findHost(portal.c, portal.n) || null;
@@ -209,7 +176,6 @@ export class World {
 
   _findHost(c, n) {
     const EPS = 3e-3;
-    // axis-aligned mouths are the common case, and are exact
     const k = Math.abs(n.x) > 0.999 ? 'x' : Math.abs(n.y) > 0.999 ? 'y'
             : Math.abs(n.z) > 0.999 ? 'z' : null;
     if (k) {
@@ -232,17 +198,7 @@ export class World {
     return null;
   }
 
-  /** Pull the box list back out of the level after the designer changed it. */
-  syncLevel() {
-    if (!this.level) return;
-    this.parts = this.level.worldBoxes();
-    this._split();
-    this.spawns = this.level.spawnPoints(this.boxes);
-    this.refresh();
-  }
-
-  /** cx/cz = centre, y = bottom. w and d are along the part's *own* axes, which
-   *  only differ from the world's once `rot` turns it. */
+  /** cx/cz = centre, y = bottom. w and d are along the part's own axes. */
   add(cx, y, cz, w, h, d, color, shape = SHAPE_BOX, rot = null) {
     const b = {
       x0: cx - w / 2, y0: y, z0: cz - d / 2,
@@ -254,44 +210,20 @@ export class World {
     return b;
   }
 
-  /** A ramp up to `height`, tall against (cx,cz) and falling away along `dir`.
-   *
-   *  Every slope in this map is 45 degrees — run equals rise, with no exceptions
-   *  — because a slope is now the thing that decides which way is up for whoever
-   *  is standing on it, and 45 is the one pitch that belongs equally to the two
-   *  surfaces it joins. (It began as a flight of half-metre steps, then a gentler
-   *  ramp at the same pitch as those steps.)
-   *
-   *  `y` is the bottom, and `flip` turns the wedge over so the sloped face is
-   *  underneath it — which is what a fillet under a ceiling is.
-   *
-   *  The wedge in solid.js always climbs along its own +x, so the run is stored
-   *  along local x and a turn about Y aims it; the extents are in the wedge's own
-   *  frame, not the world's. */
+  /** A 45-degree ramp up to `height`, tall at (cx,cz), falling away along `dir`.
+   *  `flip` puts the sloped face underneath (a ceiling fillet): a half turn about
+   *  the direction it runs (rx), since rz would also mirror world x. */
   slope(cx, cz, width, height, axis, dir, color, y = 0, flip = false) {
-    const run = height;                           // 45 degrees, always
+    const run = height;
     const wx = axis === 'x' ? cx + (run / 2) * dir : cx;
     const wz = axis === 'z' ? cz + (run / 2) * dir : cz;
     const ry = axis === 'x' ? (dir > 0 ? Math.PI : 0)
                             : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
-    // Turning a wedge over is a half turn about the direction it *runs*, not
-    // about the world's y. The rotations are applied X then Y then Z, so an rz
-    // of pi lands after the aiming turn and mirrors world x as well as y — which
-    // reversed exactly the two ceiling fillets that run along x, leaving them
-    // tall in the middle of the room and thin against the wall. rx comes before
-    // the aiming turn, flips the wedge upside down in its own frame, and leaves
-    // which way it climbs alone.
     return this.add(wx, y, wz, run, height, width, color, SHAPE_SLOPE,
                     [flip ? Math.PI : 0, ry, 0]);
   }
 
-  /** Fillet every inside corner of the room, floor and ceiling alike.
-   *
-   *  Not decoration. Gravity follows a player through a portal, so somebody can
-   *  be standing on a wall — and for them a right-angled corner is a dead end,
-   *  because there is no surface between the wall and the floor that either of
-   *  them can walk on. A 45-degree face belongs to both, and standing on one is
-   *  what turns you back the right way up: see Player._groundUp. */
+  /** A fillet in every inside corner, floor and ceiling. */
   _fillets(inner, color) {
     const F = FILLET, top = WALL_H - FILLET;
     const runs = [
@@ -307,19 +239,16 @@ export class World {
   _build() {
     const H = ARENA / 2;
 
-    // ground, outer walls, and a roof over the lot
+    // floor, walls, ceiling
     this.add(0, -1, 0, ARENA, 1, ARENA, PALETTE.floor);
     this.add(0, 0, -H, ARENA, WALL_H, 1, PALETTE.wall);
     this.add(0, 0, H, ARENA, WALL_H, 1, PALETTE.wall);
     this.add(-H, 0, 0, 1, WALL_H, ARENA, PALETTE.wall);
     this.add(H, 0, 0, 1, WALL_H, ARENA, PALETTE.wall);
-    // The room is closed now. It is a surface to put a portal on more than it is
-    // a lid: twelve metres is far above anything that can be jumped to, so
-    // nothing that could be reached before has become unreachable.
     this.add(0, WALL_H, 0, ARENA, 1, ARENA, PALETTE.ceil);
     this._fillets(H - 0.5, PALETTE.fillet);
 
-    // ---- centre: raised platform with a stair on each side ----
+    // centre: raised platform with a ramp on each side
     this.add(0, 0, 0, 14 * S, 2.5, 14 * S, PALETTE.plate);
     this.add(0, 2.5, 0, 3, 3.4, 3, PALETTE.accent);          // sightline breaker
     this.slope(7 * S, 0, 6 * S, 2.5, 'x', 1, PALETTE.block);
@@ -327,10 +256,8 @@ export class World {
     this.slope(0, 7 * S, 6 * S, 2.5, 'z', 1, PALETTE.block);
     this.slope(0, -7 * S, 6 * S, 2.5, 'z', -1, PALETTE.block);
 
-    // ---- four corner bunkers, open on the inward diagonal ----
-    // The perch occupies x,z in [42,52] (mirrored per corner); the stair flight
-    // and the crate are deliberately kept out of that footprint so nobody ever
-    // ends up walking into a low gap under the roof.
+    // four corner bunkers, open on the inward diagonal; the ramp and crate stay
+    // out of the perch's footprint so nothing is a low gap under the roof
     for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       const cx = sx * 20 * S, cz = sz * 20 * S;
       this.add(cx, 0, cz - sz * 5 * S, 12 * S, 3.2, 1, PALETTE.block);   // inner wall
@@ -340,7 +267,7 @@ export class World {
       this.add(cx + sx * 1 * S, 0, cz - sz * 3 * S, 2, 2, 2, PALETTE.accent2);
     }
 
-    // ---- mid-field cover: positions and lengths scale, height does not ----
+    // mid-field cover: positions and lengths scale, height does not
     const covers = [
       [0, 22, 12, 2.4, 1], [0, -22, 12, 2.4, 1],
       [22, 0, 1, 2.4, 12], [-22, 0, 1, 2.4, 12],
@@ -351,8 +278,7 @@ export class World {
       this.add(x * S, 0, z * S, w > 1 ? w * S : w, h, d > 1 ? d * S : d, PALETTE.wall);
     }
 
-    // ---- extra cover, because twice the floor needs more than twice the gaps
-    // filled: long walls out in the quarters that were empty at the old size ----
+    // extra cover in the outer quarters
     for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
       this.add(sx * 30, 0, sz * 14, 1, 2.4, 14, PALETTE.wall);
       this.add(sx * 14, 0, sz * 30, 14, 2.4, 1, PALETTE.wall);
@@ -361,130 +287,82 @@ export class World {
       this.add(sx * 35, 2, sz * 33, 2, 2, 2, PALETTE.block);
     }
 
-    // ---- moving platforms ----
-    // Placed where they are worth riding rather than where they are easiest to
-    // put: two lifts that reach somewhere you otherwise have to walk round to,
-    // and two shuttles high enough to cross the map on. Each starts flush with
-    // whatever is under it, so nothing here is a 0.5 m crawlspace that
-    // test/map.mjs would rightly call a trap.
+    // Moving platforms. Each starts flush with what is under it (test/map.mjs
+    // rejects crawlspaces). The shuttles are 1.3 m blocks on the floor, just
+    // jumpable, with runs swept against every box and ramp (test/portals.mjs).
     const lift = this.add(36, 0, 47, 4, 0.5, 4, PALETTE.accent);
     lift.mv = { x: 36, y: 3.75, z: 47, sp: 2.2 };         // up to the bunker roof
 
     const tower = this.add(0, 0, -50, 5, 0.5, 5, PALETTE.accent);
-    tower.mv = { x: 0, y: 5.75, z: -50, sp: 2.6 };        // a long way up, and back
+    tower.mv = { x: 0, y: 5.75, z: -50, sp: 2.6 };
 
-    // The two shuttles run along the floor rather than overhead. Up at four
-    // metres there was no way onto them — a jump is worth 1.4 m — and anything
-    // low enough to climb onto is also low enough to trap someone underneath.
-    //
-    // So they are blocks, not platforms: 1.3 m from the floor to the top, which
-    // is a whisker under a jump (JUMP_SPEED 8.2 against GRAVITY 24 is 1.40 m of
-    // rise, and STEP_HEIGHT is only 0.55, so it has to be jumped and a jump just
-    // makes it). Solid all the way down, so there is no crawlspace under one to
-    // be caught in — and walking into the side of one is walking into something
-    // 1.3 m tall, which shoves you along the way it is going and kills you if
-    // there is a wall behind you. That is the point of them being blocks.
-    //
-    // Both runs go until they meet the room, and both were found by sweeping the
-    // whole path against every static box *and* every ramp — the corner fillets
-    // are what stops them, 1.6 m out from each wall at floor level. The four
-    // corner crates that used to sit at ±54 have moved inboard to let them past.
-    // Nothing here was chosen by eye: at head height these two flew over the
-    // cover, and on the floor they drove straight through it.
     const shuttle = this.add(-53.9, 0, 55, 8, 1.3, 4, PALETTE.accent2);
     shuttle.mv = { x: 53.9, y: 0.65, z: 55, sp: 5 };      // wall to wall, north edge
 
-    // ...and the same up the east one, stopped short of the north shuttle's own
-    // lane. Two full-length runs at right angles at the same height must cross
-    // somewhere, and two platforms passing through each other is worse than one
-    // that turns round a few metres early.
+    // stops short of the north shuttle's lane so the two never cross
     const crossing = this.add(55, 0, -53.9, 4, 1.3, 8, PALETTE.accent2);
     crossing.mv = { x: 55, y: 0.65, z: 49, sp: 4.5 };
 
-    // ---- scattered crates: repositioned, but still crate-sized ----
+    // crates (the outer four sit at ±38 to leave the shuttle lanes clear)
     const crates = [
       [8, 18], [10, 20], [8.6, 19.2, 2], [-8, -18], [-10, -20], [-8.6, -19.2, 2],
       [18, -8], [20, -10], [-18, 8], [-20, 10],
-      // The four that used to sit at ±54 have come in to ±38: out there they were
-      // the only thing standing between the shuttles and the wall, and a shuttle
-      // that stops two thirds of the way along its edge is not a way across the
-      // map. In here they still break up the run out to a bunker.
       [16, 16], [-16, -16], [19, 19], [-19, -19], [19, -19], [-19, 19]
     ];
     for (const [x, z, y = 0] of crates) this.add(x * S, y, z * S, 2, 2, 2, PALETTE.block);
   }
 
   _mesh() {
+    // One merged mesh per colour keeps draw calls in single digits. Platforms
+    // get their own meshes, since a piece of a merged mesh cannot move.
     const byColor = new Map();
     const bucket = c => {
       if (!byColor.has(c)) byColor.set(c, { boxes: [], solids: [] });
       return byColor.get(c);
     };
-    // A platform cannot be merged in with everything else its colour: the merge
-    // is what makes the level one draw call, and one draw call cannot have a
-    // piece of itself walk off. Each gets its own mesh and its own transform,
-    // which is a handful of extra calls for a handful of platforms.
     for (const b of this.boxes) if (b.mover === undefined) bucket(b.color).boxes.push(b);
     for (const s of this.solids) if (s.mover === undefined) bucket(s.color).solids.push(s);
     for (const m of this.movers) m.mesh = this._moverMesh(m);
 
-    // one merged BufferGeometry per colour keeps the draw-call count in single digits
     for (const [color, list] of byColor) {
-      const positions = [];
-      const normals = [];
-      const uvs = [];
-      for (const b of list.boxes) {
-        const sx = b.max.x - b.min.x, sy = b.max.y - b.min.y, sz = b.max.z - b.min.z;
-        pushBox(positions, normals, uvs,
-          b.min.x + sx / 2, b.min.y + sy / 2, b.min.z + sz / 2, sx, sy, sz);
-      }
-      for (const s of list.solids) pushSolid(positions, normals, uvs, s);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-      const mat = new THREE.MeshLambertMaterial({ color });
-      this.group.add(new THREE.Mesh(geo, mat));
+      this.group.add(this._solidMesh(list.boxes, list.solids, color));
     }
 
-    // grid overlay on the floor so movement reads clearly
+    // floor grid, so movement reads clearly
     const span = this.level ? Math.max(this.level.w, this.level.l) : ARENA;
     const grid = new THREE.GridHelper(span, Math.max(4, Math.round(span / 2)), 0x64748b, 0x3c4658);
     grid.position.y = 0.01;
     grid.material.transparent = true;
     grid.material.opacity = 0.25;
+    eraseMaterial(grid.material, this.erase);
     this.group.add(grid);
   }
 
-  /** One platform, drawn at its own starting place and moved by its transform.
-   *  The geometry is baked in world coordinates exactly like the merged mesh, so
-   *  `position` is the offset from where it began rather than where it is. */
-  _moverMesh(m) {
+  _solidMesh(boxes, solids, color) {
     const positions = [], normals = [], uvs = [];
-    const s = m.shape;
-    if (s.planes) pushSolid(positions, normals, uvs, s);
-    else {
-      const sx = s.max.x - s.min.x, sy = s.max.y - s.min.y, sz = s.max.z - s.min.z;
+    for (const b of boxes) {
+      const sx = b.max.x - b.min.x, sy = b.max.y - b.min.y, sz = b.max.z - b.min.z;
       pushBox(positions, normals, uvs,
-        s.min.x + sx / 2, s.min.y + sy / 2, s.min.z + sz / 2, sx, sy, sz);
+        b.min.x + sx / 2, b.min.y + sy / 2, b.min.z + sz / 2, sx, sy, sz);
     }
+    for (const s of solids) pushSolid(positions, normals, uvs, s);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: s.color }));
-    // the geometry was baked wherever the shape currently is, which after a
-    // reload is not necessarily the start of its run
+    return new THREE.Mesh(geo, eraseMaterial(new THREE.MeshLambertMaterial({ color }), this.erase));
+  }
+
+  /** A platform's mesh, baked where the shape is now and moved by its position. */
+  _moverMesh(m) {
+    const s = m.shape;
+    const mesh = s.planes ? this._solidMesh([], [s], s.color) : this._solidMesh([s], [], s.color);
     m.bake = centreOf(s);
-    mesh.position.set(0, 0, 0);
     this.group.add(mesh);
     return mesh;
   }
 
-  /** A place to be put down. A spawn point where there is one — and where a
-   *  level has somehow left none, any clear spot inside its own walls, because
-   *  the caller is often the failsafe fetching somebody back from outside the
-   *  map and "there is nowhere to put you" is not an answer it can use. */
+  /** A spawn point, or failing that any clear spot inside the level. */
   randomSpawn() {
     if (this.spawns.length) {
       return { ...this.spawns[(Math.random() * this.spawns.length) | 0] };
@@ -504,37 +382,67 @@ export class World {
     return { x: (b.min.x + b.max.x) / 2, y: b.max.y, z: (b.min.z + b.max.z) / 2 };
   }
 
-  /** Distance along `dir` to the nearest box, or Infinity. */
+  /** Distance along `dir` to the nearest solid surface, or maxDist. Through a
+   *  White Out hole a shape is only met where the hole ends. */
   raycast(origin, dir, maxDist = 200) {
+    const mask = this.erase.active ? this.erase.rayMask(origin, dir, maxDist) : null;
     let best = maxDist;
     for (const b of this.boxes) {
-      const t = rayAABB(origin, dir, b.min, b.max);
+      let t;
+      if (mask) {
+        const sp = aabbSpan(origin, dir, b.min, b.max);
+        t = sp ? mask.first(sp[0], sp[1]) : Infinity;
+      } else {
+        t = rayAABB(origin, dir, b.min, b.max);
+      }
       if (t < best) best = t;
     }
     for (const s of this.solids) {
+      if (mask) {
+        const sp = convexSpan(origin, dir, s);
+        const t = sp ? mask.first(sp[0], sp[1]) : Infinity;
+        if (t < best) best = t;
+        continue;
+      }
       const h = rayConvex(origin, dir, s, best);
       if (h && h.t < best) best = h.t;
     }
     return best;
   }
 
-  /** The nearest box the ray enters, and which of its faces it came in through.
-   *  The level designer needs the face, not just the distance. */
-  pick(origin, dir, maxDist = 400) {
+  /** The nearest shape the ray enters and the face it came in through.
+   *  `through` passes White Out holes (portal balls); a ray meeting a shape
+   *  inside a hole comes back `erased`, with no face to put a portal on. */
+  pick(origin, dir, maxDist = 400, through = false) {
+    const mask = through && this.erase.active ? this.erase.rayMask(origin, dir, maxDist) : null;
     let best = null;
+    const inside = (shape, t) => {
+      if (t > maxDist || (best && best.t <= t)) return;
+      best = { box: shape, solid: shape.planes ? shape : undefined, t, axis: -1, sign: 1, erased: true };
+    };
     for (const b of this.boxes) {
+      if (mask) {
+        const sp = aabbSpan(origin, dir, b.min, b.max);
+        if (!sp) continue;
+        const t = mask.first(sp[0], sp[1]);
+        if (t === Infinity) continue;
+        if (sp[0] < 0 || t > sp[0] + 1e-6) { inside(b, t); continue; }
+      }
       const h = rayBoxFace(origin, dir, b.min, b.max);
       if (!h || h.t > maxDist) continue;
       if (!best || h.t < best.t) best = { box: b, t: h.t, axis: h.axis, sign: h.sign };
     }
-    // A turned box or a ramp has no axis-aligned face to name, so the designer
-    // gets the plane it hit instead and draws on that.
     for (const s of this.solids) {
+      if (mask) {
+        const sp = convexSpan(origin, dir, s);
+        if (!sp) continue;
+        const t = mask.first(sp[0], sp[1]);
+        if (t === Infinity) continue;
+        if (sp[0] < 0 || t > sp[0] + 1e-6) { inside(s, t); continue; }
+      }
       const h = rayConvex(origin, dir, s, maxDist);
       if (!h || h.inside || h.t > maxDist) continue;
       if (!best || h.t < best.t) {
-        // `face` is what a portal needs: the plane alone says which way the
-        // surface points, not where its edges are.
         best = { box: s, solid: s, t: h.t, axis: -1, sign: 1, plane: h.n, face: h.face };
       }
     }
@@ -551,9 +459,7 @@ export class World {
 
 const AXES = ['x', 'y', 'z'];
 
-/** The middle of either kind of shape. A solid keeps its own pivot; a box is
- *  halfway between its corners. Both agree with Level.centreOf(), which is what
- *  makes a platform's run mean the same thing in the designer and in the world. */
+/** The middle of a box or solid (a solid keeps its own pivot). */
 export function centreOf(shape) {
   if (shape.centre) return { x: shape.centre.x, y: shape.centre.y, z: shape.centre.z };
   return {
@@ -563,17 +469,15 @@ export function centreOf(shape) {
   };
 }
 
-/** Slab intersection that also reports the entry face: `axis` is 0/1/2 and
- *  `sign` is -1 for the low face and +1 for the high one. Null if it misses,
- *  or if the entry point is behind the origin. */
-export function rayBoxFace(ro, rd, min, max) {
+/** Slab test reporting the entry face: axis 0/1/2, sign -1 low / +1 high. */
+function rayBoxFace(ro, rd, min, max) {
   let tmin = -Infinity, tmax = Infinity, axis = 0, sign = -1;
   for (let i = 0; i < 3; i++) {
     const k = AXES[i];
     const inv = 1 / (rd[k] || 1e-9);
     let t1 = (min[k] - ro[k]) * inv;
     let t2 = (max[k] - ro[k]) * inv;
-    let s = -1;                         // entering through the low face
+    let s = -1;
     if (t1 > t2) { const t = t1; t1 = t2; t2 = t; s = 1; }
     if (t1 > tmin) { tmin = t1; axis = i; sign = s; }
     if (t2 < tmax) tmax = t2;
@@ -583,7 +487,14 @@ export function rayBoxFace(ro, rd, min, max) {
   return { t: tmin, axis, sign };
 }
 
+/** Distance to a box, 0 when starting inside, Infinity on a miss. */
 export function rayAABB(ro, rd, min, max) {
+  const sp = aabbSpan(ro, rd, min, max);
+  return sp ? (sp[0] >= 0 ? sp[0] : 0) : Infinity;
+}
+
+/** The whole stretch [enter, leave] of a ray inside a box, or null. */
+function aabbSpan(ro, rd, min, max) {
   const ix = 1 / (rd.x || 1e-9), iy = 1 / (rd.y || 1e-9), iz = 1 / (rd.z || 1e-9);
   let t1 = (min.x - ro.x) * ix, t2 = (max.x - ro.x) * ix;
   let tmin = Math.min(t1, t2), tmax = Math.max(t1, t2);
@@ -591,8 +502,23 @@ export function rayAABB(ro, rd, min, max) {
   tmin = Math.max(tmin, Math.min(t1, t2)); tmax = Math.min(tmax, Math.max(t1, t2));
   t1 = (min.z - ro.z) * iz; t2 = (max.z - ro.z) * iz;
   tmin = Math.max(tmin, Math.min(t1, t2)); tmax = Math.min(tmax, Math.max(t1, t2));
-  if (tmax < Math.max(tmin, 0)) return Infinity;
-  return tmin >= 0 ? tmin : 0;   // 0 = ray starts inside the box
+  if (tmax < Math.max(tmin, 0)) return null;
+  return [tmin, tmax];
+}
+
+/** The same for a convex solid. */
+function convexSpan(ro, rd, s) {
+  let t0 = -Infinity, t1 = Infinity;
+  for (const pl of s.planes) {
+    const denom = pl.nx * rd.x + pl.ny * rd.y + pl.nz * rd.z;
+    const dist = pl.d - (pl.nx * ro.x + pl.ny * ro.y + pl.nz * ro.z);   // > 0 inside
+    if (Math.abs(denom) < 1e-12) { if (dist < 0) return null; continue; }
+    const t = dist / denom;
+    if (denom > 0) { if (t < t1) t1 = t; } else if (t > t0) t0 = t;
+    if (t0 > t1) return null;
+  }
+  if (t1 < 0) return null;
+  return [t0, t1];
 }
 
 export function aabbOverlap(a, b) {
@@ -601,7 +527,7 @@ export function aabbOverlap(a, b) {
          a.min.z < b.max.z && a.max.z > b.min.z;
 }
 
-/** Triangulate a convex solid's faces as fans, flat-shaded from the face normal. */
+/** Triangulate a convex solid's faces as flat-shaded fans. */
 function pushSolid(pos, nor, uv, solid) {
   for (const f of solid.faces) {
     const [nx, ny, nz] = f.n;
@@ -612,7 +538,6 @@ function pushSolid(pos, nor, uv, solid) {
         pos.push(v[0], v[1], v[2]);
         nor.push(nx, ny, nz);
       }
-      // uv is only used to keep box proportions readable; a solid gets a flat one
       uv.push(0, 0, 1, 0, 1, 1);
     }
   }
@@ -620,8 +545,6 @@ function pushSolid(pos, nor, uv, solid) {
 
 function pushBox(pos, nor, uv, cx, cy, cz, sx, sy, sz) {
   const hx = sx / 2, hy = sy / 2, hz = sz / 2;
-  // 6 faces, each 2 triangles; uv scaled by face size so the texture-free
-  // lambert shading still shows box proportions if a map is added later
   const faces = [
     [[1, 0, 0], [[hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz]], sz, sy],
     [[-1, 0, 0], [[-hx, -hy, -hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz]], sz, sy],

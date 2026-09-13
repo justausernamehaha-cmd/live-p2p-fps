@@ -3,35 +3,24 @@ import {
   HALF_W, HALF_H, faceOf, fitPortal, overlapsMouth, assignHues, SOLO_PAIR, rayPortal
 } from './portal.js';
 
-// Everything you can see about a portal, and the ball that puts one there.
-// The arithmetic is all in portal.js, which is why that file can be tested
-// without a browser; this one is the three.js half plus the bookkeeping of who
-// owns which pair.
+// The visible half of portals (the arithmetic is in portal.js): the balls, the
+// mouths, the views through them, and who owns which pair.
 
-// Twice what it was, at the user's asking. It was fast enough to read as a shot
-// rather than a lob; now it barely reads as a flight at all, which is the point
-// — you look where you want a portal and it is there.
 const BALL_SPEED = 156;
-const BALL_RANGE = 220;       // beyond this it simply fizzles out
-const BALL_R = 0.09;          // "a perfect small ball"
+const BALL_RANGE = 220;
+const BALL_R = 0.09;
 const BALL_STEP = 1.2;        // metres per collision query along its flight
-// The ring does not turn, and must not. It is a circle scaled unevenly into an
-// oval, so rotating the mesh sweeps that oval around instead of spinning a ring
-// inside it: the mouth visibly changes shape, wider than tall and back again,
-// once a second. A portal that is there stays exactly as it was put.
+// The mouth mesh must never rotate: it is a circle scaled into an oval, so
+// spinning it visibly changes the oval's shape.
 
-// Seeing through a portal means rendering the scene again from behind the other
-// one, once per portal, per frame. That is the most expensive thing this game
-// does, so it is rationed: only portals actually on screen are redrawn, at most
-// this many of them, at half resolution.
+// Seeing through a portal re-renders the scene, so it is rationed: on-screen
+// mouths only, nearest first, at most MAX_VIEWS, at half resolution.
 const MAX_VIEWS = 4;
 const VIEW_SCALE = 0.5;
-const VIEW_RANGE = 90;        // metres past which a mouth is not worth redrawing
+const VIEW_RANGE = 90;
 
-// The disc samples its view in screen space: the virtual camera rendered the
-// same viewport with the same projection, so the pixel behind this fragment is
-// the pixel at the same place in the target. No UV mapping is involved at all,
-// which is what keeps it correct at every angle.
+// The virtual camera renders the same viewport and projection, so the disc
+// samples its view in screen space and needs no UVs.
 const VIEW_VERT = `
   varying vec4 vClip;
   void main() {
@@ -42,20 +31,13 @@ const VIEW_FRAG = `
   uniform sampler2D uView;
   uniform vec3 uFallback;
   uniform float uHasView;
-  uniform vec3 uTint;
   varying vec4 vClip;
   void main() {
     if (uHasView < 0.5) { gl_FragColor = vec4(uFallback, 0.92); return; }
     vec2 uv = (vClip.xy / vClip.w) * 0.5 + 0.5;
-    // Straight through, untouched — it used to be mixed 12% toward the portal's
-    // own colour to say which mouth you were looking through, and that only made
-    // the view look murky. The ring already says which is which.
     gl_FragColor = vec4(texture2D(uView, clamp(uv, 0.002, 0.998)).rgb, 1.0);
-    // The target is written in sRGB and sampled back as linear, and a raw
-    // ShaderMaterial gets none of the conversions three.js appends to its own
-    // materials. Without this the mouth outputs linear values where sRGB is
-    // expected and everything through it comes out at about a third of its
-    // brightness — which is what "meshed black" was.
+    // a raw ShaderMaterial gets no colour-space conversion; without this the view
+    // comes out at a third of its brightness
     #include <colorspace_fragment>
   }`;
 
@@ -68,17 +50,13 @@ export class PortalField {
     this.balls = [];
     this.group = new THREE.Group();
     scene.add(this.group);
-    this.selfId = 'me';
-    this._links = [];            // rebuilt only when a portal changes, see links()
-    // one random number, announced once, never re-rolled: it is this page's
-    // contribution to everybody's colours and it changes on every refresh
+    this.selfId = 'me';          // until there is a network id
+    this._links = [];            // rebuilt only when a portal changes
+    // this page's contribution to everybody's colours, new on every refresh
     this.myRandom = Math.random();
     this.colors.set(this.selfId, { ...SOLO_PAIR });
-    this.onPlaced = null;        // the game hooks this to broadcast
-    // Anything in here is drawn only into portal views, never into the player's
-    // own camera: their own body, which they can see through a portal and must
-    // not see hanging in front of their face.
-    this.selfView = null;
+    this.onPlaced = null;        // the game broadcasts from here
+    this.selfView = null;        // drawn only into portal views: your own body
     this._vcam = new THREE.PerspectiveCamera();
     this._vcam.matrixAutoUpdate = false;
     this._plane = new THREE.Plane();
@@ -87,9 +65,7 @@ export class PortalField {
   }
 
   // ------------------------------------------------------------------ colours
-  /** Recompute everyone's colours from the announcements in hand. Every peer
-   *  runs this over the same set and reaches the same answer, so nobody has to
-   *  be in charge of handing colours out. */
+  /** Every peer runs this over the same announcements and gets the same colours. */
   recolour(entries) {
     const hues = assignHues(entries);
     this.colors = new Map();
@@ -102,8 +78,7 @@ export class PortalField {
     }
   }
 
-  /** Adopt the real network id once there is one, keeping whatever is already
-   *  on the walls. Before connecting the local player is simply called 'me'. */
+  /** Adopt the network id, keeping whatever is already on the walls. */
   setSelfId(id) {
     const next = id || 'me';
     if (next === this.selfId) return;
@@ -127,11 +102,8 @@ export class PortalField {
   myColors() { return this.colors.get(this.selfId) || SOLO_PAIR; }
 
   // -------------------------------------------------------------------- shots
-  /** A portal shot: a small ball, no gravity, perfect aim.
-   *
-   *  `ghost` is a peer's ball, which is there to be watched and nothing else —
-   *  where their portal ended up is their machine's business and arrives as its
-   *  own message. Letting two machines both decide would let them disagree. */
+  /** A portal ball. A `ghost` ball is a peer's, only for show: where their portal
+   *  lands arrives as its own message, so two machines never both decide. */
   fire(owner, origin, dir, side, ghost = false, up = null) {
     const color = this.colorFor(owner, side);
     const mesh = new THREE.Mesh(
@@ -139,27 +111,20 @@ export class PortalField {
       new THREE.MeshBasicMaterial({ color })
     );
     mesh.position.set(origin.x, origin.y, origin.z);
-    const glow = new THREE.PointLight(color, 3, 6);
-    mesh.add(glow);
+    mesh.add(new THREE.PointLight(color, 3, 6));
     this.group.add(mesh);
-    // it leaves along the aim line from the eye, so it lands exactly on the
-    // crosshair; hidden for the first stride so it looks like it left the gun
-    // rather than the player's face
+    // leaves from the eye so it lands on the crosshair; hidden for its first stride
     mesh.visible = false;
     this.balls.push({
       owner, side, mesh, color, ghost,
       pos: { x: origin.x, y: origin.y, z: origin.z },
       dir: { x: dir.x, y: dir.y, z: dir.z },
-      // which way was up for whoever fired it, so the mouth stands the way they
-      // were standing rather than the way the world is
-      up: up ? { x: up.x, y: up.y, z: up.z } : null,
+      up: up ? { x: up.x, y: up.y, z: up.z } : null,   // the shooter's up orients the mouth
       travelled: 0
     });
   }
 
-  /** Advance every ball and settle what it hits. Called once a frame with the
-   *  world, because a ball is the only thing here that has to ask about level
-   *  geometry. */
+  /** Advance balls and settle what they hit. */
   update(dt, world) {
     this._rideMovers(world);
 
@@ -169,9 +134,9 @@ export class PortalField {
       let done = false;
       while (left > 0 && !done) {
         const seg = Math.min(BALL_STEP, left);
-        const hit = world.pick(b.pos, b.dir, seg);
+        const hit = world.pick(b.pos, b.dir, seg, true);   // through White Out holes
         if (hit) {
-          this._land(b, hit);
+          this._land(b, hit, world);
           done = true;
           break;
         }
@@ -180,7 +145,7 @@ export class PortalField {
         b.pos.z += b.dir.z * seg;
         b.travelled += seg;
         left -= seg;
-        if (b.travelled > BALL_RANGE) { done = true; this._fizzle(b); }
+        if (b.travelled > BALL_RANGE) { done = true; this.effects?.burst?.(b.pos, b.color); }
       }
       if (done) { this._dropBall(i); continue; }
       b.mesh.position.set(b.pos.x, b.pos.y, b.pos.z);
@@ -188,9 +153,7 @@ export class PortalField {
     }
   }
 
-  /** A portal placed on a moving platform rides with it — mouth, mesh and all.
-   *  The platform's own frame delta is the whole of it, which is why world.js
-   *  bothers to record one. */
+  /** A portal on a moving platform rides with it by the platform's frame delta. */
   _rideMovers(world) {
     if (!world.movers || !world.movers.length) return;
     for (const p of this._all()) {
@@ -202,31 +165,22 @@ export class PortalField {
     }
   }
 
-  _land(ball, hit) {
+  _land(ball, hit, world) {
     if (ball.ghost) { this.effects?.impact(hit.point, ball.dir); return; }
+    const explode = () => this.effects?.burst?.(hit.point || ball.pos, ball.color);
+    if (hit.erased) { explode(); return; }        // the curved inside of a hole
     const face = faceOf(hit);
     const fitted = face && fitPortal(face, hit.point, ball.dir, ball.up);
-    // No mouth may be laid over any other, whoever it belongs to — not the
-    // shooter's own partner, and not somebody else's. The one it is replacing
-    // does not count: that piece of wall is about to be free again.
+    // no mouth over any other (except the one this replaces), and none on White Out
     const replacing = this.pairs.get(ball.owner)?.[ball.side] || null;
-    const clash = fitted && this._all().some(q => q !== replacing && overlapsMouth(fitted, q));
-    if (!fitted || clash) {
-      this._explode(hit.point || ball.pos, ball.color);
-      return;
-    }
+    const clash = fitted && (this._all().some(q => q !== replacing && overlapsMouth(fitted, q)) ||
+      world.erase.coversOval(fitted.c, fitted.u, fitted.v, HALF_W, HALF_H));
+    if (!fitted || clash) { explode(); return; }
     const mover = hit.solid ? (hit.solid.mover ?? -1) : (hit.box?.mover ?? -1);
     const portal = this.place(ball.owner, ball.side, {
       c: fitted.c, n: fitted.n, u: fitted.u, v: fitted.v, mover
     });
     if (ball.owner === this.selfId) this.onPlaced?.(ball.side, portal);
-  }
-
-  _fizzle(ball) { this._explode(ball.pos, ball.color); }
-
-  /** "It should just explode and disappear." A flash and a bang, no portal. */
-  _explode(point, color) {
-    this.effects?.burst?.(point, color);
   }
 
   _dropBall(i) {
@@ -238,8 +192,7 @@ export class PortalField {
   }
 
   // ------------------------------------------------------------------ portals
-  /** Put a portal down, replacing that owner's previous one of the same colour.
-   *  One pair per person is the whole rule, and it lives here. */
+  /** Place a portal, replacing that owner's previous one of the same side. */
   place(owner, side, spec) {
     let pair = this.pairs.get(owner);
     if (!pair) { pair = { a: null, b: null }; this.pairs.set(owner, pair); }
@@ -257,14 +210,8 @@ export class PortalField {
     return portal;
   }
 
-  /** Every complete pair, in both directions. This is what the player walks
-   *  into: anyone's portals work for anyone, which is what makes the colours
-   *  worth telling apart in the first place.
-   *
-   *  Cached, because the caller is _moveStep(): at hop speed that is eight
-   *  sub-steps a frame, and rebuilding the list each time allocated some five
-   *  hundred throwaway arrays a second to answer a question whose answer only
-   *  changes when somebody fires. */
+  /** Every complete pair, both directions. Anyone's portals work for anyone.
+   *  Cached: the player asks several times per frame. */
   links() { return this._links; }
 
   _relink() {
@@ -275,8 +222,7 @@ export class PortalField {
     }
   }
 
-  /** The nearest mouth a ray goes through before `maxDist`, and where it comes
-   *  out. A shot through a portal is the same shot, somewhere else. */
+  /** The nearest mouth a ray enters before maxDist, and its partner. */
   rayHit(origin, dir, maxDist) {
     let best = null;
     for (const link of this._links) {
@@ -310,32 +256,15 @@ export class PortalField {
   }
 
   // ------------------------------------------------------------------- views
-  /** Draw what is on the other side of every portal worth drawing.
-   *
-   *  Looking through a portal is the scene rendered again from a camera that has
-   *  been put through the portal — the player's own camera, moved by exactly the
-   *  transform that moves the player. The result is sampled in screen space, so
-   *  the window is correct at every angle without a UV in sight.
-   *
-   *  Two things make it work rather than nearly work:
-   *
-   *  The near plane is bent onto the exit portal's own plane. The virtual camera
-   *  sits *behind* the exit — that is what looking out of it means — so without
-   *  this the first thing it draws is the back of the wall the exit is on, and
-   *  every portal is a picture of the inside of a wall.
-   *
-   *  Portals drawn inside a portal view keep the texture they had last frame.
-   *  That costs one render per portal per frame instead of one per portal per
-   *  level of recursion, and it is what makes a mouth facing its own partner show
-   *  a corridor going away from you rather than a flat disc. It is a frame stale,
-   *  which at sixty frames a second nobody has ever been able to see.
-   */
+  /** Render what is behind every mouth worth drawing, from the player's camera
+   *  moved through the portal. The near plane is bent onto the exit's plane, and
+   *  the EXIT is hidden (the virtual camera stands right behind it). Mouths seen
+   *  inside a view keep last frame's texture, which gives the corridor effect. */
   renderViews(renderer, scene, camera) {
     const all = this._all().filter(p => p.group);
     if (!all.length) return;
     this._sizeTargets(renderer);
 
-    // only what is on screen, nearest first, and never more than the ration
     camera.updateMatrixWorld();
     this._frustum = this._frustum || new THREE.Frustum();
     this._frustum.setFromProjectionMatrix(
@@ -348,7 +277,6 @@ export class PortalField {
       const c = new THREE.Vector3(p.c.x, p.c.y, p.c.z);
       const d = c.distanceTo(eye);
       if (d > VIEW_RANGE) continue;
-      // a sphere, so a mouth half off the edge of the screen still counts
       if (!this._frustum.intersectsSphere(new THREE.Sphere(c, HALF_H + 0.2))) continue;
       wanted.push({ p, partner, d });
     }
@@ -363,12 +291,6 @@ export class PortalField {
     for (const { p, partner } of wanted.slice(0, MAX_VIEWS)) {
       if (!p.target) p.target = this._makeTarget();
       this._aimVirtualCamera(camera, p, partner);
-      // The *exit* is what has to go, not the mouth being looked through. The
-      // virtual camera stands behind the far mouth looking out of it, so that
-      // mouth is right against the lens: leave it in and every portal is a
-      // picture of the back of its own partner. The near mouth stays, and shows
-      // the texture it had last frame, which is what turns two facing portals
-      // into a corridor going away from you instead of a flat disc.
       partner.group.visible = false;
       renderer.setRenderTarget(p.target);
       renderer.render(scene, this._vcam);
@@ -388,8 +310,6 @@ export class PortalField {
     return p.side === 'a' ? pair.b : pair.a;
   }
 
-  /** Put the camera through the portal, and bend its near plane onto the far
-   *  mouth's surface so nothing between the two is drawn. */
   _aimVirtualCamera(camera, from, to) {
     const basis = (q, flip) => {
       const m = new THREE.Matrix4().makeBasis(
@@ -400,8 +320,7 @@ export class PortalField {
       m.setPosition(q.c.x, q.c.y, q.c.z);
       return m;
     };
-    // Mt * flip(u, n) * Mf^-1 — the same half turn about the exit's up axis that
-    // portalMap() applies to the player, written as one matrix.
+    // Mt * flip(u, n) * Mf^-1: the same transform portalMap() applies to the player
     this._m.copy(basis(to, true)).multiply(basis(from, false).invert());
 
     const v = this._vcam;
@@ -427,8 +346,6 @@ export class PortalField {
     return t;
   }
 
-  /** Keep the targets matched to the window. Resizing is rare and reallocating
-   *  every frame would be absurd, so it only happens when the size really moved. */
   _sizeTargets(renderer) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const w = Math.max(2, Math.round(size.x * VIEW_SCALE));
@@ -441,20 +358,19 @@ export class PortalField {
   // ------------------------------------------------------------------ meshes
   _build(p) {
     p.group = new THREE.Group();
-    // the mouth: dark, so it reads as a hole rather than as a sticker
     p.disc = new THREE.Mesh(
       new THREE.CircleGeometry(1, 48),
       new THREE.ShaderMaterial({
         uniforms: {
           uView: { value: null },
           uHasView: { value: 0 },
-          uFallback: { value: new THREE.Color(0x0a0f18) },
-          uTint: { value: new THREE.Color(p.color) }   // kept for the ring's sake
+          uFallback: { value: new THREE.Color(0x0a0f18) }
         },
         vertexShader: VIEW_VERT, fragmentShader: VIEW_FRAG,
         side: THREE.DoubleSide, depthWrite: false, transparent: true
       })
     );
+    // additive ring glows on its own; no light, which would spotlight the wall
     p.ring = new THREE.Mesh(
       new THREE.RingGeometry(0.82, 1, 48),
       new THREE.MeshBasicMaterial({
@@ -468,20 +384,13 @@ export class PortalField {
     p.ring.position.z = 0.012;
     p.group.add(p.disc);
     p.group.add(p.ring);
-    // No lamp. A mouth used to carry a coloured point light, which lit whatever
-    // it was near: put one on the floor beside a wall and the wall — and you
-    // standing at it — turned into a spotlight. The ring is additively blended
-    // and glows on its own, so the portal still reads in a dark corner without
-    // throwing light onto anything solid.
     p.group.renderOrder = 4;
-    p.target = null;             // its view of the far side, made on first use
+    p.target = null;             // made on first use
     this.group.add(p.group);
     this._placeMesh(p);
   }
 
-  /** Sit the mesh on the surface, turned into the portal's own frame. The basis
-   *  is (u, v, n) exactly as the geometry uses it, so what is drawn and what is
-   *  walked through can never drift apart. */
+  /** Sit the mesh on the surface in the portal's own (u, v, n) frame. */
   _placeMesh(p) {
     if (!p.group) return;
     const m = new THREE.Matrix4().makeBasis(
@@ -498,7 +407,6 @@ export class PortalField {
   _paint(p, color) {
     p.color = color;
     p.ring?.material.color.setHex(color);
-    p.disc?.material.uniforms.uTint.value.setHex(color);
   }
 
   _dispose(p) {
@@ -512,10 +420,7 @@ export class PortalField {
   }
 }
 
-/** Bend a projection matrix's near plane onto an arbitrary plane, given in the
- *  camera's own space. Lengyel's construction: replace the third row so that the
- *  near plane and the clip plane coincide, which costs nothing at draw time and
- *  clips exactly, unlike a user clipping plane. */
+/** Bend a projection's near plane onto a camera-space plane (Lengyel). */
 function obliqueNear(projection, plane) {
   const e = projection.elements;
   const c = new THREE.Vector4(plane.normal.x, plane.normal.y, plane.normal.z, plane.constant);

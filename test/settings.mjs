@@ -82,8 +82,9 @@ await open();
 
 // -------------------------------------------------------------- the key rows
 R.rows = await rows();
-// 17 rows since the portal gun arrived and brought a Weapon 4 with it
-await must(R.rows.length === 17, 'expected 17 key rows, got ' + R.rows.length);
+// 18 rows since White Out arrived and brought a Weapon 5 with it (17 before, with
+// the portal gun's Weapon 4)
+await must(R.rows.length === 18, 'expected 18 key rows, got ' + R.rows.length);
 R.weapon4Keys = await keysOf('Weapon 4 (portal gun)');
 await must(R.weapon4Keys.length >= 1, 'the portal gun has no key: ' + JSON.stringify(R.weapon4Keys));
 R.forwardKeys = await keysOf('Forward');

@@ -46,10 +46,12 @@ against the live site.
 | `portal.mjs` | portal fitting, sliding, refusal, the traversal map, colour agreement, platform seeds — also node-only |
 | `portals.mjs` | the same claims proved to the *player*: standing astride a mouth, the hand-over being exact, gravity coming through with the body, riding a platform, no frame drawn from behind a mouth |
 | `clipping.mjs` | the four hand-reported ways a portal put a body inside a wall or outside the map |
-| `platforms.mjs` | brushing past a platform, standing behind one, and a mouth on the underside of a descending lift |
+| `platforms.mjs` | brushing past a platform, standing behind one, and a mouth on the underside of a descending lift (it does *not* cover being carried: with riding disabled it stays green — `portals.mjs` is the one that catches that) |
 | `tilted.mjs` | gravity rotated 45°: a body at 45° lands, walks where its camera looks, falls the way its feet point |
 | `touch.mjs` | a finger that leaves without a release can never take the controls with it, and a thumb parked on a button never owns the view |
 | `rooms.mjs` | two real pages: an empty room is made, an existing one is joined behind a shield, and leaving works |
+| `erase.mjs` | White Out in node: paint is solid until opened, holes pop at exactly five seconds, ray masks against dense sampling, and a dragged slot lets a body through where no single circle would |
+| `whiteout.mjs` | hold paints white and freezes the shooter, release makes holes, the pop at five seconds, walking through a painted slot, out of bounds is instant death, and a release killing a second page through the centre block |
 
 ## Things worth not rediscovering
 
@@ -538,8 +540,8 @@ short of straight up and straight down.
 
 There are eighteen ups: the six world axes, and the twelve that sit at 45° between
 two of them. `snapUp()` rounds a portal's image of your up to the nearest of the
-eighteen; `snapAxis()` is still there for the places that genuinely cannot take a
-tilted answer.
+eighteen. (A six-way `snapAxis()` used to sit beside it; nothing called it, and it
+went in the 2026-09-13 simplification.)
 
 The six keep the fast path **exactly** as it was. That is the whole design:
 
@@ -608,6 +610,153 @@ own drag.
 `test/touch.mjs` grew a fifth case, watched go red first (`otherFingerTurns: 0`,
 then `0.504`), which also asserts the button stays held through the other
 finger's drag and that the button's own finger can still aim.
+
+## White Out — 2026-09-10
+
+Asked for in one line: *"when holding that gun, it shows a small circle instead of
+crosshair, and when clicked, it erases everything in that circle, including
+players, which will die. it recovers slowly and finishes after 10s."*
+
+* **The circle is a cone.** Its apex is the shooter's eye and its half-angle is
+  the angle the ring subtends (`ERASE_ANGLE`, about 3 degrees — 1 m across at
+  20 m, 4 m at 80). "Everything in that circle" taken literally is everything
+  behind it too, so it is a hole all the way through, not a dent in the first
+  wall. It is also the only version with the same shape on every screen: a hole
+  that stopped at the first surface would need peers to agree what that was.
+* **The level is never edited.** A hole is subtracted from it wherever it is
+  asked about — collision (`Player._touches`), hitscan (`World.raycast`), portal
+  balls (`World.pick(..., true)`) and the shader (`eraseMaterial`). Healing is the
+  cone narrowing, so there is nothing to rebuild or put back.
+* **Collision is exact for boxes**: a wall is solid to a body only where their
+  overlap is not inside the cone, and a cone is convex, so that is eight corners.
+  A body walks through a hole in a wall only when the hole is wider than the
+  body — from about 18 m away for someone standing. Ramps are asked with their
+  bounding box, which errs toward solid near a hole.
+* **It heals by area, not by radius.** tan(half-angle) goes as the square root of
+  the time left, so the hole's area shrinks evenly to nothing at ten seconds.
+* **The recharge has to be its own clock.** `Loadout.nextShot` is shared by every
+  gun, and ten seconds there locked the rifle out the moment you switched to it.
+  `readyAt` lives on the weapon's own state.
+* **Who dies is decided by the shooter**, against peers where the shooter's screen
+  draws them (`Erasures.touchesBody`, any part of the body), and sent as an
+  ordinary hit of 200 flagged `er` — so the victim's shield still works and the
+  killfeed says *erased* on every screen.
+* The `er` message carries the direction at four decimals: two would put the far
+  end of the cone half a metre off at sixty metres.
+* **Deliberately not done**: portals are not erased (a mouth over a hole floats
+  in the air and still works); a hole is not sent to somebody who joins while one
+  is open; and **falling out of the map through a hole is not a death** — the
+  failsafe puts you on a spawn point, as it always has. That last one is the one
+  most likely to be wanted differently.
+
+## White Out, second version — 2026-09-13
+
+Reported after trying it: *"i should be able to hold and drag to make it all
+white … before my mouse is released, it stays all white but im stuck and cant
+move"*, *"i should be able to pass through the hole"*, *"make it stay there for 5
+seconds then pops out"*, and *"people who is out of bounds should be instantly
+dead"*. Read as, and built as:
+
+* **Hold = paint, release = hole.** Holding fire stamps the circle along the aim
+  every `STAMP_STEP` (0.75 of the ring's half-angle), filling in when the mouse
+  jumps. A stamp is the same cone as before, but white paint and solid until
+  `Erasures.open(owner, stroke)`. The shader draws paint white and discards holes.
+  Network: `er` is one stamp, `eo` opens a stroke.
+* **The shooter is frozen from the frame fire goes down**, not the frame the
+  stroke starts — `_fire` runs after movement, and the first version walked one
+  frame (0.104 m, caught by the test). Flat velocity is zeroed and the player is
+  updated with `IDLE_INPUT`; gravity and aiming still work.
+* Anything that ends the hold ends the stroke: letting go, dying, a menu taking
+  the controls (IDLE_INPUT), switching weapon. Kills are judged at release, against
+  every stamp of the stroke.
+* **Passing through needed the holes to count together.** The old box test was
+  exact but one cone at a time, and a single circle is 0.42 m across at 4 m —
+  nobody standing ever fitted. `clearsBox` now samples the overlap (the middle of
+  each thin axis, every 0.3 m along a long one) against the union of holes. That
+  is deliberately forgiving: a body fits any hole its middle line fits.
+* **Five seconds, full size, then gone.** No shrinking. Recharge is the same five
+  seconds from the release.
+* **Smooth line** (asked for next): a stamp is a *swept* cone, from the stroke's
+  previous stamp's aim to its own — a capsule in angle — so the edge is straight
+  where circles every `STAMP_STEP` left a notch 7% of the radius deep. The point
+  test, collision and the shader use the sweep exactly; ray masks use plain cones
+  a quarter of a radius apart along it (44 of 240,000 samples differ, all on the
+  edge). Three vec4 arrays per stamp now, so the limits are 40 a stroke and 48 in
+  the world — WebGL2 only guarantees 224 fragment uniform vectors.
+* **No portal on White Out** (asked for next): `Erasures.coversOval` samples the
+  mouth's centre, a half-size ring and its rim against paint and holes, and the
+  ball explodes if any is covered. A portal already there when somebody paints
+  over it stays.
+* **Instant out-of-bounds death exposed an old `_unstick` bug.** With no clear
+  way out it takes the cheapest move anyway; a body left under the centre block
+  (the settings suite does this) has ramps on all four sides and the block above,
+  so the cheapest was down, and the next pass went down again, out through the
+  floor. The failsafe used to teleport that away silently. Candidates that would
+  leave the level's bounds are now dropped whenever any other remains. Found by
+  instrumenting `walks` in settings.mjs: `out of bounds ▸ set`, escapes 1.
+* **Out of bounds is death**, shield or not (`Player.outOfBounds`, killer id
+  `#bounds`), replacing the quarter-second teleport. `escapes` still counts it,
+  which is what `clipping.mjs` and `tilted.mjs` assert is zero. A portal exit
+  with nowhere to put you is also out of bounds now.
+* Two bugs the node suite caught on the first run: `open()` did not mark the
+  uniforms stale, so `holes` stayed 0; and `Array.from`'s map callback has no
+  third argument.
+
+## Simplified — 2026-09-13
+
+Asked for as "as simple as possible while still functioning properly". Every
+feature stayed; the source went from 9,481 lines to 7,652. What changed:
+
+* **Comments cut to the why.** The essays that were in the code are this file's
+  sections above; the code keeps one or two lines where it would otherwise look
+  wrong (SKIN, the `_axis` cap, the camera basis, never filtering keyup).
+* **Duplication folded into one place:** `Avatar` in remote.js is the body, the
+  far-mouth half, the label and the pose for both a peer and your own portal
+  body; `Player._pushOut` is the ramp push-out shared by the upright and tilted
+  paths, `_overFootprint` the test `_ride` and `_crush` both made;
+  `World._solidMesh` builds merged and platform meshes alike and `rayAABB` is
+  `aabbSpan` with the far end dropped; `Game._dropNet` / `_openRoom` /
+  `_relayError` replace four copies of the room-opening code; `level.js` uses
+  `util.hash`, which was the same FNV-1a as its private `fnv`.
+* **Dead code removed:** `World.moverUnder`, `Input.lookEnd`, `Level.resize` /
+  `inside` / `all`, `snapAxis`, `lookAngles`, `overlapsPartner`, the portal
+  disc's unused `uTint`, `Layout.onSelect`, and a dozen exports only used inside
+  their own file. `test/portal.mjs` checks the view turn with `anglesIn(UP_Y, …)`,
+  which is the same formula `lookAngles` was.
+
+Checked by diffing every file with comments and whitespace stripped, so each
+code change was reviewed on its own, and by the full suite.
+
+**`touch.mjs` had a clock flake, in the old code as well as the new** (the old
+build failed it 1 run in 5, measured). "The finger on the button can still drag
+the view" read the yaw 60 ms after the drag; under the software rasteriser a
+frame sometimes stalls through the whole drag, so the turn was still sitting in
+`lookDX` — exactly 0.504, applied a moment later — when it was read. It now waits
+two animation frames instead of a clock. 5/5 after.
+
+## Performance, measured — 2026-09-13
+
+Benchmark: headless Chromium, 900x600, 8 s per scene, rAF frame count plus wall
+time wrapped around the game's own functions and a CDP CPU profile. "Busy" is two
+mouths on screen, the four platforms running, a White Out hole re-opened every 4 s
+and a peer walking in front of a mouth.
+
+* **Headless Chromium can use the real GPU here**: `--use-gl=angle
+  --use-angle=gl --enable-gpu --ignore-gpu-blocklist` reports the Intel Arc
+  (Meteor Lake). The test suites use SwiftShader; for frame rate, use the GPU.
+* Real GPU: plain 60 fps, busy 60 fps (the cap), JavaScript ~1 ms per frame.
+  There is nothing to optimise on this machine.
+* SwiftShader: plain 60, busy ~42, JavaScript 2.4 ms of a ~24 ms frame with the
+  main thread 88% idle — the cost is rasterising the portal views, not JS. The
+  simplification changed none of these numbers (original 41.6, simplified 41.9).
+* **The touch buttons' `backdrop-filter: blur(2px)` cost ~17%** under SwiftShader
+  (plain 59.5 -> 49.6, busy 41.3 -> 34) — ten blurs recomposited over the canvas
+  every frame, on exactly the devices with the weakest GPUs. Removed, with the
+  fullscreen button's. The pause menu keeps its blur on purpose.
+* Seen and left alone: with a portal view on screen three.js re-derives program
+  parameters for every material on every pass (`getParameters` ~0.5 ms/frame under
+  SwiftShader), because a render target's output colour space differs from the
+  canvas's. It is inside three.js and costs nothing visible on a real GPU.
 
 ## Things that were reported and are not obvious
 

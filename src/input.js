@@ -1,56 +1,46 @@
 import { clamp, now } from './util.js';
 
-// One input layer for every device. Keyboard, mouse, and touch all write into
-// the same state, and they are additive: a phone with a Bluetooth keyboard
-// drives movement from WASD while the thumb on the right half still aims.
+// One input layer for every device. Keyboard, mouse and touch all write into the
+// same state and are additive: a phone with a Bluetooth keyboard moves on WASD
+// while a thumb aims. Traps behind the odd-looking code here are written up in
+// claude.md ("browser input gotchas").
 
-// The stock bindings. They are only defaults now: the settings panel writes a
-// copy of this map to localStorage, so `binds` is what the game actually reads.
+// Defaults only; the settings panel saves a copy that `binds` is read from.
 export const DEFAULT_BINDS = {
   KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
   Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint',
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
-  KeyF: 'fire',                       // keyboard-only fallback when there is no mouse
+  KeyF: 'fire',                       // for keyboards with no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
-  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3', Digit4: 'weapon4',
+  Digit1: 'weapon1', Digit2: 'weapon2', Digit3: 'weapon3', Digit4: 'weapon4', Digit5: 'weapon5',
   Backquote: 'settings', Escape: 'menu'
 };
 
-// These open something rather than holding something down, so they fire once on
-// the press and never enter the held set. Escape additionally opens the menu by
-// way of losing the pointer lock, which the browser does on its own — rebinding
-// `menu` adds a key, it cannot take Escape away.
+// fire once on the press, never held
 const UI_ACTIONS = new Set(['settings', 'menu']);
 
-// Shown in the settings panel, in this order. Anything not listed here is still
-// bindable in principle but has no row, which keeps the panel to one screen.
+// rows in the settings panel, in order
 export const BINDABLE = [
   ['fwd', 'Forward'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right'],
   ['jump', 'Jump'], ['sprint', 'Sprint'], ['crouch', 'Crouch'],
   ['fire', 'Fire'], ['reload', 'Reload'], ['lastweapon', 'Last weapon'],
   ['weapon1', 'Weapon 1'], ['weapon2', 'Weapon 2'], ['weapon3', 'Weapon 3'],
-  ['weapon4', 'Weapon 4 (portal gun)'],
+  ['weapon4', 'Weapon 4 (portal gun)'], ['weapon5', 'Weapon 5 (White Out)'],
   ['score', 'Scoreboard'], ['settings', 'Open settings'], ['menu', 'Open menu']
 ];
 
-// Actions that can be held or latched. Sprint and jump are here because on a
-// phone a third finger is not available, and a latched jump is what makes bunny
-// hopping possible with a thumb.
+// actions that can be held or latched (a latched jump is the mobile bunny hop)
 export const TOGGLEABLE = [
   ['crouch', 'Crouch'], ['ads', 'Aim'], ['sprint', 'Sprint'], ['jump', 'Jump']
 ];
 
-// The level designer has its own keyboard entirely. Separate map, separate
-// storage: the two modes never run at once, so `R` can reload a rifle in a match
-// and rotate a ramp while building without either having to give way.
-export const DEFAULT_DESIGN_BINDS = {
+// The level designer has its own separate key map.
+const DEFAULT_DESIGN_BINDS = {
   ShiftLeft: 'fast', ShiftRight: 'fast',
   Space: 'up', KeyC: 'down',
   AltLeft: 'freemouse', AltRight: 'freemouse',
   KeyQ: 'corner1', KeyE: 'corner2',
   KeyF: 'shape', KeyR: 'rotate', KeyX: 'axis',
-  // T is the platform key now, so delete moved onto the key that is called
-  // Delete. Nothing about the old binding was worth keeping over that.
   KeyT: 'platform', Delete: 'ddelete',
   KeyG: 'snap', KeyH: 'keylist', Tab: 'playtest'
 };
@@ -72,50 +62,24 @@ const LOOK_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], Ar
 
 const MOUSE_SENS = 0.0022;   // radians per pixel
 const TOUCH_SENS = 0.0042;
-const KEY_LOOK_RATE = 2.4;   // radians per second for arrow-key aiming
+const KEY_LOOK_RATE = 2.4;   // radians per second
 const STICK_RADIUS = 62;
-// How far a finger must travel before it counts as aiming rather than resting.
-// Nothing is lost below it: the move that crosses it is measured from where the
-// finger first landed.
-const TOUCH_DRAG_SLOP = 5;   // pixels
-const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after every Esc
-const SETTLE_MS = 250;       // a lock can emit more than one bookkeeping move
-// A locked pointer gets warped back to the centre of the screen by the browser,
-// and the warp is reported as movement equal to the distance from the cursor to
-// that centre. Measured, those arrive at 44-1500 px/ms; a human flick is under
-// 10. Speed separates them cleanly where magnitude cannot: the warp is small
-// when you click near the middle and large when you click at the edge, so any
-// fixed pixel threshold either lets it through or eats real aiming.
-// A hard ceiling on how far one event may turn the view. This replaces every
-// heuristic that tried to work out whether a large movement was "real": those
-// all needed to guess the cause, and guessing was wrong three times running.
-//
-// It cannot be wrong. Mouse movement arrives at 60-125Hz, so 50px per event
-// still allows turning at ~380 degrees a second at default sensitivity, and the
-// ceiling scales with the sensitivity setting because the clamp is applied to
-// pixels before that multiplier. But a single spike of any origin - a
-// pointer-lock settle, an OS acceleration curve amplifying the nudge your hand
-// gives the mouse as you click, a synthetic warp - can no longer move the view
-// more than about six degrees.
+// a finger must move this far before it counts as aiming (travel is not lost)
+const TOUCH_DRAG_SLOP = 5;
+const LOCK_RETRY_MS = 1200;  // Chrome refuses a re-lock briefly after Esc
+const SETTLE_MS = 250;       // ignore movement just after a lock engages
+// A hard ceiling on how far one mouse event may turn the view. Guessing whether
+// a big movement was "real" failed three times; a ceiling cannot be wrong.
 const MAX_PX_PER_EVENT = 50;
-// Pressing any mouse button physically nudges the mouse - noticeably so when the
-// left button is pressed while the right is held, which rotates the hand
-// leftwards - and pointer acceleration turns a few millimetres into tens of
-// reported pixels.
-//
-// Two stages. The jolt itself is dropped outright; the rest of the press is
-// throttled, so deliberately tracking a target while shooting still works and
-// only lurches are removed.
-const CLICK_DEAD_MS = 80;      // nothing at all gets through
-const CLICK_SETTLE_MS = 170;   // after which movement is throttled, then normal
+// Pressing a button jolts the mouse: drop movement briefly, then throttle it.
+const CLICK_DEAD_MS = 80;
+const CLICK_SETTLE_MS = 170;
 const CLICK_MAX_PX = 8;
 
-// Sliders, checkboxes and buttons are <input> too, and a focused slider must not
-// swallow the whole keyboard — that is what stopped ` from closing the settings
-// panel once the sensitivity slider had been touched.
+// sliders and checkboxes are <input> too, and must not swallow the keyboard
 const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'tel', 'email', 'password', 'number', '']);
 
-/** true while the keystroke belongs to a text field (menu inputs, chat box) */
+/** true while the keystroke belongs to a text field */
 export function isTyping(e) {
   const t = e.target;
   if (!t) return false;
@@ -135,50 +99,40 @@ export class Input {
     this.keyLook = { x: 0, y: 0 };
     this.pointerLocked = false;
     this.mouseSeen = false;
-    // When the browser last refused pointer lock. A timestamp, not a flag: Chrome
-    // rejects a re-lock for a moment after every Esc, and a permanent flag meant
-    // one press of Esc dropped the session into drag-to-look for good.
-    this.lockFailedAt = 0;
-    this.lockedAt = 0;         // when the pointer lock last engaged
-    this.lockChanges = 0;      // how often it has engaged, shown by F3
-    this.dropped = 0;          // movement events discarded as spikes
-    this.clamped = 0;          // movement events cut down to the per-event ceiling
+    this.lockFailedAt = 0;     // a timestamp, never a permanent flag
+    this.lockedAt = 0;
+    this.lockChanges = 0;      // F3 readouts
+    this.dropped = 0;
+    this.clamped = 0;
     this.lastClamp = [0, 0];
     this.lastMoveAt = 0;
-    this.lastButtonAt = -1e9;   // last mouse button edge
+    this.lastButtonAt = -1e9;
     this._prevButtons = 0;
     this._mouseHeld = new Set();
     this.toggled = new Set();
     this.toggleMode = new Set();
-    // Actions whose toggle mode is switched off for as long as something else
-    // needs every press to count. The portal gun's right trigger is the case:
-    // a latched AIM would place a mouth on the tap that turns it on and nothing
-    // at all on the tap that turns it off, so every second tap would be dead.
+    // Actions forced to hold mode for now (the portal gun's right trigger: a
+    // latched AIM would make every second tap place nothing).
     this.holdOverride = new Set();
     try {
       for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
     } catch { /* nothing saved */ }
     this.binds = this._loadBinds();
     this.designBinds = this._loadBinds(DESIGN_BIND_KEY, DEFAULT_DESIGN_BINDS);
-    // set while another mode owns the pointer on purpose (the level designer
-    // releases it with Alt); without it every click grabs the mouse straight back
+    // set while another mode owns the pointer on purpose (designer's Alt, menus)
     this.suspendLock = false;
-    this.rawInput = null;       // did the browser grant unaccelerated movement?
+    this.rawInput = null;
     this.lastMovement = [0, 0];
-    this.textMode = false;          // chat box has focus: swallow game keys
+    this.textMode = false;          // chat box has focus
     this.hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
     this.keyboardSeen = false;
-    this._editMode = false;  // while true the touch buttons are being rearranged
+    this._editMode = false;
     this.onKeyboardDetected = null;
-    this.onAction = null;           // for UI-only buttons (chat / score / weapon)
+    this.onAction = null;
     this.sensitivity = Number(localStorage.getItem('pa.sens')) || 1;
-    // Going fullscreen is what buys the right to swallow Ctrl+W and friends.
-    // Remembered, so anyone who would rather keep their browser chrome can turn
-    // it off once in the settings panel and be left alone about it.
+    // Going fullscreen is what lets keyboard.lock() swallow Ctrl+W and friends.
     this.wantFullscreenLock = localStorage.getItem('pa.kblock') !== '0';
-    this.keyboardLocked = false;      // did navigator.keyboard.lock() actually take?
-    // Entering fullscreen by any route is a chance to take the keyboard, and
-    // leaving it always loses it.
+    this.keyboardLocked = false;
     document.addEventListener('fullscreenchange', () => {
       if (document.fullscreenElement) {
         if (this.wantFullscreenLock && this.pointerLocked) this._grabKeyboard();
@@ -187,12 +141,16 @@ export class Input {
       }
     });
 
-    // Every finger currently on the glass, by pointerId. Nothing about touch is
-    // remembered outside this map, and every way a finger can go away drops its
-    // entry — see _bindTouchEnd() for why that took four separate backstops.
+    // Every finger on the glass, by pointerId. Nothing about touch lives outside
+    // this map, and every way a finger can leave drops its entry.
     this._touch = new Map();
     this._touchSeq = 0;
     this._mouseDrag = null;
+    this._stick = {
+      el: document.getElementById('stick'),
+      base: document.getElementById('stickbase'),
+      knob: document.getElementById('stickknob')
+    };
 
     this._bindKeyboard();
     this._bindMouse();
@@ -201,12 +159,8 @@ export class Input {
     this._bindButtons();
   }
 
-  /** Entering the layout editor takes the buttons away from the game, and a
-   *  finger that was already on one has to be let go of on the way in. It used
-   *  not to be: the buttons' own pointerup handler returns early while editing,
-   *  so the release never happened, and the look pad — which was owned by
-   *  whichever pointer claimed it first — stayed owned by a finger that was no
-   *  longer there. From then on the view could not be turned at all. */
+  /** Opening the layout editor lets go of every finger, or one resting on a
+   *  button would own the look pad for ever. */
   get editMode() { return this._editMode; }
   set editMode(v) {
     const on = !!v;
@@ -220,19 +174,13 @@ export class Input {
     addEventListener('keydown', e => {
       if (this.textMode || isTyping(e)) return;
 
-      // Suppression comes first, before both early returns below. With the mouse
-      // captured the page is the application, so swallow every key - not only
-      // the ones the game uses - or Ctrl+S, quick-find and F5 still reach the
-      // browser mid-fight. Escape is left alone, because it is how you get the
-      // mouse back.
-      //
-      // Crucially this also runs for auto-repeat. Holding Tab repeats, and a
-      // repeat that reaches the browser walks the focus ring through the page,
-      // which is what interrupted the game when the scoreboard was held open.
+      // Suppress before the early returns, auto-repeat included: with the mouse
+      // captured the page owns every key but Escape, and a repeating Tab that
+      // reaches the browser walks focus through the page.
       if (this.pointerLocked && e.code !== 'Escape') e.preventDefault();
       else if (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
 
-      if (e.repeat) return;            // suppressed above, but only acted on once
+      if (e.repeat) return;
 
       const a = this.binds[e.code];
       if (a === undefined && !(e.code in LOOK_KEYS)) return;
@@ -247,12 +195,7 @@ export class Input {
       this._recalcKeys();
     });
 
-    // NEVER filter keyup. A release can only ever stop something, and discarding
-    // one leaves the key held forever: an arrow key stuck this way spins the view
-    // at a constant rate with nothing to stop it, because keyLook is applied
-    // every frame rather than consumed like a mouse delta. The old isTyping()
-    // guard here dropped exactly that release whenever focus had moved to a text
-    // field in between, which is one click into the chat box away.
+    // NEVER filter keyup: a discarded release leaves a key held for ever.
     addEventListener('keyup', e => {
       const a = this.binds[e.code];
       if (a && !UI_ACTIONS.has(a)) this.release(a);
@@ -260,14 +203,10 @@ export class Input {
       this._recalcKeys();
     });
 
-    // any way of leaving the page must not leave keys stuck down either
+    // leaving the page releases everything (a backgrounded phone sends no pointerup)
     const release = () => {
       this.held.clear();
       this._mouseHeld.clear();
-      // Fingers go too. A phone that is put down, or swapped away from, with a
-      // thumb still on the glass delivers no pointerup at all — and the stick
-      // was left frozen at whatever it last read, walking the player into a
-      // wall with nothing able to take the controls back.
       this.dropTouches();
       for (const a of this.toggled) this.held.add(a);   // a toggle is a state, not a key
       this._recalcKeys();
@@ -295,24 +234,12 @@ export class Input {
       if (e.pointerType === 'touch') return;
       this.mouseSeen = true;
 
-      // Try to capture the mouse, but never let that get in the way of the click
-      // itself. Swallowing the acquiring click is a nicety; not being able to
-      // shoot is not, and the two were tangled together.
-      // Ask the DOM, not the cached flag. If that flag ever goes stale — a
-      // pointerlockchange missed while the tab was hidden, a lock taken by
-      // something else — the cache says "not locked", every click re-requests a
-      // lock the browser already holds, and every re-lock emits a settling move
-      // worth tens of degrees. That is a spike per click, not just on the first.
+      // Ask the DOM, not the cached flag: a stale flag re-requests a lock the
+      // browser already holds on every click, and each re-lock jolts the view.
       const reallyLocked = document.pointerLockElement === this.canvas;
       if (reallyLocked !== this.pointerLocked) this.pointerLocked = reallyLocked;
 
-      // Every click, not only the one that captures the mouse. requestFullscreen()
-      // and keyboard.lock() both need a live user gesture, and a click is the
-      // only one going — called from pointerlockchange, as this used to be, the
-      // fullscreen request is rejected outright and the keyboard is never taken,
-      // which is why Ctrl+W went on closing the tab. Leaving fullscreen keeps the
-      // pointer lock, so gating this on "not yet locked" would mean it could
-      // never be re-armed afterwards either.
+      // Every click, since fullscreen and keyboard.lock() need a live gesture.
       if (!this.suspendLock && !this.shortcutsBlocked) this._grabKeyboard();
 
       if (!reallyLocked && !this.lockRefused && !this.suspendLock) {
@@ -323,7 +250,7 @@ export class Input {
         }
       }
       if (!this.pointerLocked && this.lockRefused && !this._mouseDrag) {
-        // genuinely no capture available: drag to aim, like the touch look pad
+        // no capture available: drag to aim
         this._mouseDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
       }
@@ -334,25 +261,12 @@ export class Input {
       if (this._mouseDrag && this._mouseDrag.id === e.pointerId) this._mouseDrag = null;
     });
 
-    // Every button edge, on any target, for any button. The canvas listener only
-    // sees what is delivered to the canvas, and a second button pressed while
-    // another is held may not reach it at all - which is precisely the gesture
-    // that was still shifting the view, because the settle window never opened.
-    // mousedown/mouseup are listened for as well, since the middle button in
-    // particular does not always produce a pointer event.
+    // Every button edge on the window, capture phase: a second button pressed
+    // while one is held may never reach the canvas. State comes from the event's
+    // `buttons` mask, trusted to clear an action only on a real release.
     const UP_EVENTS = new Set(['pointerup', 'mouseup', 'auxclick']);
     const edge = e => {
       this.lastButtonAt = now();
-      // Read which buttons are down from the event's own mask rather than from
-      // which button this particular event was about. A second button pressed
-      // while another is held may never reach the canvas, so deriving the state
-      // from `buttons` is the only way to see it - that is why firing while
-      // holding right click did nothing.
-      //
-      // The mask is only trusted to *clear* an action on an actual release.
-      // Some events under-report it, and one of those arriving mid-fight took
-      // fire and ads away together: the gun stopped after a few rounds and the
-      // sights dropped at the same moment.
       if (e && typeof e.buttons === 'number' && e.pointerType !== 'touch') {
         this._syncMouseButtons(e.buttons, UP_EVENTS.has(e.type));
       }
@@ -364,26 +278,17 @@ export class Input {
     addEventListener('pointermove', e => {
       if (e.pointerType === 'touch') return;
 
-      // A change in which buttons are down is an edge too, and it is the only
-      // signal available when the press itself is not delivered here.
+      // a changed mask is an edge too (a press we never saw arrive)
       if (e.buttons !== this._prevButtons) {
         this._prevButtons = e.buttons;
         this.lastButtonAt = now();
-        this._syncMouseButtons(e.buttons, false);   // a press we never saw arrive
+        this._syncMouseButtons(e.buttons, false);
       }
 
       if (this.pointerLocked) {
-        this.lastMovement = [e.movementX, e.movementY];   // shown by the F3 overlay
-
-        // Events right after a lock engages carry the jump from wherever the
-        // cursor was sitting to the locked origin. That is bookkeeping, not a
-        // flick, and there can be more than one of them, so the whole settling
-        // window is ignored rather than a single event.
+        this.lastMovement = [e.movementX, e.movementY];
         if (now() - this.lockedAt < SETTLE_MS) { this.dropped++; return; }
 
-        // Clamped, not discarded: real movement in the same event is kept, it
-        // just cannot arrive all at once. The ceiling tightens sharply around a
-        // button press, where the mouse is being disturbed by your hand.
         const sincePress = now() - this.lastButtonAt;
         if (sincePress < CLICK_DEAD_MS) { this.dropped++; return; }
         const ceiling = sincePress < CLICK_SETTLE_MS ? CLICK_MAX_PX : MAX_PX_PER_EVENT;
@@ -408,41 +313,30 @@ export class Input {
       this.justPressed.add(e.deltaY > 0 ? 'weaponnext' : 'weaponprev');
     }, { passive: true });
 
-    // not input handling: this only stops the browser opening its menu over the game
     addEventListener('contextmenu', e => e.preventDefault());
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
       this.lockChanges++;
       if (this.pointerLocked) {
-        this.lockFailedAt = 0;     // it worked, so stop treating it as refused
+        this.lockFailedAt = 0;
         this._mouseDrag = null;
-        // preventDefault() cannot touch the browser's own combinations — Ctrl+W
-        // closes the tab before the page hears about it. The Keyboard Lock API
-        // is the only thing that can, and it only works in fullscreen, so
-        // capturing the mouse takes the page fullscreen to earn it.
         this._grabKeyboard();
-        this.lockedAt = now();     // ignore the settling moves that follow
+        this.lockedAt = now();
         this.lookDX = this.lookDY = 0;
         try { this.canvas.releasePointerCapture(1); } catch { /* nothing captured */ }
       } else {
         this.keyboardLocked = false;
         try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
         this._mouseHeld.clear();
-        this.releaseAll();         // nothing may survive losing the mouse
+        this.releaseAll();         // nothing survives losing the mouse
         this.onAction?.('pause');
       }
     });
   }
 
-  /** Take the reserved key combinations away from the browser.
-   *
-   *  `navigator.keyboard.lock()` is refused outside fullscreen, so this goes
-   *  fullscreen first. That is the whole price of it: there is no other way for
-   *  a page to stop Ctrl+W, Ctrl+T or Ctrl+N, and leaving them live means a
-   *  mistimed reach for the movement keys can close the match. Both calls are
-   *  best-effort — a browser that will not play along simply keeps its
-   *  shortcuts, and everything else still works. */
+  /** Take Ctrl+W and friends from the browser: keyboard.lock() only works in
+   *  element fullscreen (F11 is not that), so go fullscreen first. Best effort. */
   _grabKeyboard() {
     if (!this.wantFullscreenLock) return;
     const lock = () => {
@@ -455,9 +349,6 @@ export class Input {
         else this.keyboardLocked = true;
       } catch { this.keyboardLocked = false; }
     };
-    // Browser fullscreen — the one you get from F11 — is not element fullscreen,
-    // and keyboard lock only bites in the second. `fullscreenElement` is null
-    // under F11, so this asks for the real thing rather than assuming.
     if (document.fullscreenElement) { lock(); return; }
     try {
       const p = document.documentElement.requestFullscreen?.({ navigationUI: 'hide' });
@@ -466,30 +357,21 @@ export class Input {
     } catch { this.keyboardLocked = false; }
   }
 
-  /** True only when the reserved combinations really are ours. Anything less —
-   *  no API, no fullscreen, a refused request — and the browser still owns
-   *  Ctrl+W, which the settings panel says out loud rather than implying. */
+  /** Are the reserved combinations really ours right now? */
   get shortcutsBlocked() {
     return !!(this.keyboardLocked && document.fullscreenElement);
   }
 
-  /** A refusal is only worth respecting for a moment; after that, try again. */
   get lockRefused() {
     return this.lockFailedAt > 0 && now() - this.lockFailedAt < LOCK_RETRY_MS;
   }
 
-  /** True when a mouse user is playing without the pointer captured. */
   get needsMouseCapture() {
     return this.mouseSeen && !this.pointerLocked;
   }
 
-  /** Only ever locks when a real mouse is in play — a touch device that has a
-   *  keyboard attached still needs its screen for aiming.
-   *
-   *  `force` is a click the player made *at* the hint, and it clears a refusal
-   *  rather than waiting one out: Chrome refuses a re-lock for a moment after
-   *  every Escape, and somebody clicking the thing that says "click to capture
-   *  the mouse" should not be told no because of a timer they cannot see. */
+  /** Lock only when a real mouse is in play. `force` (a click on the hint)
+   *  clears a recent refusal instead of waiting it out. */
   requestLock(force = false) {
     if (this.suspendLock) return;
     if (this.hasTouch && !this.mouseSeen) return;
@@ -498,10 +380,7 @@ export class Input {
     this._lock();
   }
 
-  /** Raw pointer input where the browser offers it: unadjustedMovement turns off
-   *  OS acceleration and, more importantly here, the recentring warps that get
-   *  reported as enormous movement deltas. Not every browser accepts the option,
-   *  so a rejection retries the plain form before giving up. */
+  /** Raw (unaccelerated) movement where offered, else the plain lock. */
   _lock() {
     let p;
     try {
@@ -512,7 +391,6 @@ export class Input {
     }
     if (p && p.then) {
       p.then(() => { this.rawInput = true; }).catch(() => {
-        // the browser will not give raw input, so OS acceleration stays in play
         this.rawInput = false;
         const plain = this.canvas.requestPointerLock();
         if (plain && plain.catch) plain.catch(() => { this.lockFailedAt = now(); });
@@ -521,33 +399,7 @@ export class Input {
   }
 
   // ------------------------------------------------------------------- touch
-  //
-  // One finger is one entry in `this._touch`, and every entry has a role: it is
-  // driving the thumbstick, driving the look pad, or merely holding a button
-  // down. The roles used to be two singletons — `_touchMove` and `_touchLook` —
-  // each claimed by the first finger to ask and released only by an event
-  // carrying that same pointerId. That is the bug this rewrite is for. Miss one
-  // release and the slot was owned forever by a finger that had left the glass:
-  // the stick stayed frozen at whatever it last read, walking the player into a
-  // wall, and no later finger could ever look or move again, because the slot it
-  // needed was still taken. Backgrounding the tab mid-drag does exactly that on
-  // a phone, and so does opening the layout editor with a thumb on FIRE.
-  //
-  // Now nothing is remembered outside the map, and the map is reconciled
-  // against the browser's own count of fingers on the screen.
-
-  _stickEls() {
-    if (!this._sticky) {
-      this._sticky = {
-        el: document.getElementById('stick'),
-        base: document.getElementById('stickbase'),
-        knob: document.getElementById('stickknob')
-      };
-    }
-    return this._sticky;
-  }
-
-  /** Start tracking a finger. `role` is 'stick', 'look' or 'none'. */
+  /** Track a finger. `role` is 'stick', 'look' or 'none'. */
   _touchAdd(e, role, extra = {}) {
     if (this._touch.has(e.pointerId)) return this._touch.get(e.pointerId);
     const t = {
@@ -560,41 +412,32 @@ export class Input {
     return t;
   }
 
-  /** Stop tracking one, whatever it was doing. Safe to call for a pointer that
-   *  is not tracked, which is what makes the several backstops harmless. */
+  /** Forget a finger and release what it held. Safe for an untracked id. */
   _touchDrop(id) {
     const t = this._touch.get(id);
     if (!t) return;
     this._touch.delete(id);
     if (t.role === 'stick') {
       this.stick.x = this.stick.y = 0;
-      this._stickEls().el?.classList.remove('on');
+      this._stick.el?.classList.remove('on');
     }
     if (t.el) t.el.classList.remove('held');
     if (t.btn) this.release(t.btn);
   }
 
-  /** Every finger gone, and everything they were holding released. */
   dropTouches() {
     for (const id of [...this._touch.keys()]) this._touchDrop(id);
     this.stick.x = this.stick.y = 0;
-    this._stickEls().el?.classList.remove('on');
+    this._stick.el?.classList.remove('on');
   }
 
-  /** The finger driving the stick, if there is one. */
   _stickTouch() {
     for (const t of this._touch.values()) if (t.role === 'stick') return t;
     return null;
   }
 
-  /** The finger driving the view: the first one to start *dragging* that is
-   *  still on the glass. First-wins is the right feel — pressing JUMP with a
-   *  second thumb must not steal the view from the one already dragging — but
-   *  the order that matters is the order they began to aim, not the order they
-   *  landed. Ranking by landing order handed the view to a thumb parked on FIRE,
-   *  which never moves, so the other thumb's drags were followed and thrown
-   *  away: hold a button and the view could not be turned at all. A finger that
-   *  has gone is not in the map to win either way. */
+  /** The finger driving the view: the first to start DRAGGING, not the first to
+   *  land, so a thumb resting on FIRE never owns the view. */
   _lookTouch() {
     let best = null;
     for (const t of this._touch.values()) {
@@ -604,14 +447,14 @@ export class Input {
   }
 
   _bindTouch() {
-    const { el: stickEl, base, knob } = this._stickEls();
+    const { el: stickEl, base, knob } = this._stick;
     const place = (el, x, y) => { el.style.left = x + 'px'; el.style.top = y + 'px'; };
 
     this.canvas.addEventListener('pointerdown', e => {
       if (e.pointerType !== 'touch') return;
       e.preventDefault();
       const leftZone = e.clientX < innerWidth * 0.45;
-      // Once a keyboard is driving movement the whole screen becomes a look pad.
+      // with a keyboard attached the whole screen is a look pad
       if (leftZone && !this._stickTouch() && !this.keyboardSeen) {
         this._touchAdd(e, 'stick');
         stickEl.classList.add('on');
@@ -641,23 +484,9 @@ export class Input {
     }, { passive: false });
   }
 
-  /** Four ways a finger stops counting, because one is not enough.
-   *
-   *  1. Its own pointerup or pointercancel — but taken on the *window*, in the
-   *     capture phase. The listeners used to sit on the canvas and on each
-   *     button, so a release that landed anywhere else was simply never seen:
-   *     on an element removed from the page, on the HUD, or on a button whose
-   *     own handler calls stopPropagation.
-   *  2. The window losing focus, or the tab being hidden. A phone delivers no
-   *     release at all when it goes to the home screen with a thumb down, and
-   *     that is the commonest way this ever went wrong.
-   *  3. The layout editor opening — see the editMode setter.
-   *  4. And a reconcile against TouchEvent.touches, which is the browser's own
-   *     authoritative list of fingers on the glass. If we are tracking more
-   *     fingers than there are, the extras are ghosts, and the least recently
-   *     active go first. touchmove fires constantly, so a ghost that survived
-   *     everything above is reaped the moment the player does anything at all.
-   */
+  /** Four ways a finger stops counting: its own pointerup/cancel (on the window,
+   *  capture phase), the page losing focus, the layout editor opening, and a
+   *  reconcile against TouchEvent.touches that reaps the stalest extras. */
   _bindTouchEnd() {
     const end = e => { if (e.pointerType === 'touch') this._touchDrop(e.pointerId); };
     addEventListener('pointerup', end, true);
@@ -677,8 +506,7 @@ export class Input {
     }
   }
 
-  /** A press. In hold mode the action stays on while the input is down; in
-   *  toggle mode a press flips it and the release is ignored. */
+  /** Hold mode: on while down. Toggle mode: a press flips it, releases ignored. */
   press(action) {
     if (this._latches(action)) {
       if (this.toggled.has(action)) {
@@ -696,19 +524,15 @@ export class Input {
   }
 
   release(action) {
-    if (this._latches(action)) return;   // a toggle only responds to presses
+    if (this._latches(action)) return;
     this.held.delete(action);
   }
 
-  /** Is this action latching right now? Its mode, unless something has taken
-   *  the latch away for the moment. */
   _latches(action) {
     return this.toggleMode.has(action) && !this.holdOverride.has(action);
   }
 
-  /** Force an action to behave as hold-to-use whatever its saved mode says.
-   *  Turning it on drops whatever the latch was holding, so the override can
-   *  never leave an action stuck down. */
+  /** Force hold mode for now, dropping whatever a latch was holding. */
   setHoldOverride(action, on) {
     if (on === this.holdOverride.has(action)) return;
     if (on) {
@@ -721,7 +545,6 @@ export class Input {
     this._recalcKeys();
   }
 
-  /** Switching an action to hold mode drops whatever the toggle was holding. */
   setToggleMode(action, on) {
     if (on) this.toggleMode.add(action);
     else {
@@ -736,38 +559,29 @@ export class Input {
   isToggle(action) { return this.toggleMode.has(action); }
 
   // ---------------------------------------------------------------- bindings
+  /** A saved map, keeping only pairs that still name real actions, with any
+   *  action the save has never heard of given its default key if that key is free. */
   _loadBinds(key = BIND_KEY, defaults = DEFAULT_BINDS) {
     try {
       const saved = JSON.parse(localStorage.getItem(key));
       if (saved && typeof saved === 'object') {
-        // only keep pairs that still mean something, so an old save cannot
-        // bind a key to an action the game no longer has
         const actions = new Set(Object.values(defaults));
         const out = {};
         for (const [code, action] of Object.entries(saved)) {
           if (typeof code === 'string' && actions.has(action)) out[code] = action;
         }
-        if (Object.keys(out).length) return this._fillGaps(out, defaults);
+        if (Object.keys(out).length) {
+          const bound = new Set(Object.values(out));
+          for (const [code, action] of Object.entries(defaults)) {
+            if (bound.has(action) || out[code]) continue;
+            out[code] = action;
+            bound.add(action);
+          }
+          return out;
+        }
       }
     } catch { /* nothing saved, or unreadable */ }
     return { ...defaults };
-  }
-
-  /** Give any action the save has never heard of its default key.
-   *
-   *  Without this, adding an action strands it: a returning player's map is kept
-   *  verbatim, so the portal gun would have had no number key and the platform
-   *  tool no key at all for anybody who had ever opened the settings panel. Only
-   *  actions with no key *at all* are filled, and only onto a key nothing else
-   *  is using, so a map somebody has arranged is never rearranged for them. */
-  _fillGaps(map, defaults) {
-    const bound = new Set(Object.values(map));
-    for (const [code, action] of Object.entries(defaults)) {
-      if (bound.has(action) || map[code]) continue;
-      map[code] = action;
-      bound.add(action);
-    }
-    return map;
   }
 
   _saveBinds(design = false) {
@@ -776,46 +590,39 @@ export class Input {
     try { localStorage.setItem(key, JSON.stringify(map)); } catch { /* private mode */ }
   }
 
-  /** Every key currently bound to an action, in either map. */
   keysFor(action, design = false) {
     const map = design ? this.designBinds : this.binds;
     return Object.keys(map).filter(code => map[code] === action);
   }
 
-  /** What the level designer should do about this key, if anything. */
   designAction(code) { return this.designBinds[code]; }
 
-  /** Point a key at an action. `replacing` is the key being changed, if this is
-   *  an edit rather than an addition — an action may hold as many keys as the
-   *  player adds with `+`. The code is taken off whatever else had it either
-   *  way, so no key ever drives two actions at once.
-   *
-   *  Escape is refused: the browser owns it (it is how you get the mouse back,
-   *  and how the rebinding prompt is cancelled), so binding it would be a lie. */
+  /** Point a key at an action (`replacing` = the key being changed, else an
+   *  addition). The key leaves any other action. Escape belongs to the browser. */
   bind(action, code, replacing = null, design = false) {
     if (!code || code === 'Escape') return false;
     const map = design ? this.designBinds : this.binds;
     delete map[code];
     if (replacing && replacing !== code) delete map[replacing];
     map[code] = action;
-    // a rebind mid-game must not leave the old key stuck down
-    this.held.delete(action);
-    this.toggled.delete(action);
-    this._recalcKeys();
-    this._saveBinds(design);
+    this._rebound(action, design);
     return true;
   }
 
-  /** Take one key off an action, leaving its other keys alone. */
   unbind(action, code, design = false) {
     const map = design ? this.designBinds : this.binds;
     if (map[code] !== action) return false;
     delete map[code];
+    this._rebound(action, design);
+    return true;
+  }
+
+  /** After a rebind: nothing may be left stuck down. */
+  _rebound(action, design) {
     this.held.delete(action);
     this.toggled.delete(action);
     this._recalcKeys();
     this._saveBinds(design);
-    return true;
   }
 
   resetBinds(design = false) {
@@ -831,9 +638,8 @@ export class Input {
     this._saveBinds();
   }
 
-  /** Mirror the mouse's button mask into the action set. Only actions the mouse
-   *  itself put there are taken away again, so a touch player holding FIRE is
-   *  never disarmed by a stray mouse event on a hybrid device. */
+  /** Mirror the mouse button mask. Only actions the mouse put there are taken
+   *  away, so a stray mouse event cannot disarm a touch player. */
   _syncMouseButtons(buttons, allowClear) {
     for (const [bit, action] of [[1, 'fire'], [2, 'ads']]) {
       const down = (buttons & bit) !== 0;
@@ -848,29 +654,21 @@ export class Input {
     }
   }
 
-  /** Touch aiming, usable from the canvas or from on top of a button. A finger
-   *  that starts on FIRE must still be able to drag the view — on a phone that
-   *  is the same thumb doing both. */
+  /** Touch aiming, from the canvas or from on top of a button. */
   lookStart(e) { this._touchAdd(e, 'look'); }
 
   lookMove(e) {
     const l = this._touch.get(e.pointerId);
     if (!l || l.role !== 'look') return;
     l.seen = now();
-    // A finger claims the view only once it has actually moved. Holding a
-    // button is not aiming, and a resting thumb that counted as the owner shut
-    // every other finger out of the view. Crossing the slop rewinds the
-    // reference point to where the finger landed, so the travel so far is paid
-    // out rather than lost.
+    // crossing the slop starts aiming, rewound to the landing point so no travel is lost
     if (!l.drag && Math.hypot(e.clientX - l.ox, e.clientY - l.oy) > TOUCH_DRAG_SLOP) {
       l.drag = true;
       l.dseq = ++this._touchSeq;
       l.x = l.ox;
       l.y = l.oy;
     }
-    // Only the finger that owns the view turns it. A second one still has its
-    // position followed, so when the first leaves it takes over from where it
-    // actually is rather than jumping the view by however far it has drifted.
+    // only the owner turns the view, but every look finger's position is tracked
     if (l.drag && this._lookTouch() === l) {
       this.lookDX += (e.clientX - l.x) * TOUCH_SENS * this.sensitivity;
       this.lookDY += (e.clientY - l.y) * TOUCH_SENS * this.sensitivity;
@@ -879,27 +677,21 @@ export class Input {
     l.y = e.clientY;
   }
 
-  lookEnd(e) { this._touchDrop(e.pointerId); }
-
   // --------------------------------------------------------- on-screen buttons
   _bindButtons() {
     const UI_ONLY = new Set(['chat', 'score', 'weapon', 'menu', 'layout']);
     for (const el of document.querySelectorAll('.tbtn')) {
       const name = el.dataset.btn;
-      // action buttons double as look pads; the pill row at the top does not
-      const aimable = !UI_ONLY.has(name);
+      const aimable = !UI_ONLY.has(name);   // action buttons double as look pads
 
       el.addEventListener('pointerdown', e => {
-        if (this.editMode) return;            // layout editor owns the buttons
+        if (this.editMode) return;
         e.preventDefault();
         e.stopPropagation();
         el.classList.add('held');
         if (UI_ONLY.has(name)) this.onAction?.(name);
         else this.press(name);
-        // A finger on a button is tracked like any other, so whatever it is
-        // holding is let go of by whichever backstop sees it leave — not only
-        // by this element's own pointerup, which is exactly the release that
-        // used to go missing.
+        // tracked like any finger, so any backstop can release it
         if (e.pointerType === 'touch') {
           this._touchAdd(e, aimable ? 'look' : 'none',
                          { btn: UI_ONLY.has(name) ? null : name, el });
@@ -913,9 +705,6 @@ export class Input {
 
       const up = e => {
         e.stopPropagation();
-        // The release is unconditional. It used to return early while the
-        // layout editor was open, which left the action held and the look pad
-        // owned by a finger nobody was ever going to hear from again.
         if (e.pointerType === 'touch') { this._touchDrop(e.pointerId); return; }
         el.classList.remove('held');
         if (this.editMode) return;
@@ -931,7 +720,7 @@ export class Input {
   down(a) { return this.held.has(a); }
   pressed(a) { return this.justPressed.has(a); }
 
-  /** combined movement, x = strafe, y = forward, magnitude clamped to 1 */
+  /** x = strafe, y = forward, magnitude clamped to 1 */
   moveVector() {
     let x = this.keyMove.x + this.stick.x;
     let y = this.keyMove.y + this.stick.y;
@@ -940,7 +729,7 @@ export class Input {
     return { x, y };
   }
 
-  /** look delta in radians accumulated since the last frame, plus arrow keys */
+  /** look delta in radians since the last frame, plus arrow keys */
   consumeLook(dt) {
     const dx = this.lookDX + this.keyLook.x * KEY_LOOK_RATE * dt;
     const dy = this.lookDY + this.keyLook.y * KEY_LOOK_RATE * dt;
@@ -950,7 +739,6 @@ export class Input {
 
   endFrame() { this.justPressed.clear(); }
 
-  /** One multiplier for both the mouse and the touch look pad. */
   setSensitivity(v) {
     this.sensitivity = clamp(v, 0.2, 3);
     try { localStorage.setItem('pa.sens', String(this.sensitivity)); } catch { /* private mode */ }
@@ -959,7 +747,7 @@ export class Input {
   setFullscreenLock(on) {
     this.wantFullscreenLock = !!on;
     try { localStorage.setItem('pa.kblock', on ? '1' : '0'); } catch { /* private mode */ }
-    if (on) this._grabKeyboard();      // the click on the checkbox is the gesture
+    if (on) this._grabKeyboard();      // the checkbox click is the gesture
     else {
       this.keyboardLocked = false;
       try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }

@@ -8,7 +8,7 @@
 // closed form, so it is asserted against it here rather than against itself.
 
 import {
-  UPS, UP_Y, upIndex, upFromIndex, snapAxis, snapUp, axisKey, axisSign, crossKeys,
+  UPS, UP_Y, upIndex, upFromIndex, snapUp, axisKey, axisSign, crossKeys,
   basisFor, lookFrom, anglesIn, dot3
 } from '../src/frame.js';
 
@@ -69,12 +69,7 @@ for (const up of UPS) {
 // ------------------------------------------------------------------- the rest
 want('index round-trips', UPS.every((u, i) => upFromIndex(upIndex(u)) === UPS[i]));
 want('a bad index is the ordinary up', upFromIndex(99) === UP_Y && upFromIndex(-1) === UP_Y);
-want('snap takes the nearest axis',
-  snapAxis({ x: 0.1, y: 0.9, z: -0.2 }) === UPS[2] &&
-  snapAxis({ x: -0.8, y: 0.1, z: 0.3 }) === UPS[1] &&
-  snapAxis({ x: 0, y: -0.4, z: -0.5 }) === UPS[5]);
-want('an exact axis snaps to itself', AXES.every(u => snapAxis(u) === u));
-want('...and snapUp leaves every one of the eighteen alone', UPS.every(u => snapUp(u) === u));
+want('snapUp leaves every one of the eighteen alone', UPS.every(u => snapUp(u) === u));
 want('snapUp takes a 45-degree image at 45 degrees',
   snapUp({ x: 0.7, y: 0.72, z: 0.02 }) === UPS.find(u => u.x > 0.7 && u.y > 0.7) &&
   snapUp({ x: 0.02, y: -0.71, z: 0.7 }) === UPS.find(u => u.y < -0.7 && u.z > 0.7));

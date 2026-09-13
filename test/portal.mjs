@@ -10,8 +10,10 @@
 //   node test/portal.mjs
 import {
   HALF_W, HALF_H, faceOf, fitPortal, frameFor, portalMap, atMouth, mouthAround,
-  lookAngles, assignHues, overlapsPartner
+  assignHues, overlapsMouth
 } from '../src/portal.js';
+import { anglesIn, UP_Y } from '../src/frame.js';
+const lookAngles = d => anglesIn(UP_Y, d);
 import { Level } from '../src/level.js';
 import { makeSolid, SHAPE_SLOPE } from '../src/solid.js';
 
@@ -199,8 +201,8 @@ t('lookAngles round-trips a level look', near(lookAngles({ x: 0, y: 0, z: -1 }).
 }
 
 // a pair cannot be placed on top of itself
-t('a portal refuses to swallow its own partner', overlapsPartner(A, { ...A }));
-t('...but two a room apart are fine', !overlapsPartner(A, B));
+t('a portal refuses to swallow its own partner', overlapsMouth(A, { ...A }));
+t('...but two a room apart are fine', !overlapsMouth(A, B));
 
 // ------------------------------------------------------------------ colours
 const solo = assignHues([{ id: 'me', r: 0.7 }]);

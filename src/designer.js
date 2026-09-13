@@ -3,27 +3,24 @@ import { Level, COLORS, COLOR_NAMES, GRID, MAX_BOXES, MOVE_SPEED } from './level
 import { SHAPE_BOX, SHAPE_SLOPE, eulerMatrix, eulerFromMatrix, matMul, axisMatrix } from './solid.js';
 import { clamp, cssColor, now } from './util.js';
 
-// The level designer. It runs instead of a match: no peers, no signalling, no
-// damage. The room code `level design` is the only way in.
-//
-// Two modes share the room. In GHOST you fly and build; Tab drops you into
-// PLAYTEST, which is the ordinary player against the same boxes, and Tab again
-// brings the ghost back where the player was standing.
+// The level designer: runs instead of a match (no peers, no damage), entered
+// with the room code `level design`. GHOST mode flies and builds; Tab switches
+// to PLAYTEST as the ordinary player and back.
 
 const AXES = ['x', 'y', 'z'];
 const FLY = 16, FLY_FAST = 42;
-const REACH = 3;              // metres ahead of the eye for the Q/E corner point
-const MARGIN = 0.3;           // how close the ghost may drift to the shell
+const REACH = 3;              // metres ahead of the eye for Q/E and T
+const MARGIN = 0.3;           // how close the ghost may get to the shell
 const SAVE_KEY = 'pa.level';
 const AXIS_NAMES = ['X', 'Y', 'Z'];
 const AXIS_COLORS = [0xff5566, 0x66dd55, 0x5599ff];
-const GIZMO_MIN = 1.1;        // the rings never shrink below this, however small the box
-const GIZMO_PAD = 0.55;       // how far outside the box the smallest ring sits
-const RING_TOL = 0.22;        // how close the cursor must come to a ring to grab it
-const STEP_TURN = Math.PI / 2;      // one press of rotate
-const FINE_TURN = Math.PI / 12;     // ...with shift held
-const SNAP_TURN = Math.PI / 12;     // the grid, while dragging a ring
-const SAVE_EVERY = 1500;      // ms between autosaves while something has changed
+const GIZMO_MIN = 1.1;
+const GIZMO_PAD = 0.55;
+const RING_TOL = 0.22;
+const STEP_TURN = Math.PI / 2;
+const FINE_TURN = Math.PI / 12;     // with shift
+const SNAP_TURN = Math.PI / 12;     // while dragging a ring
+const SAVE_EVERY = 1500;      // ms between autosaves
 
 const $ = id => document.getElementById(id);
 
@@ -33,13 +30,13 @@ export class Designer {
     this.level = null;
     this.active = false;
     this.ghost = true;
-    this.mouseFree = false;       // Alt is down: the pointer is released
+    this.mouseFree = false;       // Alt is down
     this.snap = true;
     this.color = 0;
-    this.shape = SHAPE_BOX;       // what the next box drawn will be
-    this.axis = 1;                // which way `rotate` turns things: Y by default
-    this.drag = null;             // a gizmo ring being pulled round
-    this.held = new Set();        // designer actions currently down
+    this.shape = SHAPE_BOX;
+    this.axis = 1;                // which way `rotate` turns things
+    this.drag = null;             // a gizmo ring being pulled
+    this.held = new Set();
     this.selected = null;
     this.stage = 'idle';          // idle -> rect -> height -> idle
     this.surface = null;
@@ -57,7 +54,6 @@ export class Designer {
     this._bound = false;
   }
 
-  // ------------------------------------------------------------------ enter
   start(level) {
     this.level = level;
     this.active = true;
@@ -89,8 +85,7 @@ export class Designer {
     this.save();
   }
 
-  // ------------------------------------------------------------------ frame
-  /** Returns true when the designer owns the frame, i.e. the ghost is flying. */
+  /** True when the designer owns the frame (the ghost is flying). */
   frame(t, dt) {
     if (!this.active) return false;
     this.overlay.visible = this.ghost;
@@ -112,8 +107,7 @@ export class Designer {
   _fly(dt, input) {
     const p = this.game.player;
     const m = input.moveVector();
-    // movement follows the look direction, pitch included: nose up and press
-    // forward and you climb
+    // follows the look direction, pitch included
     const cp = Math.cos(p.pitch), sp = Math.sin(p.pitch);
     const fwd = { x: -Math.sin(p.yaw) * cp, y: sp, z: -Math.cos(p.yaw) * cp };
     const right = { x: Math.cos(p.yaw), y: 0, z: -Math.sin(p.yaw) };
@@ -123,8 +117,11 @@ export class Designer {
     this.pos.z += (fwd.z * m.y + right.z * m.x) * speed;
     if (this.held.has('up')) this.pos.y += speed;
     if (this.held.has('down')) this.pos.y -= speed;
+    this._keepInRoom();
+  }
 
-    // the shell is solid even for a ghost: you cannot leave the room
+  /** The shell is solid even to the ghost. */
+  _keepInRoom() {
     const L = this.level;
     this.pos.x = clamp(this.pos.x, -L.w / 2 + MARGIN, L.w / 2 - MARGIN);
     this.pos.z = clamp(this.pos.z, -L.l / 2 + MARGIN, L.l / 2 - MARGIN);
@@ -150,7 +147,7 @@ export class Designer {
     const origin = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
     let dir;
     if (this.mouseFree) {
-      // Alt released the pointer, so aim through wherever the cursor sits
+      // aim through the free cursor
       dir = new THREE.Vector3(this.ndc.x, this.ndc.y, 0.5).unproject(cam).sub(origin).normalize();
     } else {
       dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
@@ -162,8 +159,7 @@ export class Designer {
     const { origin, dir } = this._ray();
     this.ray = { origin, dir };
 
-    // the Q/E corner is a fixed reach in front of the eye, whatever the mouse
-    // is doing, because it is a position and not a pick
+    // the Q/E point is a fixed reach ahead of the eye, whatever the mouse does
     const cam = this.game.camera;
     const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
     this.reachPoint = this._snapPoint({
@@ -183,9 +179,7 @@ export class Designer {
     this._drawPreview();
   }
 
-  /** Project the ray onto the plane of the surface the rectangle started on,
-   *  then hold it inside that face — leaving the face must not make the point
-   *  jump onto whatever is behind it. */
+  /** The ray on the starting surface's plane, held inside that face. */
   _onSurface() {
     const s = this.surface;
     const k = AXES[s.axis];
@@ -195,22 +189,17 @@ export class Designer {
     const t = (s.plane - origin[k]) / d;
     if (!(t > 0.02) || t > 800) return null;
     const p = { x: origin.x + dir.x * t, y: origin.y + dir.y * t, z: origin.z + dir.z * t };
-    p[k] = s.plane;
-    for (const j of [0, 1, 2]) {
-      if (j === s.axis) continue;
-      p[AXES[j]] = clamp(p[AXES[j]], s.lo[j], s.hi[j]);
-    }
-    const snapped = this._snapPoint(p);
-    snapped[k] = s.plane;                              // the plane is never snapped away
-    for (const j of [0, 1, 2]) {
-      if (j === s.axis) continue;
-      snapped[AXES[j]] = clamp(snapped[AXES[j]], s.lo[j], s.hi[j]);
-    }
-    return snapped;
+    const inFace = q => {
+      q[k] = s.plane;
+      for (const j of [0, 1, 2]) {
+        if (j !== s.axis) q[AXES[j]] = clamp(q[AXES[j]], s.lo[j], s.hi[j]);
+      }
+      return q;
+    };
+    return inFace(this._snapPoint(inFace(p)));
   }
 
-  /** How far the mouse has pulled the box out along the surface normal. Signed:
-   *  negative sinks the box back into the surface it was drawn on. */
+  /** How far the mouse has pulled the box out along the surface normal (signed). */
   _updatePull() {
     const s = this.surface;
     const n = [0, 0, 0];
@@ -266,7 +255,7 @@ export class Designer {
   _commitRect() {
     const s = this.surface, k = AXES[s.axis];
     let pull = this.pull;
-    if (Math.abs(pull) < GRID * 0.5) pull = GRID;      // a flat plate still needs a thickness
+    if (Math.abs(pull) < GRID * 0.5) pull = GRID;      // a flat plate still has thickness
     const a = { ...this.a };
     const b = { ...this.b };
     a[k] = s.plane;
@@ -294,15 +283,8 @@ export class Designer {
     this._changed();
   }
 
-  /** Add whatever shape is currently selected between two corners.
-   *
-   *  A box is the corners as they are. A ramp is not: the wedge in solid.js
-   *  reads its extents along its *own* axes, and it is then turned into place —
-   *  so the run the player dragged has to be handed over as the wedge's local x,
-   *  the pull as its local y, and the width as its local z. Storing the world
-   *  extents and turning them afterwards makes a nine-metre run come out half a
-   *  metre long and nine metres wide.
-   */
+  /** Add the current shape between two corners. A ramp's extents are in its own
+   *  frame, so the dragged world extents are permuted onto its local axes. */
   _addShape(a, b, surface) {
     if (this.shape !== SHAPE_SLOPE) return this.level.add(a, b, this.color);
 
@@ -311,7 +293,6 @@ export class Designer {
     const world = [Math.abs(b.x - a.x), Math.abs(b.y - a.y), Math.abs(b.z - a.z)];
     const centre = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
 
-    // each local axis lands on one world axis; take that world extent for it
     const local = [0, 1, 2].map(col => {
       let axis = 0, best = -1;
       for (let row = 0; row < 3; row++) {
@@ -327,26 +308,23 @@ export class Designer {
       this.color, SHAPE_SLOPE, rot);
   }
 
-  /** A ramp climbs along its own +x with its own +y as "up", so placing one is
-   *  a matter of naming those two directions and reading off the turn that gets
-   *  them there. Up is the surface it was drawn on; the climb runs along
-   *  whichever free axis the drag covered more of, toward the second point. */
+  /** A ramp climbs its own +x with its own +y up: up is the surface drawn on, the
+   *  climb is the free axis the drag covered most, toward the second point. */
   _slopeRot(a, b, surface) {
     const up = [0, 0, 0];
     if (surface) up[surface.axis] = surface.sign;
-    else up[1] = 1;                                   // a floating ramp stands upright
+    else up[1] = 1;
 
     const span = [Math.abs(b.x - a.x), Math.abs(b.y - a.y), Math.abs(b.z - a.z)];
     let rise = 0, bestSpan = -1;
     for (let i = 0; i < 3; i++) {
-      if (up[i]) continue;                            // never climb along "up"
+      if (up[i]) continue;
       if (span[i] > bestSpan) { bestSpan = span[i]; rise = i; }
     }
     const dir = [0, 0, 0];
     const to = [b.x - a.x, b.y - a.y, b.z - a.z][rise];
     dir[rise] = to < 0 ? -1 : 1;
 
-    // a right-handed frame: local x is the climb, local y is up, local z follows
     const side = [
       dir[1] * up[2] - dir[2] * up[1],
       dir[2] * up[0] - dir[0] * up[2],
@@ -369,28 +347,15 @@ export class Designer {
     this._changed();
   }
 
-  _cycleShape() {
-    this.shape = this.shape === SHAPE_BOX ? SHAPE_SLOPE : SHAPE_BOX;
-    this._say(this.shape === SHAPE_SLOPE ? 'drawing ramps' : 'drawing boxes');
-  }
-
-  _cycleAxis() {
-    this.axis = (this.axis + 1) % 3;
-    this._say('rotating about ' + AXIS_NAMES[this.axis]);
-  }
-
   // ------------------------------------------------------------- the gizmo
-  /** Radius of the rings drawn around the selection. */
   _gizmoRadius(b) {
     const half = Math.max(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0) / 2;
     return Math.max(GIZMO_MIN, half + GIZMO_PAD);
   }
 
-  _gizmoCentre(b) {
-    return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: (b.z0 + b.z1) / 2 };
-  }
+  _gizmoCentre(b) { return this.level.centreOf(b); }
 
-  /** Which ring, if any, the ray is pointing at — and where on it. */
+  /** The ring under the ray, if any, and where on it. */
   _ringUnderRay() {
     const b = this.selected;
     if (!b || b.locked) return null;
@@ -412,7 +377,6 @@ export class Designer {
     return best;
   }
 
-  /** The angle of a point around a ring, measured in that ring's own plane. */
   _ringAngle(axis, c, p) {
     const [u, v] = axis === 0 ? ['z', 'y'] : axis === 1 ? ['x', 'z'] : ['x', 'y'];
     return Math.atan2(p[v] - c[v], p[u] - c[u]);
@@ -439,10 +403,8 @@ export class Designer {
     if (t <= 0.05) return;
     const p = { x: origin.x + dir.x * t, y: origin.y + dir.y * t, z: origin.z + dir.z * t };
     let turned = this._ringAngle(d.axis, d.centre, p) - d.from;
-    // unwrap, so a drag past the far side keeps going instead of snapping back
     while (turned > Math.PI) turned -= Math.PI * 2;
     while (turned < -Math.PI) turned += Math.PI * 2;
-    // the ring's sign flips depending on which side of the plane you are on
     const target = this.snap ? Math.round(turned / SNAP_TURN) * SNAP_TURN : turned;
     if (Math.abs(target - d.applied) < 1e-6) return;
     this._turn(d.axis, target - d.applied);
@@ -477,13 +439,8 @@ export class Designer {
     }
   }
 
-  /** Make the selection travel. Where it is now is the start of the run and the
-   *  point three metres in front of the eye — the same white marker Q and E use,
-   *  so it is something you can see rather than something you guess — is the far
-   *  end. What travels is the object's own middle, which is what pointing at a
-   *  spot and saying "go there" means.
-   *
-   *  Pressing it again re-aims the run; with shift held it stops entirely. */
+  /** Make the selection's centre travel to the white reach marker and back;
+   *  with shift, stop it. */
   _platform(clear) {
     const b = this.selected;
     if (!b) { this._say('nothing selected — Alt+Ctrl+click an object first'); return; }
@@ -532,20 +489,16 @@ export class Designer {
     if (this.ghost) {
       const yaw = p.yaw, pitch = p.pitch;
       p.spawn({ x: this.pos.x, y: Math.max(0.05, this.pos.y - 1.7), z: this.pos.z });
-      p.yaw = yaw; p.pitch = pitch;             // spawn() turns you to face the middle
+      p.yaw = yaw; p.pitch = pitch;             // spawn() would face the middle
       this.game.loadout.refill();
       this.ghost = false;
       this._say('playtest — Tab returns to building', 3000);
     } else {
       this.pos = { x: p.pos.x, y: p.eyeY, z: p.pos.z };
-      const L = this.level;
-      this.pos.x = clamp(this.pos.x, -L.w / 2 + MARGIN, L.w / 2 - MARGIN);
-      this.pos.z = clamp(this.pos.z, -L.l / 2 + MARGIN, L.l / 2 - MARGIN);
-      this.pos.y = clamp(this.pos.y, MARGIN, L.h - MARGIN);
+      this._keepInRoom();
       this.ghost = true;
       this.stage = 'idle';
-      // park every platform back at the start of its run: a box that is not
-      // where it was built cannot be aimed at, and the seed stores the start
+      // park platforms at the start of their runs, which is what the seed stores
       this.game.world.syncLevel();
       this._say('building', 2000);
     }
@@ -583,13 +536,9 @@ export class Designer {
       if (this.game.menuOpen || this.game.editing) return;
       if (e.button === 2) { e.preventDefault(); this._cancel(); return; }
       if (e.button !== 0) return;
-      // The click that grabs the pointer is not a building click. Without this,
-      // clicking into the window to start aiming also started a rectangle.
+      // the click that captures the pointer is not a building click
       if (!this.mouseFree && document.pointerLockElement !== canvas) return;
-      // the ray is a frame behind while the pointer is free, so refresh it first
-      this.ray = this._ray();
-      // a ring of the gizmo is grabbed before anything else: it is sitting in
-      // front of the object precisely so it can be taken hold of
+      this.ray = this._ray();     // a frame stale while the pointer is free
       const ring = this._ringUnderRay();
       if (ring && !(e.altKey && e.ctrlKey)) { this._startRingDrag(ring); return; }
       if (this.stage === 'idle') this.hover = this.game.world.pick(this.ray.origin, this.ray.dir);
@@ -607,7 +556,7 @@ export class Designer {
 
       if (a === 'freemouse') { e.preventDefault(); this._freeMouse(true); return; }
       if (a === 'playtest') { e.preventDefault(); this.togglePlay(); return; }
-      if (a && a !== 'playtest') this.held.add(a);
+      if (a) this.held.add(a);
       if (!this.ghost) return;
 
       if (e.code === 'Escape') { this._cancel(); return; }
@@ -616,8 +565,16 @@ export class Designer {
         case 'corner2': e.preventDefault(); this._corner('e'); return;
         case 'ddelete': e.preventDefault(); this._delete(); return;
         case 'platform': e.preventDefault(); this._platform(e.shiftKey); return;
-        case 'shape': e.preventDefault(); this._cycleShape(); return;
-        case 'axis': e.preventDefault(); this._cycleAxis(); return;
+        case 'shape':
+          e.preventDefault();
+          this.shape = this.shape === SHAPE_BOX ? SHAPE_SLOPE : SHAPE_BOX;
+          this._say(this.shape === SHAPE_SLOPE ? 'drawing ramps' : 'drawing boxes');
+          return;
+        case 'axis':
+          e.preventDefault();
+          this.axis = (this.axis + 1) % 3;
+          this._say('rotating about ' + AXIS_NAMES[this.axis]);
+          return;
         case 'rotate':
           e.preventDefault();
           this._turn(this.axis, (e.shiftKey ? FINE_TURN : STEP_TURN));
@@ -632,8 +589,7 @@ export class Designer {
           $('dkeys').classList.toggle('hidden');
           return;
       }
-      // The ten colours stay on the number row. They are a palette, not a
-      // command, and thirteen more rows in the panel would bury the rest.
+      // colours stay on the number row
       const digit = /^Digit([0-9])$/.exec(e.code);
       if (digit) {
         e.preventDefault();
@@ -648,15 +604,13 @@ export class Designer {
       if (a === 'freemouse') this._freeMouse(false);
     }, true);
 
-    // holding a key through a tab switch would otherwise leave it stuck down
     addEventListener('blur', () => { this.held.clear(); this._freeMouse(false); this._endDrag(); });
   }
 
   _freeMouse(on) {
     if (!this.active || this.mouseFree === on) return;
     this.mouseFree = on;
-    // stop input.js grabbing the pointer back on the very next click
-    this.game.input.suspendLock = on;
+    this.game.input.suspendLock = on;     // or the next click grabs the pointer back
     if (on) document.exitPointerLock?.();
     else if (this.ghost) this.game.input.requestLock();
   }
@@ -673,9 +627,7 @@ export class Designer {
     this.reachMark = edgeBox(0xffffff);
     this.cornerMark = edgeBox(0x8bf03a);
     this.hoverMark = edgeBox(0x7f8ea8);
-    // where a moving platform is headed: the far end of the run, and the line
-    // it travels along. A platform is parked while you build, so without these
-    // there would be nothing on screen to say it moves at all.
+    // the far end of a moving platform's run, and the line to it
     this.moveMark = edgeBox(0xffd93b);
     this.moveLine = new THREE.Line(
       new THREE.BufferGeometry().setAttribute(
@@ -691,9 +643,7 @@ export class Designer {
       this.overlay.add(o);
     }
 
-    // Three rings, one per axis, drawn through everything so a ring behind the
-    // object can still be taken hold of. Grabbing one both picks the axis and
-    // starts the turn.
+    // one ring per axis, drawn through everything so it can always be grabbed
     this.rings = AXIS_COLORS.map((color, axis) => {
       const ring = new THREE.LineLoop(ringGeometry(axis), new THREE.LineBasicMaterial({
         color, depthTest: false, transparent: true, opacity: 0.85
@@ -717,7 +667,6 @@ export class Designer {
       place(this.ghostEdges, a, b, 0.02);
     }
 
-    // the point a Q or E press would use, always visible so the corner is not a guess
     this.reachMark.visible = true;
     place(this.reachMark, sub(this.reachPoint, 0.12), add(this.reachPoint, 0.12));
 
@@ -739,7 +688,6 @@ export class Designer {
       pos.needsUpdate = true;
     }
 
-    // the gizmo: only on something that can actually be turned
     const gizmo = this.selected && !this.selected.locked;
     const over = gizmo && !this.drag ? this._ringUnderRay() : null;
     for (let axis = 0; axis < 3; axis++) {
@@ -840,7 +788,7 @@ export class Designer {
 
     $('dstats').textContent =
       `${L.boxes.length}/${MAX_BOXES} · ${fmt(L.w)}×${fmt(L.l)}×${fmt(L.h)} m · ` +
-      (this.shape === SHAPE_SLOPE ? 'ramp' : 'box') + ' · ' + AXIS_NAMES[this.axis] + ' · ' +
+      noun + ' · ' + AXIS_NAMES[this.axis] + ' · ' +
       (this.snap ? `grid ${GRID}` : 'free') + (this.mouseFree ? ' · mouse free' : '');
 
     $('dmsg').textContent = now() < this.messageUntil ? this.message : '';
@@ -852,8 +800,7 @@ function fmt(v) { return (Math.round(v * 100) / 100).toString(); }
 const sub = (p, r) => ({ x: p.x - r, y: p.y - r, z: p.z - r });
 const add = (p, r) => ({ x: p.x + r, y: p.y + r, z: p.z + r });
 
-/** Size and centre a unit cube on the box between two corners. `grow` keeps an
- *  outline just clear of the surface it hugs, so it does not z-fight. */
+/** Fit a unit cube to the box between two corners; `grow` avoids z-fighting. */
 function place(obj, a, b, grow = 0) {
   const sx = Math.abs(b.x - a.x) + grow * 2 || 0.02;
   const sy = Math.abs(b.y - a.y) + grow * 2 || 0.02;
@@ -862,9 +809,8 @@ function place(obj, a, b, grow = 0) {
   obj.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
 }
 
-/** Size, turn and place an outline onto a level box, rotation included. The
- *  matrix is built from solid.js's own Euler convention rather than from
- *  three.js's, so the outline cannot drift away from the collision shape. */
+/** Fit an outline to a level box, rotation included, using solid.js's own
+ *  Euler convention so it cannot drift from the collision shape. */
 function placeOriented(obj, box, grow = 0) {
   const m = eulerMatrix(box.rx || 0, box.ry || 0, box.rz || 0);
   const sx = (box.x1 - box.x0) + grow * 2;
@@ -887,7 +833,7 @@ function solidBox(color, opacity) {
   );
 }
 
-/** A unit circle in the plane that `axis` is normal to. */
+/** A unit circle in the plane `axis` is normal to. */
 function ringGeometry(axis, segments = 64) {
   const pts = [];
   for (let i = 0; i < segments; i++) {
@@ -905,14 +851,13 @@ function ringGeometry(axis, segments = 64) {
 function edgeBox(color) {
   const line = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-    // drawn through the world: an outline you cannot see is no use
     new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 })
   );
   line.renderOrder = 6;
   return line;
 }
 
-/** A key typed into the seed box or a dimension field is not a designer command. */
+/** Keys typed into a form field are not designer commands. */
 function isFormTarget(e) {
   const t = e.target;
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);

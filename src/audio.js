@@ -1,11 +1,11 @@
-// Every sound is synthesised on the fly — no audio assets to load or host.
+// Every sound is synthesised; there are no audio assets.
 export class Audio {
   constructor() {
     this.ctx = null;
     this.master = null;
   }
 
-  // must be called from a user gesture (browsers block audio otherwise)
+  // must be called from a user gesture
   resume() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -49,12 +49,13 @@ export class Audio {
     src.stop(t + dur + 0.02);
   }
 
-  /** distance = 0 for our own gun, larger for someone else's */
+  /** distance = 0 for our own gun */
   shot(weaponId, distance = 0) {
     if (!this.ctx) return;
     const vol = Math.max(0.06, 1 - distance / 60);
     if (weaponId === 1) { this._noise(0.28, 0.5 * vol, 700, 0.6); this._burst(0.16, 150, 0.28 * vol, 'square'); }
     else if (weaponId === 2) { this._noise(0.3, 0.32 * vol, 1400, 0.8); this._burst(0.22, 260, 0.26 * vol, 'sawtooth'); }
+    else if (weaponId === 4) { this._noise(0.6, 0.42 * vol, 5200, 0.5); this._burst(0.45, 1900, 0.12 * vol, 'sine'); }
     else { this._noise(0.12, 0.35 * vol, 1800, 0.9); this._burst(0.09, 320, 0.2 * vol, 'square'); }
   }
 

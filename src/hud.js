@@ -7,7 +7,8 @@ export class Hud {
       health: $('healthfill'), healthnum: $('healthnum'),
       mag: $('mag'), reserve: $('reserve'), weaponname: $('weaponname'), reloading: $('reloading'),
       killfeed: $('killfeed'), hitmarker: $('hitmarker'), damage: $('damage'),
-      crosshair: $('crosshair'), respawn: $('respawn'), respawnnum: $('respawnnum'),
+      crosshair: $('crosshair'), erasering: $('erasering'),
+      respawn: $('respawn'), respawnnum: $('respawnnum'),
       scoreboard: $('scoreboard'), scorebody: $('scorebody'),
       peercount: $('peercount'), ping: $('ping'), roomtag: $('roomtag'),
       chatform: $('chatform'), chatinput: $('chatinput'), status: $('status'),
@@ -16,7 +17,6 @@ export class Hud {
       btnFire: document.querySelector('.tbtn[data-btn=fire]'),
       btnAds: document.querySelector('.tbtn[data-btn=ads]')
     };
-    // what those two buttons say when they are an ordinary gun's buttons
     for (const el of [this.el.btnFire, this.el.btnAds]) {
       if (el) el.dataset.label = el.textContent.trim();
     }
@@ -35,8 +35,7 @@ export class Hud {
     document.body.classList.toggle('touch-ui', !!showTouch);
   }
 
-  /** `paused` draws the menu over the running game instead of covering it:
-   *  the panel floats on a blur of whatever you were looking at. */
+  /** `paused` floats the menu over a blur of the running game. */
   showMenu(paused = false) {
     this.el.menu.classList.remove('hidden');
     this.el.menu.classList.toggle('overlay', !!paused);
@@ -45,9 +44,7 @@ export class Hud {
 
   hideLoading() { this.el.loading.classList.add('hidden'); }
 
-  /** The screen between pressing CONNECT and being in the match: first while the
-   *  room is being looked for, then while an existing one is being joined. Pass
-   *  null to take it away. */
+  /** The looking-for / joining screen; null hides it. */
   joining(title, sub = '') {
     const el = this.el.joining;
     if (!el) return;
@@ -62,8 +59,7 @@ export class Hud {
     this.el.status.classList.toggle('err', isError);
   }
 
-  // These run every frame, so nothing is written unless it actually changed —
-  // pointless DOM writes are a real cost on a phone.
+  // called every frame: only touch the DOM when a value changed
   _set(key, value, apply) {
     if (this._cache[key] === value) return;
     this._cache[key] = value;
@@ -90,10 +86,7 @@ export class Hud {
     this._set('reloading', !!reloading, v => this.el.reloading.classList.toggle('hidden', !v));
   }
 
-  /** The portal gun has no fire and no aim: it has a left trigger and a right
-   *  one. On a phone those are the FIRE and AIM buttons, so while it is in hand
-   *  they say so and wear the two colours this page actually got — which are
-   *  re-agreed whenever somebody joins, hence the colours in the cache key. */
+  /** With the portal gun in hand, FIRE and AIM become the two coloured triggers. */
   portalTriggers(on, left, right) {
     this._set('ptrig', on ? `${left}:${right}` : '', () => {
       for (const [el, label, hex] of [[this.el.btnFire, 'LEFT<br>PORTAL', left],
@@ -143,7 +136,19 @@ export class Hud {
 
   ads(on) { this._set('ads', !!on, v => this.el.crosshair.classList.toggle('ads', v)); }
 
-  /** Local-only readout: nobody else can see that you are shielded. */
+  /** White Out's ring instead of the crosshair; `px` is its radius. */
+  eraseReticle(on, px = 0, ready = true) {
+    this._set('erase', on ? `${px}:${ready}` : '', () => {
+      this.el.crosshair.classList.toggle('hidden', !!on);
+      const ring = this.el.erasering;
+      if (!ring) return;
+      ring.classList.toggle('hidden', !on);
+      if (!on) return;
+      ring.style.width = ring.style.height = (px * 2) + 'px';
+      ring.classList.toggle('charging', !ready);
+    });
+  }
+
   protection(text) {
     this._set('prot', text, v => {
       this.el.protection.classList.toggle('hidden', !v);
@@ -183,9 +188,8 @@ export class Hud {
     this.el.chatinput.value = '';
     this.el.chatinput.focus();
 
-    // Tapping anywhere off the box leaves message mode — on a phone there is no
-    // Escape key to reach for. Armed a tick late so the very tap that opened the
-    // chat does not immediately close it again.
+    // a tap anywhere else closes it (phones have no Escape); armed a tick late so
+    // the tap that opened it does not close it
     setTimeout(() => {
       if (!this.chatOpen || this._outsideTap) return;
       this._outsideTap = e => {

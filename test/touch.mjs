@@ -149,6 +149,9 @@ const R = await page.evaluate(async () => {
     for (let i = 1; i <= 5; i++) { ev('pointermove', 15, 200 + i * 24, 500, fire); await sleep(20); }
     await sleep(60);
     ev('pointerup', 15, 320, 500, fire);
+    // wait for frames, not a clock: under the software rasteriser a frame can
+    // stall past the drag and the turn is still sitting in lookDX when read
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     out.buttonThenDrag.buttonFingerTurns = round(Math.abs(g.player.yaw - before));
   }
   clean();

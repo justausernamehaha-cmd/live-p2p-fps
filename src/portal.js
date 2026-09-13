@@ -1,44 +1,20 @@
-// Portals: the geometry half.
+// Portal geometry: where a portal may go and what going through one does.
+// No three.js, so test/portal.mjs runs in node; the visuals are in portalgun.js.
 //
-// Deliberately free of three.js, so it runs in node the way solid.js does and
-// `test/portal.mjs` needs neither a browser nor a server. Everything visual
-// lives in portalgun.js; everything that decides *where a portal may go* and
-// *what coming out of one does to you* lives here.
-//
-// A portal is an oval lying flat on one face of one piece of world geometry:
-//
-//   { c:{x,y,z}      its centre, on that face
-//     n:{x,y,z}      the face's outward normal — the way you come *out*
-//     u:{x,y,z}      the oval's half-width axis   (|u| = 1, HALF_W long)
-//     v:{x,y,z}      the oval's half-height axis  (|v| = 1, HALF_H long)
-//     side:'a'|'b'   left click or right click
-//     owner, color, mover }
-//
-// `mover` is the index of the moving platform it was placed on, or -1. A portal
-// on a platform rides with it, which is the whole reason platforms and portals
-// arrived in the same change.
+// A portal is an oval on one face of the level:
+//   { c  centre on the face,  n  outward normal (the way you come out),
+//     u  half-width axis,     v  half-height axis,
+//     side 'a'|'b', owner, color, mover (platform index or -1) }
 
-// Two metres tall, at the user's asking — a little over head height, so you walk
-// through one rather than duck into it. Width reads "double players wide" as room
-// for two of them abreast: the player is 0.34 m across (RADIUS 0.17 in
-// player.js), so 1.36 m, with the space between that a doorway needs. A 0.68 m
-// mouth would be a quarter of a metre wider than the player and nothing about it
-// would feel easy to step into.
+// 1.36 m wide (room for two bodies abreast), 2 m tall
 export const HALF_W = 0.68;
 export const HALF_H = 1.0;
 
-// Two portals of the same pair sitting on top of each other is an infinite loop
-// with no way out. Refuse it rather than let the player wedge themselves.
 const MIN_PAIR_SEP = HALF_W * 1.2;
-
 const EPS = 1e-9;
-// Half a millimetre of slack in the fit. A surface built to exactly the size of
-// a portal is a surface a portal should go on, and without this the answer is
-// decided by whichever way the last bit of a float fell. It is four orders of
-// magnitude below anything a person can aim at, so nothing else notices.
+// half a millimetre of slack so a surface exactly a portal's size takes one
 const FIT_EPS = 5e-4;
 
-// ---------------------------------------------------------------- small vectors
 const v3 = (x, y, z) => ({ x, y, z });
 const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 const cross = (a, b) => v3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
@@ -50,14 +26,7 @@ function norm3(a) {
   return v3(a.x / l, a.y / l, a.z / l);
 }
 
-// ------------------------------------------------------------------- the face
-/** The polygon a shot landed on, in world space.
- *
- *  world.pick() answers two different shapes: an axis-aligned box names the face
- *  it entered by axis and sign, and a convex solid names the index of the plane.
- *  Both have to come back as the same thing — an outward normal and the corners
- *  of that one face — because fitting an oval onto a surface is the same problem
- *  either way. */
+/** The polygon a world.pick() hit landed on: outward normal plus corners. */
 export function faceOf(hit) {
   if (!hit) return null;
   if (hit.solid) {
@@ -76,8 +45,7 @@ export function faceOf(hit) {
   const k = ['x', 'y', 'z'][axis];
   n[k] = sign;
   const plane = sign > 0 ? b.max[k] : b.min[k];
-  // the two axes that are not the normal, in a fixed order, so the corners come
-  // out as a ring rather than a bow tie
+  // the other two axes in a fixed order, so the corners form a ring
   const [p, q] = axis === 0 ? ['y', 'z'] : axis === 1 ? ['z', 'x'] : ['x', 'y'];
   const corner = (pv, qv) => {
     const o = v3(0, 0, 0);
@@ -93,28 +61,15 @@ export function faceOf(hit) {
   };
 }
 
-/** The oval's own axes on a face. Upright wherever "upright" means anything: a
- *  portal on a wall stands up, and one on the floor or the ceiling is turned to
- *  face the way the shooter was looking, so walking in feels like walking in
- *  rather than like being spun. */
+/** The oval's axes on a face. The long axis is the shooter's own up flattened
+ *  into the face; on a floor or ceiling it follows the look direction, snapped to
+ *  a world axis so a square crate top always fits one. */
 export function frameFor(n, look, playerUp = null) {
-  // The oval is two metres tall and 1.36 across, so its long axis is the one
-  // that decides whether a portal reads as a doorway or as a letterbox — and it
-  // has to be the *shooter's* vertical, not the world's. Gravity follows a body
-  // through a mouth, so somebody standing on a wall has an up of their own, and
-  // a portal laid out along the world's y is lying on its side as far as they
-  // are concerned. Their up, flattened into the face, is the long axis.
   const up = playerUp && Math.abs(dot(playerUp, n)) < 0.9
     ? norm3(sub3(playerUp, scale3(n, dot(playerUp, n))))
     : v3(0, 1, 0);
   let u;
   if (Math.abs(dot(up, n)) > 0.9) {
-    // Floor or ceiling. Turned to face roughly the way the shooter was looking,
-    // but *snapped to the nearest world axis* rather than following the look
-    // exactly. A portal is 1.36 by 2, and the top of a crate is 2 by 2: laid
-    // diagonally it no longer fits on its own surface and the shot explodes, so
-    // whether you could put a portal on a box came down to which way you
-    // happened to be standing. Snapped, a square face always takes one.
     const f = look ? sub3(look, scale3(n, dot(look, n))) : v3(0, 0, -1);
     const along = Math.abs(f.x) > Math.abs(f.z)
       ? v3(Math.sign(f.x) || 1, 0, 0)
@@ -126,27 +81,12 @@ export function frameFor(n, look, playerUp = null) {
   return { u, v: norm3(cross(n, u)), n };
 }
 
-// ------------------------------------------------------------------- fitting
-/** Where a portal shot that landed at `point` on `face` actually puts a portal.
+/** Where a shot landing at `point` puts a portal: {c, u, v, n}, or null when the
+ *  face cannot hold the whole oval (the shot explodes).
  *
- *  Returns {c, u, v, n} on success, or null when the surface cannot hold the
- *  whole oval — in which case the caller makes it explode.
- *
- *  No part of a portal may hang off the surface it is on. Where the shot lands
- *  too near an edge for the whole oval to fit, it slides inward until it does —
- *  the least it can be moved and still be entirely on the wall.
- *
- *  The set of centres at which an axis-aligned box of half-size (HALF_W, HALF_H)
- *  fits inside a convex polygon is that polygon eroded by the box, which is exact
- *  and is itself convex: push every edge inward by how far the box reaches along
- *  that edge's normal, and clip. Whatever survives is every legal centre; the
- *  nearest point of it to where the shot landed is where the portal goes, which
- *  is "slide it in until it fits" stated as arithmetic. Empty means the surface
- *  is too small however it is placed, and the shot explodes instead.
- *
- *  The oval is inscribed in that box rather than fitted itself, so the fit is a
- *  little conservative at a slanted corner — erring toward refusing a portal that
- *  would poke over an edge, which is the right way to be wrong. */
+ *  Legal centres = the face polygon eroded by the oval's bounding box (offset
+ *  every original edge inward, clip). The nearest legal centre to the shot is
+ *  where it goes, so a portal near an edge slides inward. */
 export function fitPortal(face, point, look, playerUp = null) {
   if (!face || face.verts.length < 3) return null;
   const { u, v, n } = frameFor(face.n, look, playerUp);
@@ -158,11 +98,7 @@ export function fitPortal(face, point, look, playerUp = null) {
   let poly = face.verts.map(to2);
   if (signedArea(poly) < 0) poly = poly.slice().reverse();
 
-  // Every half-plane has to come from the *original* face. Reading the edges out
-  // of `poly` as it is clipped walks a moving target: after the first cut the
-  // loop is offsetting edges the erosion itself created, and most of the real
-  // ones are never applied at all — which let a portal sit half off a surface
-  // that was a centimetre too small for it.
+  // half-planes from the ORIGINAL edges, not the polygon being clipped
   const planes = [];
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i], b = poly[(i + 1) % poly.length];
@@ -175,30 +111,17 @@ export function fitPortal(face, point, look, playerUp = null) {
   }
   for (const [nx, ny, d] of planes) {
     poly = clipHalfPlane(poly, nx, ny, d);
-    if (poly.length < 1) return null;             // nowhere on this face fits
+    if (poly.length < 1) return null;
   }
 
-  // where the shot landed, slid to the nearest place the whole oval sits on the
-  // face, and projected onto the face's own plane so a portal is never a hair in
-  // front of or behind the surface it is on
   const [s0, t0] = to2(point);
   const [s, t] = nearestInPoly(poly, s0, t0);
   const c = add3(origin, add3(scale3(u, s), scale3(v, t)));
   return { c, u, v, n };
 }
 
-/** Do two mouths overlap?
- *
- *  Nothing about two portals sharing a piece of wall makes sense. Two mouths of
- *  one pair on top of each other is a loop with no way out of it, and two of
- *  different pairs is worse: the wall is cut through twice, either crossing
- *  wins by whichever is nearer, and a body in the shared part is in both. So no
- *  mouth may be laid over any other, whoever it belongs to.
- *
- *  Coplanar mouths are compared as the ovals they are — a portal may sit right
- *  beside another as long as they do not touch, which on a long wall matters.
- *  Mouths on different planes only have to keep their centres apart, since the
- *  wall between them is what separates them. */
+/** Do two mouths overlap? No mouth may be laid over any other. Coplanar mouths
+ *  are compared as ovals; on different planes only the centres must be apart. */
 export function overlapsMouth(portal, other) {
   if (!other || other === portal) return false;
   const dx = portal.c.x - other.c.x, dy = portal.c.y - other.c.y, dz = portal.c.z - other.c.z;
@@ -206,8 +129,6 @@ export function overlapsMouth(portal, other) {
   const sameFace = dot(portal.n, other.n) > 0.99 &&
                    Math.abs(dx * portal.n.x + dy * portal.n.y + dz * portal.n.z) < 0.02;
   if (sameFace) {
-    // in the other mouth's own frame, two ellipses of the same size: they miss
-    // each other exactly when the centres are more than one full width apart
     const su = (dx * other.u.x + dy * other.u.y + dz * other.u.z) / (2 * HALF_W);
     const sv = (dx * other.v.x + dy * other.v.y + dz * other.v.z) / (2 * HALF_H);
     return su * su + sv * sv < 1;
@@ -215,19 +136,9 @@ export function overlapsMouth(portal, other) {
   return d < MIN_PAIR_SEP && dot(portal.n, other.n) > 0.7;
 }
 
-/** Back-compatible name: the partner is just the first mouth anything is
- *  checked against. */
-export function overlapsPartner(portal, partner) { return overlapsMouth(portal, partner); }
-
-// --------------------------------------------------------------- traversal
-
-/** The rigid motion that takes a point at `from` and delivers it out of `to`.
- *
- *  A portal is entered against its normal and left along the other one's, which
- *  is a half turn about the exit's up axis on top of the change of frame — so
- *  the width axis and the normal both flip and the height axis does not. Applied
- *  to a position it moves you; applied to a direction it turns your momentum and
- *  your view, which is the same map without the offset. */
+/** The rigid motion from `from` to `to`: change of frame plus a half turn about
+ *  the exit's up, so u and n flip and v does not. `dir` for directions, `point`
+ *  for positions. */
 export function portalMap(from, to) {
   const dir = d => {
     const a = dot(d, from.u), b = dot(d, from.v), c = dot(d, from.n);
@@ -243,19 +154,12 @@ export function portalMap(from, to) {
   };
 }
 
-// ------------------------------------------------------------------- a body
-// Sample points up a body, as fractions of its height, and how much of a mouth
-// counts as the mouth. Both live here rather than in player.js because two
-// different things need the same answer: the player deciding whether the wall in
-// front of them is there, and every screen deciding whether to draw the half of
-// somebody that is sticking out of the far mouth.
+// Sample points up a body, as fractions of its height. The feet are needed for a
+// floor mouth, the head for a ceiling one.
 export const BODY_SAMPLES = [0.02, 0.25, 0.5, 0.75, 0.98];
 
-/** Is any part of a body standing in this mouth?
- *
- *  Two-sided: half a body past the surface is the ordinary case, because a
- *  portal is a hole you walk into rather than a doorway that moves you. The
- *  depth bound is a body length — beyond that you are through and gone. */
+/** Is any part of a body in this mouth? Two-sided: half a body past the surface
+ *  is the ordinary case. */
 export function atMouth(p, pos, up, height, reach, edge) {
   for (const frac of BODY_SAMPLES) {
     const h = height * frac;
@@ -271,39 +175,8 @@ export function atMouth(p, pos, up, height, reach, edge) {
   return false;
 }
 
-/** The pieces of an axis-aligned box that are left once a mouth is cut into it.
- *
- *  A portal is a hole in a wall. Collision used to be told that by taking the
- *  whole wall away for as long as a body was in the mouth, and a wall that is
- *  entirely absent is not a wall with a hole in it — it is a doorway the size of
- *  the room. Three separate ways out of the map came from that, all of them
- *  reported by hand:
- *
- *    * stand on a wall, put a mouth on that same wall, and walk toward it. The
- *      wall switches off as soon as your feet are *near* the oval, gravity is
- *      into the wall because you are standing on it, and you sink through it and
- *      out of the room without ever reaching the hole;
- *    * stand between two mouths and walk toward the edge of one. You leave the
- *      oval while still inside the wall, the wall comes back, and the next axis
- *      resolved pushes you clear of the whole box — the length of the room;
- *    * and a mouth that turns you over can stand you inside the exit's wall,
- *      where nothing pushes you out because the wall is not there to push.
- *
- *  So cut the hole instead. The oval is opened through the full thickness of the
- *  box and what is left around it stays as solid as it ever was — in bands, so
- *  the hole is the shape of the mouth rather than the square it is inscribed in.
- *  A square hole is passable at its corners, where the picture plainly says
- *  wall, and "if I do not fit the portal exactly I should not be able to go
- *  through" is the whole point of the exercise.
- *
- *  Each band is cut to the widest the oval gets anywhere within it, so the hole
- *  is never narrower than the mouth: whatever fits through the picture fits
- *  through the collision. `pad` widens it further, and both u and v are world
- *  axes on any axis-aligned face — see frameFor() — which is what lets bands of
- *  axis-aligned boxes describe an oval at all. */
-export const HOLE_BANDS = 8;
+const HOLE_BANDS = 8;
 
-/** Which world axis a unit vector lies along, or null if it does not. */
 function axisOf(d) {
   if (Math.abs(d.x) > 0.999) return 'x';
   if (Math.abs(d.y) > 0.999) return 'y';
@@ -311,15 +184,16 @@ function axisOf(d) {
   return null;
 }
 
+/** What is left of an axis-aligned box with a mouth cut through it.
+ *
+ *  Collision must see a wall with a hole in it, not no wall: removing the whole
+ *  box was four separate ways out of the map. The oval is cut in bands, each as
+ *  wide as the oval gets within it, so the hole is never narrower than the mouth
+ *  and not passable at the corners of its bounding square. */
 export function pierce(box, p, pad = 0) {
   const k = axisOf(p.n);
   const ua = axisOf(p.u), va = axisOf(p.v);
-  if (!k || !ua || !va) {
-    // Not an axis-aligned face. frameFor() never produces one on a box, so this
-    // is only reachable from a level that has been turned; take the whole thing
-    // out rather than cut a hole in the wrong place.
-    return [];
-  }
+  if (!k || !ua || !va) return [];     // not an axis-aligned face: take it all out
   const out = [];
   const piece = (uLo, uHi, vLo, vHi) => {
     if (uHi - uLo < 1e-4 || vHi - vLo < 1e-4) return;
@@ -332,17 +206,11 @@ export function pierce(box, p, pad = 0) {
   const cu = p.c[ua], cv = p.c[va];
   const V = HALF_H + pad, U = HALF_W + pad;
   const v0 = Math.max(box.min[va], cv - V), v1 = Math.min(box.max[va], cv + V);
-  // everything above and below the oval, full width
-  piece(box.min[ua], box.max[ua], box.min[va], v0);
-  piece(box.min[ua], box.max[ua], v1, box.max[va]);
-  // ...and one band at a time beside it, following the oval outward so the hole
-  // is the shape the mouth is drawn as rather than the square it is inscribed
-  // in. A square hole is passable at its corners, where the picture says wall.
+  piece(box.min[ua], box.max[ua], box.min[va], v0);     // below the oval
+  piece(box.min[ua], box.max[ua], v1, box.max[va]);     // above it
   const step = (v1 - v0) / HOLE_BANDS;
   for (let i = 0; i < HOLE_BANDS; i++) {
     const bLo = v0 + step * i, bHi = bLo + step;
-    // the widest the oval gets anywhere in this band: the hole is never
-    // narrower than the mouth, so anything that fits the mouth fits the hole
     const near = Math.min(Math.abs(bLo - cv), Math.abs(bHi - cv),
                           (bLo - cv) * (bHi - cv) <= 0 ? 0 : Infinity);
     const t = Math.min(1, near / V);
@@ -353,8 +221,7 @@ export function pierce(box, p, pad = 0) {
   return out;
 }
 
-/** The link a body is standing in, if any — the mouth it is half out of, and
- *  therefore the other mouth the rest of it is hanging out of. */
+/** The link whose mouth a body is standing in, if any. */
 export function mouthAround(links, pos, up, height, reach, edge) {
   for (const link of links) {
     if (atMouth(link.from, pos, up, height, reach, edge)) return link;
@@ -362,29 +229,10 @@ export function mouthAround(links, pos, up, height, reach, edge) {
   return null;
 }
 
-/** Yaw and pitch that look along `d`, in the game's own convention:
- *  forward = (-sin yaw cos pitch, sin pitch, -cos yaw cos pitch). */
-export function lookAngles(d) {
-  const len = Math.hypot(d.x, d.y, d.z) || 1;
-  const x = d.x / len, y = d.y / len, z = d.z / len;
-  return {
-    yaw: Math.atan2(-x, -z),
-    pitch: Math.asin(Math.max(-1, Math.min(1, y)))
-  };
-}
-
 // ------------------------------------------------------------------ colours
-// Nobody is in charge in this game, so the colours cannot be handed out — they
-// have to be *agreed*. Every player announces one random number at join time and
-// everyone runs this on the same set, so every screen reaches the same answer
-// without a word of negotiation.
-//
-// The two mouths of one pair sit opposite each other on the hue circle, which is
-// what makes a lone player's pair blue and orange exactly as asked. All the
-// first hues therefore have to live inside one half of the circle, or one
-// player's A would land on another's B. Spread them evenly across that half and
-// the worst separation is 180/n degrees, at which point saturation is varied as
-// well so eight players are still eight distinguishable pairs.
+// No authority hands colours out. Each player announces one random number and
+// everyone folds the same sorted set into the same hues. A pair is (h, h+180), so
+// every first hue lives in one half of the circle and pairs never collide.
 const BLUE = 210;
 
 export function assignHues(players) {
@@ -395,7 +243,6 @@ export function assignHues(players) {
     out.set(list[0].id, pair(BLUE, 0));
     return out;
   }
-  // one shared random, derived from everybody's: any refresh by anyone moves it
   let sum = 0;
   for (const p of list) sum += (Number.isFinite(p.r) ? p.r : 0);
   const rot = sum - Math.floor(sum);
@@ -403,7 +250,7 @@ export function assignHues(players) {
   const slot = 180 / n;
   list.forEach((p, i) => {
     const r = Number.isFinite(p.r) ? p.r : 0;
-    const jitter = (r - 0.5) * slot * 0.4;      // random-looking, still separated
+    const jitter = (r - 0.5) * slot * 0.4;
     const h = (BLUE + slot * (i + rot) + jitter + 360) % 360;
     out.set(p.id, pair(h, i));
   });
@@ -415,8 +262,8 @@ function pair(h, i) {
   return { a: hsl(h, sat, 0.56), b: hsl((h + 180) % 360, sat, 0.56), hue: h };
 }
 
-/** hsl -> 0xrrggbb, so a hue can be turned into something three.js accepts. */
-export function hsl(h, s, l) {
+/** hsl -> 0xrrggbb */
+function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const hp = ((h % 360) + 360) % 360 / 60;
   const x = c * (1 - Math.abs((hp % 2) - 1));
@@ -432,7 +279,7 @@ export function hsl(h, s, l) {
   return (q(r) << 16) | (q(g) << 8) | q(b);
 }
 
-/** The default pair, used before anyone else is in the room. */
+/** Blue and orange: the pair used before anyone else is in the room. */
 export const SOLO_PAIR = pair(BLUE, 0);
 
 // -------------------------------------------------------------- 2D helpers
@@ -445,9 +292,7 @@ function signedArea(poly) {
   return a / 2;
 }
 
-/** Nearest point of a convex polygon to (s,t) — the point itself when it is
- *  already inside, otherwise the closest point on the boundary. A single
- *  surviving vertex (an exact fit) falls out of the same code. */
+/** Nearest point of a convex polygon to (s,t). */
 function nearestInPoly(poly, s, t) {
   if (poly.length === 1) return poly[0];
   let inside = true;
@@ -470,13 +315,10 @@ function nearestInPoly(poly, s, t) {
   return best;
 }
 
-/** Distance along a ray to where it goes through this portal's mouth, or -1.
- *
- *  The front face only, exactly as a body enters it: a bullet arriving at the
- *  back of a mouth hits the wall the mouth is on, which is what is really there. */
+/** Distance along a ray to where it enters this mouth from the front, or -1. */
 export function rayPortal(origin, dir, portal, maxDist = Infinity) {
   const denom = dot(dir, portal.n);
-  if (denom >= -1e-9) return -1;                 // parallel, or coming from behind
+  if (denom >= -1e-9) return -1;                 // parallel, or from behind
   const t = dot(sub3(portal.c, origin), portal.n) / denom;
   if (t < 1e-4 || t > maxDist) return -1;
   const hit = add3(origin, scale3(dir, t));
@@ -502,4 +344,3 @@ function clipHalfPlane(poly, nx, ny, d) {
   }
   return out;
 }
-

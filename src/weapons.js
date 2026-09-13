@@ -1,21 +1,14 @@
+import { HOLE_TIME, ERASE_RANGE } from './erase.js';
+
 export const HEADSHOT_MULT = 2;
 
-// `spread` is the gun's own pattern and is always present — only the shotgun has
-// one, because a shot pattern is what a shotgun is. `hipSpread` is the extra cone
-// that hipfire adds, scaled by how accurate the stance is:
-//
-//   aiming (right click)  100%  -> no added cone at all, moving or not
-//   standing hipfire       95%  -> 5% of hipSpread
-//   moving hipfire         90%  -> 10% of hipSpread
+// Hipfire adds (1 - accuracy) of `hipSpread`; aiming removes it. `spread` is the
+// gun's own pattern (only the shotgun has one).
 const ACCURACY = { ads: 1, standing: 0.95, moving: 0.90 };
 export const ADS_ZOOM = 1.25;
 export const ADS_TIME = 0.4;      // seconds to raise or lower the sights
 
-/** Cone half-angle in radians for the current stance.
- *
- *  A gun marked `perfect` is exempt from all of it: the portal gun places a
- *  portal exactly where it is pointed, standing, sprinting or mid-hop, because
- *  a portal that lands a foot off is not a near miss, it is the wrong wall. */
+/** Cone half-angle in radians. `perfect` guns never spread. */
 export function spreadFor(weapon, moving, adsT) {
   if (weapon.perfect) return 0;
   const hipAcc = moving ? ACCURACY.moving : ACCURACY.standing;
@@ -23,23 +16,19 @@ export function spreadFor(weapon, moving, adsT) {
   return weapon.spread + weapon.hipSpread * (1 - acc);
 }
 
+// `hold` is the gun a body carries, as seen by others (remote.js).
 export const WEAPONS = [
   {
     id: 0, name: 'Rifle', auto: true,
     damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150, killAward: 30,
     spread: 0, hipSpread: 0.09, recoil: 0.013, recoilYaw: 0.004,
     reloadTime: 2.0, range: 140, color: 0xffd08a, shakeScale: 1,
-    // What the *body* is holding, seen from outside. The same shape the
-    // viewmodel is, at a distance: a receiver, a barrel, a magazine and a
-    // stock, sized per weapon so a stubby shotgun and a long marksman rifle
-    // read differently across the map. Used for a peer's body and for your
-    // own, which is the point — see `makeBody` in remote.js.
     hold: { barrel: 0.42, bore: 0.05, body: 0.5, tint: 0x2f3644, accent: 0xd9743b }
   },
   {
     id: 1, name: 'Shotgun', auto: false,
     damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42, killAward: 6,
-    spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,  // pattern stays even aimed
+    spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2,
     hold: { barrel: 0.3, bore: 0.085, body: 0.42, tint: 0x3a2a1e, accent: 0xffb066 }
   },
@@ -51,27 +40,34 @@ export const WEAPONS = [
     hold: { barrel: 0.72, bore: 0.045, body: 0.5, tint: 0x1d2634, accent: 0x8fd8ff, scope: true }
   },
   {
-    // The portal gun. Same rifle in the hand, and that is deliberate — only the
-    // coloured brick on top says otherwise, blue on the left and orange on the
-    // right. It does no damage, never runs out and never misses, and its two
-    // triggers are two colours rather than fire and aim.
+    // two triggers (left/right mouth), no damage, no ammo, no spread, no sights
     id: 3, name: 'Portal Gun', auto: false,
     damage: 0, pellets: 1, interval: 0.32, mag: 0, reserve: 0, killAward: 0,
     spread: 0, hipSpread: 0, recoil: 0.006, recoilYaw: 0.001,
     reloadTime: 0, range: 220, color: 0x7fd4ff, shakeScale: 0.5,
-    perfect: true,     // no cone, in any stance
-    noAds: true,       // right click is the second trigger, not the sights
-    infinite: true,    // no magazine, nothing to reload
-    portal: true,
+    perfect: true, noAds: true, infinite: true, portal: true,
     hold: { barrel: 0.4, bore: 0.075, body: 0.46, tint: 0x2a3d52, accent: 0x7fd4ff, prongs: true }
+  },
+  {
+    // hold to paint, release for a hole (main.js _whiteOut, erase.js); `recharge`
+    // counts from the release, on the weapon's own `readyAt`
+    id: 4, name: 'White Out', auto: false,
+    damage: 0, pellets: 1, interval: 0.4, mag: 0, reserve: 0, killAward: 0,
+    recharge: HOLE_TIME,
+    spread: 0, hipSpread: 0, recoil: 0.03, recoilYaw: 0.004,
+    reloadTime: 0, range: ERASE_RANGE, color: 0xffffff, shakeScale: 1.6,
+    perfect: true, infinite: true, erase: true,
+    hold: { barrel: 0.2, bore: 0.11, body: 0.46, tint: 0xe6eaf0, accent: 0xffffff }
   }
 ];
+
+const freshState = () => WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve, reloadEnd: 0, readyAt: 0 }));
 
 export class Loadout {
   constructor() {
     this.index = 0;
     this.previous = 1;
-    this.state = WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve, reloadEnd: 0 }));
+    this.state = freshState();
     this.nextShot = 0;
     this.firedThisTrigger = false;
   }
@@ -84,7 +80,7 @@ export class Loadout {
     if (i === this.index || i < 0 || i >= WEAPONS.length) return false;
     this.previous = this.index;
     this.index = i;
-    this.nextShot = Math.max(this.nextShot, t + 0.25);   // small swap delay
+    this.nextShot = Math.max(this.nextShot, t + 0.25);   // swap delay
     return true;
   }
 
@@ -108,12 +104,11 @@ export class Loadout {
       a.reserve -= need;
       a.reloadEnd = 0;
     }
-    // auto-reload an empty gun rather than making the player press R
-    if (!a.reloadEnd && a.mag === 0 && a.reserve > 0) return this.startReload(t);
+    if (!a.reloadEnd && a.mag === 0 && a.reserve > 0) return this.startReload(t);   // auto-reload
     return false;
   }
 
-  /** returns the weapon if the trigger produced a shot, else null */
+  /** The weapon if the trigger produced a shot, else null. */
   tryFire(t, triggerHeld, triggerPressed) {
     const w = this.weapon, a = this.ammo;
     if (!triggerHeld) { this.firedThisTrigger = false; return null; }
@@ -127,9 +122,8 @@ export class Loadout {
     return w;
   }
 
-  /** The portal gun's two triggers are two colours, not fire and aim, so they
-   *  cannot share `firedThisTrigger` — holding one down would lock the other
-   *  out. They share only the interval, which is all that needs sharing. */
+  /** The portal gun's triggers share only the interval, not firedThisTrigger,
+   *  or holding one would lock out the other. */
   tryPortalFire(t, pressed) {
     const w = this.weapon;
     if (!pressed || !w.portal || t < this.nextShot) return null;
@@ -137,9 +131,7 @@ export class Loadout {
     return w;
   }
 
-  /** A kill is worth exactly one magazine for the gun in hand — 30, 6 or 5 —
-   *  rather than the full refill it used to be. Returns how many rounds were
-   *  actually gained, which is less than that if it hit the reserve ceiling. */
+  /** A kill is worth one magazine. Returns rounds actually gained. */
   awardOnKill() {
     const w = this.weapon, a = this.ammo;
     if (w.infinite) return 0;
@@ -149,7 +141,7 @@ export class Loadout {
   }
 
   refill() {
-    this.state = WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve, reloadEnd: 0 }));
+    this.state = freshState();
     this.nextShot = 0;
   }
 }

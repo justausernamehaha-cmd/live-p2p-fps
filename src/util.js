@@ -10,7 +10,7 @@ export function lerpAngle(a, b, t) {
 
 export const now = () => performance.now();
 
-// deterministic 32-bit hash -> used for per-player colours
+// FNV-1a, 32 bit
 export function hash(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -20,24 +20,13 @@ export function hash(str) {
   return h >>> 0;
 }
 
-// Hand-picked and widely separated in hue, and deliberately clear of the
-// blue-grey the level is built from. Players are assigned these by their sorted
-// position in the room, not by hashing their id, so two people can never end up
-// with near-identical colours.
+// Widely separated hues, clear of the level's blue-grey. Assigned by sorted
+// position in the room so two players never get near-identical colours.
 export const PLAYER_COLORS = [
-  0xff8a3d,  // orange
-  0x35d6f5,  // cyan
-  0x8bf03a,  // lime
-  0xff4fd8,  // magenta
-  0xffd93b,  // yellow
-  0xff4d5e,  // red
-  0xa872ff,  // violet
-  0x2ce8a4,  // spring green
-  0xffffff,  // white
-  0x7a8cff   // periwinkle
+  0xff8a3d, 0x35d6f5, 0x8bf03a, 0xff4fd8, 0xffd93b,
+  0xff4d5e, 0xa872ff, 0x2ce8a4, 0xffffff, 0x7a8cff
 ];
 
-/** Everyone in a room sorted the same way gets the same colour on every screen. */
 export function colorIndexFor(id, allIds) {
   const i = [...allIds].sort().indexOf(id);
   return (i < 0 ? 0 : i) % PLAYER_COLORS.length;

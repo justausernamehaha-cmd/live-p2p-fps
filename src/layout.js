@@ -1,9 +1,8 @@
 import { clamp } from './util.js';
 import { BINDABLE, TOGGLEABLE, DESIGN_BINDABLE } from './input.js';
 
-// Lets a phone player drag the on-screen buttons around and resize them, because
-// no single fixed layout suits every hand and every screen. Positions are stored
-// as viewport fractions so they survive rotation and a change of device.
+// The settings panel: drag and resize the touch buttons (stored as viewport
+// fractions), hold/toggle modes, and key rebinding.
 
 const KEY = 'pa.layout';
 const MIN = 0.55, MAX = 2.0;
@@ -14,7 +13,6 @@ export class Layout {
     this.editing = false;
     this.selected = null;
     this._drag = null;
-    this.onSelect = null;
 
     this.buttons = [...document.querySelectorAll('#tbuttons .tbtn, #tside .tbtn')];
     this.panel = document.getElementById('editpanel');
@@ -35,27 +33,22 @@ export class Layout {
     this._buildModeRows();
     this._buildKeyRows('keybinds', BINDABLE, false);
     this._buildKeyRows('designbinds', DESIGN_BINDABLE, true);
-    document.getElementById('resetbinds').addEventListener('click', () => {
-      this._capturing = null;
-      this.onResetBinds?.(false);
-      this.showBinds();
-    });
-    document.getElementById('resetdesignbinds').addEventListener('click', () => {
-      this._capturing = null;
-      this.onResetBinds?.(true);
-      this.showBinds();
-    });
-    // One capture listener for both lists. It sits on the window in the capture
-    // phase so it beats the game's own key handling: while a row is armed, the
-    // next key is a binding and nothing else — including the key that opens
-    // this panel, and including the designer's own keys.
+    for (const [id, design] of [['resetbinds', false], ['resetdesignbinds', true]]) {
+      document.getElementById(id).addEventListener('click', () => {
+        this._capturing = null;
+        this.onResetBinds?.(design);
+        this.showBinds();
+      });
+    }
+    // While a row is armed the next key is a binding and nothing else: capture
+    // phase on the window, ahead of the game's and the designer's own handlers.
     addEventListener('keydown', e => {
       const cap = this._capturing;
       if (!cap) return;
       e.preventDefault();
       e.stopPropagation();
       this._capturing = null;
-      if (e.code === 'Escape') { /* cancelled; Escape is the browser's */ }
+      if (e.code === 'Escape') { /* cancelled */ }
       else if ((e.code === 'Backspace' || e.code === 'Delete') && cap.replacing) {
         this.onUnbind?.(cap.action, cap.replacing, cap.design);
       } else {
@@ -69,8 +62,6 @@ export class Layout {
     addEventListener('resize', () => this.apply());
   }
 
-  /** One hold-or-toggle row per action that can be latched. Built here rather
-   *  than written into the page so adding an action is a one-line change. */
   _buildModeRows() {
     const wrap = document.getElementById('moderows');
     wrap.innerHTML = '';
@@ -99,8 +90,7 @@ export class Layout {
     this.modeButtons = [...wrap.querySelectorAll('.modes button')];
   }
 
-  /** The keyboard half of the panel: one row per action, one button per key
-   *  bound to it, and a `+` that adds another. */
+  /** One row per action: a button per bound key, and `+` to add another. */
   _buildKeyRows(hostId, list, design) {
     const wrap = document.getElementById(hostId);
     wrap.innerHTML = '';
@@ -126,7 +116,6 @@ export class Layout {
     this.showBinds();
   }
 
-  /** Paint every key row from whatever the input layer is actually using. */
   showBinds() {
     if (!this.keyRows) return;
     const cap = this._capturing;
@@ -173,7 +162,7 @@ export class Layout {
 
   _entry(name) {
     if (!this.data[name]) {
-      // seed from wherever the CSS grid currently puts it, so nothing jumps
+      // start from wherever the CSS puts it, so nothing jumps
       const el = this.buttons.find(b => b.dataset.btn === name);
       const r = el.getBoundingClientRect();
       this.data[name] = {
@@ -189,8 +178,7 @@ export class Layout {
     for (const el of this.buttons) {
       const d = this.data[el.dataset.btn];
       if (!d) { el.style.position = el.style.left = el.style.top = el.style.transform = ''; continue; }
-      // clamp back on-screen: a button dragged off a big screen must still be
-      // reachable on a small one
+      // clamped on-screen, so a layout from a big screen still fits a small one
       const x = clamp(d.x, 0.04, 0.96) * innerWidth;
       const y = clamp(d.y, 0.04, 0.96) * innerHeight;
       el.style.position = 'fixed';
@@ -234,7 +222,6 @@ export class Layout {
     el.addEventListener('pointercancel', end, true);
   }
 
-  /** Paint the mode rows from whatever the input layer currently thinks. */
   showModes() {
     for (const el of this.modeButtons) {
       const on = this.isToggle?.(el.dataset.action) ?? false;
@@ -245,7 +232,6 @@ export class Layout {
   select(name) {
     this.selected = name;
     document.body.classList.add('has-selection');
-    // the row for this button, if it is one of the two that can be toggled
     for (const row of document.querySelectorAll('.moderow')) {
       row.classList.toggle('active', row.dataset.action === name);
     }
@@ -255,7 +241,15 @@ export class Layout {
     this.slider.disabled = false;
     this.slider.value = Math.round(d.s * 100);
     this.sizeval.textContent = Math.round(d.s * 100) + '%';
-    this.onSelect?.(name);
+  }
+
+  _deselect() {
+    this.selected = null;
+    document.body.classList.remove('has-selection');
+    this.slider.disabled = true;
+    this.sizeval.textContent = '--';
+    for (const row of document.querySelectorAll('.moderow')) row.classList.remove('active');
+    for (const el of this.buttons) el.classList.remove('selected');
   }
 
   enter() {
@@ -265,12 +259,7 @@ export class Layout {
     this.showBinds();
     document.body.classList.add('editing');
     this.panel.classList.remove('hidden');
-    this.slider.disabled = true;
-    this.sizeval.textContent = '--';
-    this.selected = null;
-    document.body.classList.remove('has-selection');
-    for (const row of document.querySelectorAll('.moderow')) row.classList.remove('active');
-    for (const el of this.buttons) el.classList.remove('selected');
+    this._deselect();
   }
 
   exit() {
@@ -278,26 +267,21 @@ export class Layout {
     this._capturing = null;
     this._drag = null;
     document.body.classList.remove('editing');
-    document.body.classList.remove('has-selection');
     this.panel.classList.add('hidden');
-    for (const el of this.buttons) el.classList.remove('selected');
+    this._deselect();
     this._save();
   }
 
   reset() {
     this.data = {};
-    this.selected = null;
-    document.body.classList.remove('has-selection');
-    this.slider.disabled = true;
-    this.sizeval.textContent = '--';
-    for (const el of this.buttons) el.classList.remove('selected');
+    this._deselect();
     this.apply();
     this._save();
   }
 }
 
-/** `KeyW` and `ShiftLeft` are not what anyone calls those keys. */
-export function keyLabel(code) {
+/** `KeyW` -> `W`, `ShiftLeft` -> `Shift L`. */
+function keyLabel(code) {
   if (!code) return '—';
   let m;
   if ((m = /^Key([A-Z])$/.exec(code))) return m[1];

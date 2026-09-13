@@ -14,11 +14,10 @@ export class Effects {
     const tracerGeo = new THREE.BufferGeometry();
     tracerGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
     for (let i = 0; i < TRACERS; i++) {
-      const geo = tracerGeo.clone();
       const mat = new THREE.LineBasicMaterial({
         color: 0xffd08a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false
       });
-      const line = new THREE.Line(geo, mat);
+      const line = new THREE.Line(tracerGeo.clone(), mat);
       line.frustumCulled = false;
       line.visible = false;
       scene.add(line);
@@ -36,8 +35,7 @@ export class Effects {
       this.impacts.push({ mesh: m, life: 0 });
     }
 
-    // the world flash lights the level; the second one lives in the viewmodel
-    // scene, which is rendered separately and cannot see the first
+    // one flash lights the world; the viewmodel scene needs its own
     this.flash = new THREE.PointLight(0xffc070, 0, 12);
     this.flash.position.set(0.28, -0.22, -0.9);
     camera.add(this.flash);
@@ -59,28 +57,25 @@ export class Effects {
     slot.life = 0.09;
   }
 
-  impact(point, dir) {
+  _splash(x, y, z, color, opacity, scale, life) {
     const slot = this.impacts.find(t => t.life <= 0) || this.impacts[0];
-    slot.mesh.position.set(point.x - dir.x * 0.02, point.y - dir.y * 0.02, point.z - dir.z * 0.02);
-    slot.mesh.lookAt(this.camera.position);
-    slot.mesh.material.color.setHex(0xffe0b0);   // burst() borrows these slots
-    slot.mesh.material.opacity = 0.85;
-    slot.mesh.scale.setScalar(1);
-    slot.mesh.visible = true;
-    slot.life = 0.22;
-  }
-
-  /** A shot that had nowhere to go. Bigger and coloured, so "that surface is
-   *  too small" is something you see rather than something you infer. */
-  burst(point, color = 0xffffff) {
-    const slot = this.impacts.find(t => t.life <= 0) || this.impacts[0];
-    slot.mesh.position.set(point.x, point.y, point.z);
+    slot.mesh.position.set(x, y, z);
     slot.mesh.lookAt(this.camera.position);
     slot.mesh.material.color.setHex(color);
-    slot.mesh.material.opacity = 1;
-    slot.mesh.scale.setScalar(2.4);
+    slot.mesh.material.opacity = opacity;
+    slot.mesh.scale.setScalar(scale);
     slot.mesh.visible = true;
-    slot.life = 0.3;
+    slot.life = life;
+  }
+
+  impact(point, dir) {
+    this._splash(point.x - dir.x * 0.02, point.y - dir.y * 0.02, point.z - dir.z * 0.02,
+                 0xffe0b0, 0.85, 1, 0.22);
+  }
+
+  /** A portal shot with nowhere to go: bigger, and in the portal's colour. */
+  burst(point, color = 0xffffff) {
+    this._splash(point.x, point.y, point.z, color, 1, 2.4, 0.3);
   }
 
   muzzle(scale = 1) {
@@ -113,16 +108,14 @@ export class Effects {
   }
 }
 
-/** Chunky low-poly gun held in view; purely cosmetic.
- *  Added to a dedicated scene rather than to the camera: main.js renders that
- *  scene in a second pass with the depth buffer cleared, so the gun always draws
- *  on top and stays whole even with the muzzle buried in a wall. Its transform is
- *  camera-relative, which is exactly what a camera sitting at the origin gives. */
+/** The gun in view. It lives in its own scene, drawn after a depth clear, so it
+ *  stays whole when pressed into a wall; that scene's camera sits at the origin,
+ *  so its transform is camera-relative. */
 export class ViewModel {
   constructor(parent) {
     this.group = new THREE.Group();
     this.group.position.set(0.25, -0.2, -0.78);
-    this.group.scale.setScalar(0.96);   // 120% of the size it was
+    this.group.scale.setScalar(0.96);
     parent.add(this.group);
     this.kick = 0;
     this.reloadT = 0;
@@ -137,43 +130,32 @@ export class ViewModel {
       this.group.add(m);
       return m;
     };
-    this.body = mk(0.09, 0.11, 0.5, 0x2f3644, 0, 0, -0.1);
+    mk(0.09, 0.11, 0.5, 0x2f3644, 0, 0, -0.1);                 // body
     this.barrel = mk(0.05, 0.05, 0.42, 0x1d2230, 0, 0.02, -0.42);
-
-    // An empty parented to the barrel, sitting on its front face. Because it is
-    // a child it inherits every per-weapon scale and the whole sway/kick/ADS
-    // transform, so a tracer drawn from here leaves the actual muzzle rather
-    // than from a constant guessed near it.
+    // tracers leave from here; as a child it inherits every scale and sway
     this.muzzleTip = new THREE.Object3D();
-    this.muzzleTip.position.set(0, 0, -0.21);      // half the 0.42 barrel length
+    this.muzzleTip.position.set(0, 0, -0.21);      // half the barrel length
     this.barrel.add(this.muzzleTip);
     mk(0.07, 0.16, 0.09, 0x232936, 0, -0.12, 0.05);   // grip
     mk(0.07, 0.09, 0.2, 0x232936, 0, -0.03, 0.2);     // stock
-    // The coloured brick on top is two halves rather than one. On every other
-    // gun both halves are the same colour and it reads as the single block it
-    // has always been; on the portal gun the left half is the left trigger's
-    // colour and the right half the right one's, which is the only thing that
-    // tells the two guns apart in the hand.
+    // Two halves of one brick: one colour on normal guns, the portal pair on the
+    // portal gun, which is the only thing telling the two apart in the hand.
     this.accentL = mk(0.03, 0.03, 0.14, 0xd9743b, -0.015, 0.07, -0.12);
     this.accentR = mk(0.03, 0.03, 0.14, 0xd9743b, 0.015, 0.07, -0.12);
   }
 
-  /** Paint the two halves independently. Portal colours are handed in, because
-   *  they are agreed between peers and this file has no business knowing how. */
   setAccents(left, right) {
     this.accentL.material.color.setHex(left);
     this.accentR.material.color.setHex(right);
   }
 
   setWeapon(index) {
-    // one mesh set, reshaped per weapon — cheaper than three models
     const shapes = [
       { barrel: [0.05, 0.05, 0.42, -0.42], accent: 0xd9743b },
       { barrel: [0.08, 0.08, 0.36, -0.38], accent: 0xe0a33a },
       { barrel: [0.04, 0.04, 0.62, -0.52], accent: 0x3aa89c },
-      // the portal gun is the rifle, exactly: only the brick differs, and the
-      // game paints that from the player's own agreed pair
-      { barrel: [0.05, 0.05, 0.42, -0.42], accent: null }
+      { barrel: [0.05, 0.05, 0.42, -0.42], accent: null },     // portal gun: painted by the game
+      { barrel: [0.11, 0.11, 0.22, -0.36], accent: 0xffffff }  // White Out
     ];
     const s = shapes[index] || shapes[0];
     this.barrel.scale.set(s.barrel[0] / 0.05, s.barrel[1] / 0.05, s.barrel[2] / 0.42);
@@ -183,9 +165,7 @@ export class ViewModel {
 
   fire(scale = 1) { this.kick = Math.min(0.16, this.kick + 0.055 * scale); }
 
-  /** Muzzle position in camera space. The viewmodel scene's camera sits at the
-   *  origin looking down -Z, so a world position in that scene is already
-   *  relative to the player's eye. */
+  /** Muzzle position in camera space. */
   muzzleOffset(target) {
     this.group.updateMatrixWorld(true);
     return this.muzzleTip.getWorldPosition(target);
@@ -198,8 +178,7 @@ export class ViewModel {
     this.sway.x += (targetSwayX - this.sway.x) * Math.min(1, dt * 8);
     this.sway.y += (targetSwayY - this.sway.y) * Math.min(1, dt * 8);
 
-    // aiming holds the gun perfectly still: sway, bob and kick all fade out
-    const steady = 1 - adsT;
+    const steady = 1 - adsT;       // aiming holds the gun still
     this.group.position.set(
       0.25 + this.sway.x * steady,
       -0.2 + (player.bob * 0.6 + this.sway.y) * steady - this.kick * 0.12 * steady,

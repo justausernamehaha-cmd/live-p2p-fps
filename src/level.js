@@ -1,48 +1,33 @@
-import { clamp } from './util.js';
+import { clamp, hash } from './util.js';
 import { SHAPE_BOX, SHAPE_SLOPE } from './solid.js';
 
-// A level is data, not code: a room size plus a list of axis-aligned boxes. That
-// is the whole format, and it is all the designer ever produces. The built-in
-// arena in world.js stays hand-written; anything a player builds arrives here.
+// A designed level: a room size, a shell, and a list of boxes. The default arena
+// is hand-written in world.js; everything the designer makes lives here.
 
-// Ten colours, in the order the number row assigns them. `1` is the first and
-// `0` is the tenth — `0` is not a reset.
+// `1` on the number row is the first colour, `0` the tenth.
 export const COLORS = [
-  0xd9743b,  // 1  orange
-  0x3aa89c,  // 2  teal
-  0x616e8b,  // 3  slate
-  0x4c586f,  // 4  deep slate
-  0x76849f,  // 5  pale slate
-  0xc7443f,  // 6  red
-  0x5f9e4a,  // 7  green
-  0x3f6fbf,  // 8  blue
-  0xc9a227,  // 9  gold
-  0xe8ecf3   // 0  white
+  0xd9743b, 0x3aa89c, 0x616e8b, 0x4c586f, 0x76849f,
+  0xc7443f, 0x5f9e4a, 0x3f6fbf, 0xc9a227, 0xe8ecf3
 ];
 
 export const COLOR_NAMES = ['orange', 'teal', 'slate', 'deep slate', 'pale slate',
                             'red', 'green', 'blue', 'gold', 'white'];
 
-export const GRID = 0.5;      // the snap step, and the stair rise the player can walk up
-export const SHELL_T = 1;     // how thick the floor, walls and ceiling are
+export const GRID = 0.5;      // snap step
+const SHELL_T = 1;            // floor, wall and ceiling thickness
 
 export const MIN_W = 10, MAX_W = 240;
 export const MIN_H = 4, MAX_H = 60;
 export const MAX_BOXES = 800;
 
-const UNIT = 20;              // coordinates are stored in twentieths of a metre
-const ROT = 1000;             // rotations in milliradians: 0.06 degrees, plenty
+const UNIT = 20;              // coordinates stored in twentieths of a metre
+const ROT = 1000;             // rotations stored in milliradians
 const MAGIC = 'PA3';          // PA1 had no shape or rotation, PA2 no movement
 const OLD_MAGIC = ['PA1', 'PA2'];
 
-// A moving platform travels between where it was built and one other point, at
-// a constant speed, turning round at each end and going back. The spec gave no
-// timing, so there is one speed and it loops for ever.
-export const MOVE_SPEED = 3;      // m/s
-const MIN_MOVE = 0.25;     // shorter than this and it is not a journey
+export const MOVE_SPEED = 3;  // m/s, for every moving platform
+const MIN_MOVE = 0.25;
 
-// The six shell pieces, in the order they are stored. The floor's top face is
-// y = 0, so a player standing on it has the same feet height as in the arena.
 const SHELL_KINDS = ['floor', 'ceiling', 'wall -x', 'wall +x', 'wall -z', 'wall +z'];
 const SHELL_DEFAULT_C = [3, 3, 2, 2, 2, 2];
 
@@ -51,14 +36,14 @@ export class Level {
     this.w = clampDim(w, MIN_W, MAX_W);
     this.l = clampDim(l, MIN_W, MAX_W);
     this.h = clampDim(h, MIN_H, MAX_H);
-    this.boxes = [];                 // {id, x0,y0,z0, x1,y1,z1, c}
+    this.boxes = [];                 // {id, x0,y0,z0, x1,y1,z1, c, shape, rx,ry,rz, mv}
     this.shell = [];
-    this.fillets = [];               // derived from the shell, never stored
+    this.fillets = [];               // derived from the room size, never stored
     this._nextId = 1;
     this.buildShell(SHELL_DEFAULT_C.slice());
   }
 
-  /** (Re)make the six shell pieces for the current dimensions, keeping colours. */
+  /** The six shell pieces for the current size. The floor's top is y = 0. */
   buildShell(colors) {
     const c = colors || this.shell.map(b => b.c);
     const hw = this.w / 2, hl = this.l / 2, T = SHELL_T, h = this.h;
@@ -81,21 +66,9 @@ export class Level {
     this._buildFillets();
   }
 
-  /** A 45-degree wedge in each of the room's eight inside corners: four where
-   *  the walls meet the floor and four where they meet the ceiling.
-   *
-   *  Gravity follows a player through a portal, so somebody can end up standing
-   *  on a wall — and a right-angled corner is a dead end for them, with no
-   *  surface between the wall and the floor that either of them can walk on. The
-   *  fillet belongs to both, which is what lets it hand them back (see
-   *  Player._groundUp).
-   *
-   *  Derived, never encoded: they follow from the room's own size, so a seed
-   *  written before they existed still describes exactly this room, and one
-   *  written now still reads on a page that has not been updated. Like the shell
-   *  they are locked — a wedge you could delete would be a corner you could get
-   *  stuck in. Extents are stored in the wedge's own frame, which the turn about
-   *  Y then permutes into the world's. */
+  /** A locked 45-degree wedge in each of the eight inside corners, so somebody
+   *  standing on a wall has a walkable way between wall and floor. Extents are
+   *  in the wedge's own frame. */
   _buildFillets() {
     const hw = this.w / 2, hl = this.l / 2, h = this.h, P = Math.PI;
     const F = Math.min(1.6, h / 3, this.w / 4, this.l / 4);
@@ -122,25 +95,7 @@ export class Level {
     }
   }
 
-  resize(w, l, h) {
-    this.w = clampDim(w, MIN_W, MAX_W);
-    this.l = clampDim(l, MIN_W, MAX_W);
-    this.h = clampDim(h, MIN_H, MAX_H);
-    this.buildShell();
-    // anything now outside the room would be unreachable and un-deletable
-    this.boxes = this.boxes.filter(b => this.inside(b));
-  }
-
-  inside(b) {
-    const hw = this.w / 2, hl = this.l / 2;
-    return b.x1 > -hw - 0.01 && b.x0 < hw + 0.01 &&
-           b.z1 > -hl - 0.01 && b.z0 < hl + 0.01 &&
-           b.y1 > -SHELL_T - 0.01 && b.y0 < this.h + SHELL_T + 0.01;
-  }
-
-  /** Add a box from two opposite corners. Returns it, or null if degenerate.
-   *  `shape` picks a full box or a wedge; `rot` is the Euler triple it is turned
-   *  by about its own centre. */
+  /** Add a box between two corners. Null at the box limit. */
   add(a, b, colorIndex, shape = SHAPE_BOX, rot = null) {
     if (this.boxes.length >= MAX_BOXES) return null;
     const box = {
@@ -150,9 +105,9 @@ export class Level {
       c: clamp(colorIndex | 0, 0, 9),
       shape: shape === SHAPE_SLOPE ? SHAPE_SLOPE : SHAPE_BOX,
       rx: rot ? rot[0] : 0, ry: rot ? rot[1] : 0, rz: rot ? rot[2] : 0,
-      mv: null              // {x,y,z,sp}: where its centre travels to, and how fast
+      mv: null              // {x,y,z,sp}: where its centre travels, and how fast
     };
-    // a zero-thickness box is invisible and unselectable, so give it the grid
+    // never zero-thickness
     for (const [lo, hi] of [['x0', 'x1'], ['y0', 'y1'], ['z0', 'z1']]) {
       if (box[hi] - box[lo] < GRID * 0.5) box[hi] = box[lo] + GRID;
     }
@@ -161,9 +116,8 @@ export class Level {
     return box;
   }
 
-  /** Keep a box inside the shell, so nothing can be built where it cannot be
-   *  reached. A turned box is clamped by its centre instead: squeezing its
-   *  extents would change the shape rather than move it. */
+  /** Keep a box inside the shell. A turned box is moved by its centre instead of
+   *  squeezed, which would change its shape. */
   clampToRoom(box) {
     const hw = this.w / 2, hl = this.l / 2;
     if (box.rx || box.ry || box.rz) {
@@ -183,15 +137,8 @@ export class Level {
     return box;
   }
 
-  /** Make a box travel to `end` and back, or stop it travelling.
-   *
-   *  The box keeps the position it was built at — that is the start of the run,
-   *  and what the seed stores — and `mv` is the far end of it. What travels is
-   *  the box's own middle, so aiming at a point puts the *centre* there rather
-   *  than a corner, which is what a person pointing at a spot means.
-   *
-   *  Returns the box on success, or null when the two points are the same place
-   *  and there would be nothing to watch. */
+  /** Make a box's centre travel to `end` and back (null `end` stops it). The
+   *  built position is the start of the run. Null if the run is too short. */
   setMove(box, end, speed = MOVE_SPEED) {
     if (!box || box.locked) return null;
     if (!end) { box.mv = null; return box; }
@@ -214,14 +161,10 @@ export class Level {
     return true;
   }
 
-  all() { return [...this.shell, ...this.fillets, ...this.boxes]; }
-
-  /** What world.js consumes: the level's entries with a resolved colour. It
-   *  decides which are plain AABBs and which need the convex path. `src` links
-   *  anything rendered back to the level entry that produced it, which is how a
-   *  click in the designer turns into a selection. */
+  /** What world.js consumes. `src` links each piece back to its level entry. */
   worldBoxes() {
-    return this.all().map(b => ({ ...b, color: COLORS[b.c] ?? COLORS[0], src: b }));
+    return [...this.shell, ...this.fillets, ...this.boxes]
+      .map(b => ({ ...b, color: COLORS[b.c] ?? COLORS[0], src: b }));
   }
 
   /** Eight points on a ring, each dropped onto whatever is under it. */
@@ -236,12 +179,11 @@ export class Level {
   }
 
   // ------------------------------------------------------------- seed string
-  /** Everything needed to rebuild this level, as one paste-safe line. */
+  /** The whole level as one URL-safe line. */
   encode() {
     const dims = [this.w, this.l, this.h].map(v => enc(v * UNIT)).join(',');
     const shell = this.shell.map(b => b.c.toString(36)).join('');
-    // A speed of zero is what says "this one does not move" — the end point
-    // cannot, since the origin is a perfectly good place to travel to.
+    // a speed of zero means "does not move"
     const boxes = this.boxes.map(b =>
       [b.x0, b.y0, b.z0, b.x1, b.y1, b.z1].map(v => enc(v * UNIT)).join(',') +
       ',' + b.c.toString(36) + ',' + (b.shape || 0).toString(36) + ',' +
@@ -249,22 +191,19 @@ export class Level {
       [b.mv ? b.mv.x : 0, b.mv ? b.mv.y : 0, b.mv ? b.mv.z : 0, b.mv ? b.mv.sp : 0]
         .map(v => enc(v * UNIT)).join(',')).join(';');
     const body = `${dims}-${shell}-${boxes}`;
-    return `${MAGIC}-${body}-${fnv(body).toString(36)}`;
+    return `${MAGIC}-${body}-${hash(body).toString(36)}`;
   }
 
-  /** Parse a seed string. Throws an Error whose message is safe to show. */
+  /** Parse a seed. Throws an Error whose message is safe to show. */
   static decode(text) {
     const s = String(text || '').replace(/\s+/g, '').replace(/^["']|["']$/g, '');
     if (!s) throw new Error('empty seed');
     const parts = s.split('-');
-    // PA1 seeds had neither a shape nor a rotation, and PA2 had no movement.
-    // They still load: their boxes are upright, still boxes, and standing still,
-    // which is exactly what the missing fields would have said.
     if (parts.length !== 5 || (parts[0] !== MAGIC && !OLD_MAGIC.includes(parts[0]))) {
       throw new Error('that does not look like a level seed');
     }
     const [, dims, shellStr, boxStr, sum] = parts;
-    if (fnv(`${dims}-${shellStr}-${boxStr}`).toString(36) !== sum) {
+    if (hash(`${dims}-${shellStr}-${boxStr}`).toString(36) !== sum) {
       throw new Error('the seed is damaged — it looks like part of it was lost in the copy');
     }
     const d = dims.split(',').map(v => dec(v) / UNIT);
@@ -280,6 +219,7 @@ export class Level {
       if (entries.length > MAX_BOXES) throw new Error(`too many boxes (${entries.length})`);
       for (const e of entries) {
         const f = e.split(',');
+        // 7 fields = PA1, 11 = PA2, 15 = PA3
         if (f.length !== 7 && f.length !== 11 && f.length !== 15) {
           throw new Error('bad box in the seed');
         }
@@ -319,17 +259,8 @@ function dropOnto(x, z, boxes, roomH) {
   return { x, y: top + 0.05, z };
 }
 
-export { SHAPE_BOX, SHAPE_SLOPE };
-
-// Zig-zag so a negative coordinate still encodes as base 36 with no sign
-// character, which keeps the whole seed safe in a URL fragment.
+// zig-zag so negatives encode as base 36 with no sign character
 const enc = n => zig(Math.round(n)).toString(36);
 const dec = s => unzig(parseInt(s, 36));
 const zig = n => (n < 0 ? -n * 2 - 1 : n * 2);
 const unzig = z => (Number.isFinite(z) ? (z % 2 ? -(z + 1) / 2 : z / 2) : NaN);
-
-function fnv(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
