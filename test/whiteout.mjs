@@ -242,6 +242,40 @@ must(R.bounds.deaths === 1, 'the death was not counted: ' + R.bounds.deaths);
 must(R.bounds.stillDead, 'the player was teleported back rather than killed');
 must(/out of bounds/.test(R.bounds.feed), 'the killfeed does not say out of bounds');
 
+// ------------------------------------------- a body at 45 degrees falls in too
+// Gravity turned 45 degrees: the body leans, and the box around it is far wider
+// than it is. The hole is bored along the way this body falls, under its feet.
+await A.waitForFunction(() => window.game.player.alive, { timeout: 10000 });
+R.leaning = await A.evaluate(async () => {
+  const g = window.game, p = g.player, E = g.world.erase;
+  const sleep = ms => new Promise(f => setTimeout(f, ms));
+  const R2 = Math.SQRT1_2, up = { x: -R2, y: R2, z: 0 };
+  E.clear();
+  p.spawn({ x: 6, y: 0.5, z: -40 });
+  p.protectedUntil = 0;
+  p.up = up; p.upFrom = null; p.upBlend = 0;
+  p.pos = { x: 6, y: 0.3, z: -40 };
+  p.vel = { x: 0, y: 0, z: 0 };
+  await sleep(900);
+  const stood = { tilted: p.tilted, onGround: p.onGround, alive: p.alive, y: +p.pos.y.toFixed(2) };
+  const foot = { ...p.pos };
+  // from 8 m the hole is 0.4 m across at the feet: room for the body, not for its box
+  E.add({ x: foot.x + up.x * 8, y: foot.y + up.y * 8, z: foot.z }, { x: -up.x, y: -up.y, z: 0 },
+        performance.now() / 1000);
+  let lowest = foot.y, died = false;
+  const end = performance.now() + 3000;
+  while (performance.now() < end && !died) {
+    lowest = Math.min(lowest, p.pos.y);
+    if (!p.alive) died = true;
+    await sleep(4);
+  }
+  return { stood, lowest: +lowest.toFixed(2), died };
+});
+must(R.leaning.stood.tilted && R.leaning.stood.onGround && R.leaning.stood.alive && Math.abs(R.leaning.stood.y) < 0.1,
+     'the control is wrong: a leaning body did not stand on the floor first: ' + JSON.stringify(R.leaning.stood));
+must(R.leaning.lowest < -0.5 || R.leaning.died,
+     'a body at 45 degrees did not fall into the hole under it: ' + JSON.stringify(R.leaning));
+
 // --------------------------------------------------------------- the kill
 const B = await open('beta');
 await B.evaluate(() => document.getElementById('playbtn').click());

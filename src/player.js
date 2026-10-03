@@ -1079,7 +1079,21 @@ export class Player {
    *  bounding box, which errs toward solid near a hole. */
   _touches(a, b) {
     if (!aabbOverlap(a, b)) return false;
-    return !this.world.erasedOverlap(a, b);
+    if (!this.tilted) return !this.world.erasedOverlap(a, b);
+    // Tilted, the box around the capsule is far bigger than the body and no
+    // hole ever covered it: ask a radius-sized box at each stretch of the body.
+    const [ax, ay, az, bx, by, bz] = this._capsule();
+    const n = Math.ceil(Math.hypot(bx - ax, by - ay, bz - az) / RADIUS);
+    for (let i = 0; i <= n; i++) {
+      const f = i / n;
+      const x = ax + (bx - ax) * f, y = ay + (by - ay) * f, z = az + (bz - az) * f;
+      const part = {
+        min: { x: Math.max(x - RADIUS, a.min.x), y: Math.max(y - RADIUS, a.min.y), z: Math.max(z - RADIUS, a.min.z) },
+        max: { x: Math.min(x + RADIUS, a.max.x), y: Math.min(y + RADIUS, a.max.y), z: Math.min(z + RADIUS, a.max.z) }
+      };
+      if (aabbOverlap(part, b) && !this.world.erasedOverlap(part, b)) return true;
+    }
+    return false;
   }
 
   /** Has the patch of this face over the body's footprint been erased? */

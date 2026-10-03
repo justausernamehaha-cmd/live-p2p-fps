@@ -953,3 +953,12 @@ and a peer walking in front of a mouth.
   `holdtoggle.mjs` (the aim ease) were too short, and both wait for the event
   now. `slopes.mjs` needs five cores (`8-12`, 81 C); `settings.mjs` and
   `clipping.mjs` each failed once in three runs on three cores.
+
+## A leaning body falls into White Out too — 2026-10-03
+
+* `_touches` asked whether the hole covered the overlap of the wall with the
+  body's *box*. At 45 degrees that box is 1.6 m wide around a 0.34 m body, and no
+  hole ever covered it, so a leaning player stood on erased floor. Tilted, it now
+  asks a radius-sized box at each stretch of the capsule. The check in
+  `whiteout.mjs` bores the hole from 8 m (0.4 m across at the feet): from 30 m
+  the hole is wide enough to cover the box and the old code passed.
