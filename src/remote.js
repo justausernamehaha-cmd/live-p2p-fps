@@ -4,6 +4,7 @@ import { rayAABB } from './world.js';
 import { UP_Y, upFromIndex, basisFor } from './frame.js';
 import { mouthAround, portalMap } from './portal.js';
 import { WEAPONS } from './weapons.js';
+import { buildGun, paintGun } from './gunmodel.js';
 
 // The same reach player.js collision uses: what is drawn is what physics thinks.
 const GHOST_REACH = 0.2;      // RADIUS + 0.03
@@ -24,6 +25,7 @@ function ghostOf(links, pos, up, yaw, height) {
   const map = portalMap(link.from, link.to);
   const f = basisFor(up, yaw);
   return {
+    mouth: link.from,
     pos: map.point(pos),
     right: map.dir(f.r),
     up: map.dir(up),
@@ -58,35 +60,6 @@ function makeBody(colorHex) {
   return { group, mat, headMat, body, head, gun, shadow, weapon: -1 };
 }
 
-/** The held gun as a few boxes, rebuilt only when the weapon changes. */
-function buildGun(group, w) {
-  for (const c of group.children.slice()) {
-    group.remove(c);
-    c.geometry.dispose();
-    c.material.dispose();
-  }
-  const h = w.hold || { barrel: 0.42, bore: 0.05, body: 0.5, tint: 0x2f3644, accent: 0xd9743b };
-  const mk = (bw, bh, bd, color, x, y, z) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd),
-                             new THREE.MeshLambertMaterial({ color }));
-    m.position.set(x, y, z);
-    group.add(m);
-    return m;
-  };
-  mk(0.085, 0.1, h.body, h.tint, 0, 0, -h.body / 2);                      // receiver
-  mk(h.bore, h.bore, h.barrel, 0x1d2230, 0, 0.02, -h.body - h.barrel / 2 + 0.04);
-  mk(0.06, 0.14, 0.07, 0x232936, 0, -0.11, -h.body * 0.35);               // magazine
-  mk(0.06, 0.08, 0.16, 0x232936, 0, -0.02, 0.06);                         // stock
-  if (h.scope) mk(0.04, 0.05, 0.22, 0x11161f, 0, 0.08, -h.body * 0.55);
-  if (h.prongs) {                                                         // portal gun
-    mk(0.028, 0.028, 0.16, h.accent, -0.05, 0.03, -h.body - h.barrel + 0.1);
-    mk(0.028, 0.028, 0.16, h.accent, 0.05, 0.03, -h.body - h.barrel + 0.1);
-  } else {
-    mk(0.03, 0.03, 0.12, h.accent, 0, 0.065, -h.body * 0.5);              // rail block
-  }
-  group.userData.reach = h.body + h.barrel;
-}
-
 /** Crouch comes from height, and the weapon from what is in their hands. */
 function poseBody(b, height, pitch, weaponIndex) {
   const s = height / 1.8;
@@ -98,8 +71,14 @@ function poseBody(b, height, pitch, weaponIndex) {
     b.weapon = w.id;
     buildGun(b.gun, w);
   }
-  b.gun.position.set(0.22, 1.35 * s, -0.12);
+  b.gun.position.set(0.22, 1.35 * s, -0.25);    // stock at the shoulder, not through the body
   b.gun.rotation.x = -pitch;
+}
+
+/** Paint a portal gun's accent in its owner's pair (no-op for others). */
+function paintProngs(b, portals, owner) {
+  if (!portals || !portals.colorFor || owner == null) return;
+  paintGun(b.gun, portals.colorFor(owner, 'a'), portals.colorFor(owner, 'b'));
 }
 
 function makeLabel(text, color) {
@@ -181,14 +160,17 @@ class Avatar {
     const f = basisFor(up, yaw);
     this._orient(this.group, f.r, up, { x: -f.f.x, y: -f.f.y, z: -f.f.z });
     poseBody(this.parts, height, pitch, weapon);
+    paintProngs(this.parts, this.colorSource, this.owner);
     this.label.position.y = 2.25 * (height / 1.8) + 0.1;
 
     const g = links ? ghostOf(links, pos, up, yaw, height) : null;
+    this.mouth = g ? g.mouth : null;     // the mouth this body is standing in
     this.ghost.visible = !!g;
     if (!g) return;
     this.ghost.position.set(g.pos.x, g.pos.y, g.pos.z);
     this._orient(this.ghost, g.right, g.up, g.back);
     poseBody(this.gparts, height, pitch, weapon);
+    paintProngs(this.gparts, this.colorSource, this.owner);
   }
 
   _orient(obj, right, up, back) {
@@ -225,6 +207,7 @@ export class RemotePlayer extends Avatar {
     this.up = UP_Y;
     this.weapon = 0;
     this.portals = null;    // set by the game
+    this.owner = id;        // whose portal colours the portal gun wears
 
     this.group.visible = false;
     scene.add(this.group);
@@ -256,6 +239,8 @@ export class RemotePlayer extends Avatar {
     this.kills = num(s.k, this.kills);
     this.deaths = num(s.d, this.deaths);
   }
+
+  get colorSource() { return this.portals; }
 
   hit() { this.flash = 0.12; }
 
@@ -362,6 +347,8 @@ export class SelfAvatar extends Avatar {
   }
 
   update(player, weaponIndex = 0) {
+    this.colorSource = player.portals;
+    this.owner = player.portals ? player.portals.selfId : null;
     this._pose(player.pos, player.up, player.yaw, player.pitch, player.height, weaponIndex,
                player.portals ? player.portals.links() : null);
   }

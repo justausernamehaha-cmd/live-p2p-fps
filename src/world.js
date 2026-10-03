@@ -30,7 +30,9 @@ export class World {
     this.movers = [];      // the subset of both that travels
     this.spawns = [];
     this.level = null;
-    this.erase = new Erasures();   // White Out holes, subtracted everywhere
+    // White Out, subtracted everywhere. This one is the level's; every platform
+    // carries its own in its own frame (movers[i].erase), so a mark rides with it.
+    this.erase = new Erasures();
     this.group = new THREE.Group();
     scene.add(this.group);
     this.setLevel(level);
@@ -38,7 +40,7 @@ export class World {
 
   /** A Level, or null for the default arena. */
   setLevel(level) {
-    this.erase.clear();
+    this.eraseClear();
     this.level = level || null;
     this._load();
   }
@@ -118,8 +120,10 @@ export class World {
             sp: mv.sp, dist, at: 0, dir: 1,
             delta: { x: 0, y: 0, z: 0 },     // moved this frame
             vel: { x: 0, y: 0, z: 0 },
-            mesh: null
+            mesh: null,
+            erase: new Erasures()            // White Out on it, measured from its centre
           });
+          Object.assign(this.movers[shape.mover].erase.shift, p0);
         }
       }
     }
@@ -153,7 +157,109 @@ export class World {
       if (m.mesh) {
         m.mesh.position.set(want.x - m.bake.x, want.y - m.bake.y, want.z - m.bake.z);
       }
+      Object.assign(m.erase.shift, want);
     }
+  }
+
+  // ---------------------------------------------------------------- White Out
+  // A stamp goes into the level's Erasures as it is, and into every platform's
+  // measured from where that platform is at that moment. The level answers only
+  // to its own and a platform only to its own, so a mark on a platform travels
+  // with it instead of staying behind in the air.
+
+  /** One stamp of paint. `centres` are the platform centres the shooter saw (a
+   *  peer's platforms are not where ours are), so the mark lands on the same part
+   *  of the platform on every screen. */
+  erasePaint(o, d, owner, stroke, centres = null) {
+    const stamp = this.erase.paint(o, d, owner, stroke);
+    if (!stamp) return null;
+    for (const m of this.movers) {
+      const at = (centres && centres[m.index]) || m.erase.shift;
+      m.erase.paint({ x: o.x - at.x, y: o.y - at.y, z: o.z - at.z }, d, owner, stroke);
+    }
+    return stamp;
+  }
+
+  /** Let a stroke go everywhere; returns the level's holes (who dies is judged
+   *  against those). */
+  eraseOpen(owner, stroke, t) {
+    for (const m of this.movers) m.erase.open(owner, stroke, t);
+    return this.erase.open(owner, stroke, t);
+  }
+
+  eraseForget(owner) {
+    this.erase.forget(owner);
+    for (const m of this.movers) m.erase.forget(owner);
+  }
+
+  eraseUpdate(t) {
+    this.erase.update(t);
+    for (const m of this.movers) m.erase.update(t);
+  }
+
+  eraseClear() {
+    this.erase.clear();
+    for (const m of this.movers) m.erase.clear();
+  }
+
+  /** The Erasures a shape answers to (`rides`: a piece of a pierced platform). */
+  eraseOf(shape) {
+    const i = shape.mover ?? shape.rides;
+    return i === undefined || i < 0 || !this.movers[i] ? this.erase : this.movers[i].erase;
+  }
+
+  /** Is the overlap of a body's box and a shape erased? */
+  erasedOverlap(a, shape) {
+    const er = this.eraseOf(shape);
+    if (!er.active) return false;
+    const at = er.shift;
+    return er.clearsBox(
+      { x: Math.max(a.min.x, shape.min.x) - at.x, y: Math.max(a.min.y, shape.min.y) - at.y, z: Math.max(a.min.z, shape.min.z) - at.z },
+      { x: Math.min(a.max.x, shape.max.x) - at.x, y: Math.min(a.max.y, shape.max.y) - at.y, z: Math.min(a.max.z, shape.max.z) - at.z });
+  }
+
+  /** Is this box, which is part of `shape`, erased? */
+  erasedBox(min, max, shape) {
+    const er = this.eraseOf(shape);
+    if (!er.active) return false;
+    const at = er.shift;
+    return er.clearsBox({ x: min.x - at.x, y: min.y - at.y, z: min.z - at.z },
+                        { x: max.x - at.x, y: max.y - at.y, z: max.z - at.z });
+  }
+
+  /** A portal as the Erasures it lies on sees it: [erasures, centre in its frame]. */
+  _eraseAt(portal) {
+    const er = this.eraseOf(portal);
+    const at = er.shift;
+    return [er, { x: portal.c.x - at.x, y: portal.c.y - at.y, z: portal.c.z - at.z }];
+  }
+
+  /** May a portal go here? Not on White Out, paint or hole. */
+  eraseCoversOval(portal, halfW, halfH) {
+    const [er, c] = this._eraseAt(portal);
+    return er.coversOval(c, portal.u, portal.v, halfW, halfH);
+  }
+
+  /** Did this stroke's holes take any of this portal? */
+  eraseHolesOval(owner, stroke, portal, halfW, halfH) {
+    const [er, c] = this._eraseAt(portal);
+    return er.holesOval(owner, stroke, c, portal.u, portal.v, halfW, halfH);
+  }
+
+  /** shape -> the merged stretches of this ray that are inside holes, as that
+   *  shape sees them (null when it has none). */
+  _rayMasks(origin, dir, maxDist) {
+    const level = this.erase.active ? this.erase.rayMask(origin, dir, maxDist) : null;
+    const mine = new Map();
+    return shape => {
+      if (shape.mover === undefined) return level;
+      if (!mine.has(shape.mover)) {
+        const er = this.movers[shape.mover].erase, at = er.shift;
+        mine.set(shape.mover, er.active
+          ? er.rayMask({ x: origin.x - at.x, y: origin.y - at.y, z: origin.z - at.z }, dir, maxDist) : null);
+      }
+      return mine.get(shape.mover);
+    };
   }
 
   /** Re-derive the meshes. Cheap enough to call on every edit. */
@@ -338,7 +444,7 @@ export class World {
     this.group.add(grid);
   }
 
-  _solidMesh(boxes, solids, color) {
+  _solidMesh(boxes, solids, color, erase = this.erase) {
     const positions = [], normals = [], uvs = [];
     for (const b of boxes) {
       const sx = b.max.x - b.min.x, sy = b.max.y - b.min.y, sz = b.max.z - b.min.z;
@@ -350,13 +456,13 @@ export class World {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    return new THREE.Mesh(geo, eraseMaterial(new THREE.MeshLambertMaterial({ color }), this.erase));
+    return new THREE.Mesh(geo, eraseMaterial(new THREE.MeshLambertMaterial({ color }), erase));
   }
 
   /** A platform's mesh, baked where the shape is now and moved by its position. */
   _moverMesh(m) {
     const s = m.shape;
-    const mesh = s.planes ? this._solidMesh([], [s], s.color) : this._solidMesh([s], [], s.color);
+    const mesh = s.planes ? this._solidMesh([], [s], s.color, m.erase) : this._solidMesh([s], [], s.color, m.erase);
     m.bake = centreOf(s);
     this.group.add(mesh);
     return mesh;
@@ -385,10 +491,11 @@ export class World {
   /** Distance along `dir` to the nearest solid surface, or maxDist. Through a
    *  White Out hole a shape is only met where the hole ends. */
   raycast(origin, dir, maxDist = 200) {
-    const mask = this.erase.active ? this.erase.rayMask(origin, dir, maxDist) : null;
+    const masks = this._rayMasks(origin, dir, maxDist);
     let best = maxDist;
     for (const b of this.boxes) {
       let t;
+      const mask = masks(b);
       if (mask) {
         const sp = aabbSpan(origin, dir, b.min, b.max);
         t = sp ? mask.first(sp[0], sp[1]) : Infinity;
@@ -398,6 +505,7 @@ export class World {
       if (t < best) best = t;
     }
     for (const s of this.solids) {
+      const mask = masks(s);
       if (mask) {
         const sp = convexSpan(origin, dir, s);
         const t = sp ? mask.first(sp[0], sp[1]) : Infinity;
@@ -414,13 +522,14 @@ export class World {
    *  `through` passes White Out holes (portal balls); a ray meeting a shape
    *  inside a hole comes back `erased`, with no face to put a portal on. */
   pick(origin, dir, maxDist = 400, through = false) {
-    const mask = through && this.erase.active ? this.erase.rayMask(origin, dir, maxDist) : null;
+    const masks = through ? this._rayMasks(origin, dir, maxDist) : () => null;
     let best = null;
     const inside = (shape, t) => {
       if (t > maxDist || (best && best.t <= t)) return;
       best = { box: shape, solid: shape.planes ? shape : undefined, t, axis: -1, sign: 1, erased: true };
     };
     for (const b of this.boxes) {
+      const mask = masks(b);
       if (mask) {
         const sp = aabbSpan(origin, dir, b.min, b.max);
         if (!sp) continue;
@@ -433,6 +542,7 @@ export class World {
       if (!best || h.t < best.t) best = { box: b, t: h.t, axis: h.axis, sign: h.sign };
     }
     for (const s of this.solids) {
+      const mask = masks(s);
       if (mask) {
         const sp = convexSpan(origin, dir, s);
         if (!sp) continue;

@@ -11,7 +11,7 @@ import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
 import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
-import { portalMap } from './portal.js';
+import { portalMap, HALF_W, HALF_H } from './portal.js';
 import { lookFrom, anglesIn, basisFor, upFromIndex, UPS } from './frame.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { ERASE_ANGLE, HOLE_TIME, STAMP_STEP } from './erase.js';
@@ -118,7 +118,7 @@ class Game {
     this.loadout = new Loadout();
     this.effects = new Effects(this.scene, this.camera, this.vmScene);
     this.viewmodel = new ViewModel(this.vmScene);
-    this.portals = new PortalField(this.scene, this.effects);
+    this.portals = new PortalField(this.scene, this.effects, this.world);
     this.portals.onPlaced = (side, p) => this.net?.portal(side, p);
     this.player.portals = this.portals;
     // your own body, seen only through portals
@@ -454,7 +454,7 @@ class Game {
     this._dropNet();
     this._stroke = null;
     this.portals.clear();
-    this.world.erase.clear();
+    this.world.eraseClear();
     this.running = false;
     this.menuOpen = false;
     this.joinedExisting = false;
@@ -550,7 +550,7 @@ class Game {
     if (r) { this.hud.feed(`<b>${escapeHtml(r.name)}</b> left`, 'chat'); r.dispose(); }
     this.remotes.delete(id);
     this.portals.forget(id);          // nobody could ever replace their portals
-    this.world.erase.forget(id);      // ...or finish their White Out stroke
+    this.world.eraseForget(id);       // ...or finish their White Out stroke
     this._recolour();
   }
 
@@ -915,8 +915,10 @@ class Game {
     }
 
     this._stroke = null;
-    const opened = this.world.erase.open(s.owner, s.id, now() / 1000);
-    this.net?.eraseOpen(s.id);
+    const opened = this.world.eraseOpen(s.owner, s.id, now() / 1000);
+    // any mouth the stroke took any of is gone for good; decided here, like kills
+    const gone = this.portals.erase(q => this.world.eraseHolesOval(s.owner, s.id, q, HALF_W, HALF_H));
+    this.net?.eraseOpen(s.id, gone);
     ws.readyAt = t + HOLE_TIME;
     let killed = 0;
     for (const r of this.remotes.values()) {
@@ -934,17 +936,25 @@ class Game {
   }
 
   _stamp(s, d) {
-    if (this.world.erase.paint(s.o, d, s.owner, s.id)) this.net?.erasePaint(s.id, s.o, d);
+    if (!this.world.erasePaint(s.o, d, s.owner, s.id)) return;
+    this.net?.erasePaint(s.id, s.o, d, this.world.movers.map(m => m.erase.shift));
   }
 
   _remotePaint(id, m) {
     const d = { x: num(m.dx), y: num(m.dy), z: num(m.dz) };
     if (!Math.hypot(d.x, d.y, d.z)) return;
-    this.world.erase.paint({ x: num(m.x), y: num(m.y), z: num(m.z) }, d, id, num(m.sid));
+    // mv: where the shooter's platforms were, three numbers each
+    const mv = Array.isArray(m.mv) ? m.mv : [];
+    const centres = this.world.movers.map((_, i) => i * 3 + 2 < mv.length
+      ? { x: num(mv[i * 3]), y: num(mv[i * 3 + 1]), z: num(mv[i * 3 + 2]) } : null);
+    this.world.erasePaint({ x: num(m.x), y: num(m.y), z: num(m.z) }, d, id, num(m.sid), centres);
   }
 
   _remoteOpen(id, m) {
-    const opened = this.world.erase.open(id, num(m.sid), now() / 1000);
+    const opened = this.world.eraseOpen(id, num(m.sid), now() / 1000);
+    for (const kp of Array.isArray(m.kp) ? m.kp : []) {
+      if (Array.isArray(kp)) this.portals.remove(String(kp[0]), kp[1] === 'b' ? 'b' : 'a');
+    }
     if (!opened.length) return;
     const o = opened[0].o;
     this.audio.shot(WHITE_OUT_ID,
@@ -1016,7 +1026,7 @@ class Game {
     const dt = Math.min(0.05, this._last ? t - this._last : 0.016);
     this._last = t;
 
-    this.world.erase.update(now() / 1000);
+    this.world.eraseUpdate(now() / 1000);
 
     // Platforms move first, and portals ride them in the same breath: a frame of
     // lag sweeps a mouth's plane across whoever is near it. Parked while building.
@@ -1032,6 +1042,7 @@ class Game {
     this.hud.update(dt);
 
     const r = this.renderer;
+    this.portals.selfMouth = this.selfAvatar.mouth;
     this.portals.renderViews(r, this.scene, this.camera);
     r.autoClear = false;
     r.clear();
@@ -1087,6 +1098,7 @@ class Game {
     }
     if (p.outOfBounds) {                 // instantly, shield or not
       p.outOfBounds = false;
+      console.warn('out of bounds:', JSON.stringify(p.oobWhy));
       if (p.alive && p.damage(1000)) this._selfDeath(OUT_OF_BOUNDS, 'out of bounds');
     }
     if (this.loadout.update(t)) this.audio.reload();
@@ -1186,6 +1198,7 @@ class Game {
           `locks     ${i.lockChanges} changes, dropped ${i.dropped} spikes`,
           `keyboard  fullscreen=${!!document.fullscreenElement} locked=${i.keyboardLocked} ` +
             `blocked=${i.shortcutsBlocked}  <- false here means Ctrl+W still closes the tab`,
+          `alt       held=${!!i._altFreed} let go of the lock ${i.altReleases}x  <- counts up on every Alt press`,
           `clamped   ${i.clamped} events, last ${i.lastClamp[0]},${i.lastClamp[1]} -> capped at 80px`,
           `look      dx=${i.lookDX.toFixed(3)} dy=${i.lookDY.toFixed(3)}`,
           `lastMove  ${i.lastMovement[0]}, ${i.lastMovement[1]}  (spikes are dropped)`,

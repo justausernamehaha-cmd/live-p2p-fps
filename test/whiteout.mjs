@@ -154,13 +154,16 @@ R.paint = await A.evaluate(async () => {
        `the paint is not white on screen (${q.pixelBefore} -> ${q.held.pixel})`);
   must(!q.portalOnPaint, 'a portal landed on White Out paint');
   must(q.portalBesidePaint, 'the control portal beside the paint did not land, so the refusal proves nothing');
-  must(q.released.holes === q.held.stamps && q.released.paint === 0,
-       `letting go did not turn every stamp into a hole (${JSON.stringify(q.released)})`);
+  // released, a stroke is simplified: its stamps merge into fewer holes
+  must(q.released.holes >= 1 && q.released.paint === 0,
+       `letting go did not turn the stroke into holes (${JSON.stringify(q.released)})`);
+  must(q.released.holes < q.held.stamps,
+       `the straight stroke was not simplified (${q.held.stamps} stamps -> ${q.released.holes} holes)`);
   must(q.released.ray > 20, 'a bullet did not go through the hole: ' + q.released.ray);
   must(Math.abs(q.released.pixel - q.held.pixel) > 60, 'the hole looks the same as the paint');
   must(/^\d+(\.\d)?s$/.test(q.released.hud), 'the HUD did not count the recharge down: ' + q.released.hud);
   must(q.movedAfter > 1, 'the shooter still cannot move after letting go: ' + q.movedAfter);
-  must(q.at47 === q.held.stamps, 'the hole shrank or closed before five seconds: ' + q.at47);
+  must(q.at47 === q.released.holes, 'the hole shrank or closed before five seconds: ' + q.at47);
   must(q.poppedAfter >= 4.9 && q.poppedAfter <= 5.4, `the hole popped after ${q.poppedAfter}s, not five`);
   must(Math.abs(q.rayAfterPop - 5.5) < 0.05, 'the wall did not come back: ' + q.rayAfterPop);
 }
@@ -206,7 +209,7 @@ R.slot = await A.evaluate(async () => {
   return out;
 });
 must(R.slot.blocked > -43.4, 'the negative control is wrong: the wall did not stop the walk (' + R.slot.blocked + ')');
-must(R.slot.slotHoles >= 5, 'no slot was painted: ' + R.slot.slotHoles);
+must(R.slot.slotHoles >= 1, 'no slot was painted: ' + R.slot.slotHoles);
 must(R.slot.through < -44.6, `the player could not walk through the painted slot (got to z=${R.slot.through})`);
 
 // ------------------------------------------------------------ out of bounds

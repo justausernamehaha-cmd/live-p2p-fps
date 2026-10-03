@@ -48,7 +48,7 @@ same one. All three are public infrastructure that only carries the handshake.
 | Left / right portal | left / right click | `LEFT PORTAL` / `RIGHT PORTAL` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
-| Sprint | `Shift` | `SPRINT` |
+| Sprint | no key (bind one in settings) | `SPRINT` |
 | Reload | `R` | `RELOAD` |
 | Weapons | `1` `2` `3` `4` `5`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
@@ -197,10 +197,16 @@ any surface
 with room for the whole of it — walls, floors, ceilings, ramps, the side of a
 moving platform. **No part of one ever hangs off its surface**: shot too near an
 edge it slides inward until the whole oval is on the wall, and no further than it
-had to. It does not turn once it is placed. Shot at something too small to hold a
-portal at all it **explodes and is gone**: the end of a cover wall is one metre
-thick and a portal is 1.36 wide, so that wall takes one on its face and never on
-its edge.
+had to. **If it will not fit upright but will on its side, it turns a quarter
+and lies down** — a strip too short for a doorway still takes a portal — **and
+if it fits neither way it turns to whatever angle the surface does take**, the
+least turn from upright first: a square too small both ways holds one on its
+diagonal, a strip lying at an angle to the grid holds one along itself, a
+triangle holds one along its long edge. A turned mouth turns you with it, the
+way a lying one always has. It does not turn once it is placed. Shot at
+something too small to hold a portal at any angle it **explodes and is gone**:
+the end of a cover wall is one metre thick and a portal is 1.36 wide, so that
+wall takes one on its face and never on its edge.
 
 **Bullets go through them too**, up to two mouths deep, and the tracer bends with
 the shot rather than passing through the wall.
@@ -295,8 +301,19 @@ circle**. Correction fluid for the level:
   white** — still a wall, still stops bullets — as one smooth line rather than a
   row of dots. While you hold you are **stuck where you stand**; you can only aim.
   The HUD says `PAINTING`.
+* **The line is simplified when you let go.** Stamps lying along nearly the same
+  curve merge into one (the shape moves by at most ~0.6°), because every stamp
+  costs every pixel on screen: a straight drag of 40 stamps becomes two or three.
 * **No portal goes on White Out.** A portal ball that would put any part of its
   mouth on white paint or over a hole explodes instead.
+* **White Out erases portals.** Paint over a mouth and it goes white with the
+  wall; let go and any mouth the stroke took any part of is **gone for good** —
+  it does not come back when the hole pops. Its partner stays, with nothing to
+  lead to. Decided on the shooter's screen, like the kills.
+* **A mark on a moving platform moves with it.** Paint or a hole on a platform
+  belongs to that spot of the platform and rides along, instead of hanging in the
+  air where it was painted while the platform slides out from under it. A
+  platform passing through somebody's hole in the level is not cut by it.
 * **Let go** and the whole white stroke becomes a **hole**, all at once. Anybody
   the stroke covered, even an elbow, dies — decided on the shooter's screen, and
   the killfeed says *erased*. Nobody dies while it is still paint.
@@ -496,7 +513,7 @@ npm install && npx playwright install chromium
 for t in test/*.mjs; do node "$t" || echo "FAILED: $t"; done
 ```
 
-There are 23 suites; the table in `claude.md` says what each one covers.
+There are 28 suites; the table in `claude.md` says what each one covers.
 `frame`, `solid`, `portal` and `erase` need no browser and no server, so they run
 in about a second each. `rooms` and `whiteout` drive two pages over the real
 public relays.
@@ -568,6 +585,7 @@ src/portalgun.js the portal gun, the ball, and seeing through a mouth
 src/remote.js   remote player rendering, interpolation, hitboxes
 src/net.js      Trystero room and the message actions
 src/effects.js  tracers, impacts, muzzle flash, viewmodel
+src/gunmodel.js the one gun model: the one in your hands, also what others see you hold
 src/audio.js    synthesised gunfire, no audio files
 src/hud.js      DOM HUD
 ```

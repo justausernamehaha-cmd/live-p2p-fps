@@ -8,7 +8,7 @@ import { clamp, now } from './util.js';
 // Defaults only; the settings panel saves a copy that `binds` is read from.
 export const DEFAULT_BINDS = {
   KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
-  Space: 'jump', ShiftLeft: 'sprint', ShiftRight: 'sprint',
+  Space: 'jump',                      // Shift does nothing: sprint has no key by default
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
   KeyF: 'fire',                       // for keyboards with no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
@@ -55,7 +55,23 @@ export const DESIGN_BINDABLE = [
   ['snap', 'Grid snap'], ['keylist', 'Hide the key list'], ['playtest', 'Playtest']
 ];
 
+// What keyboard.lock() takes: everything the browser could otherwise act on
+// (Ctrl+W, Ctrl+T, Ctrl+N, F5...) EXCEPT Tab, Alt and the OS key, so Alt+Tab and
+// the Windows/Super key still reach the desktop. Locking nothing in particular
+// locks every key, Alt+Tab included. The cost: Ctrl+Tab is the browser's again.
+const LOCK_CODES = [
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'Key' + c),
+  ...'0123456789'.split('').map(c => 'Digit' + c),
+  ...Array.from({ length: 12 }, (_, i) => 'F' + (i + 1)),
+  'Escape', 'Space', 'Enter', 'Backspace', 'Backquote', 'Minus', 'Equal',
+  'BracketLeft', 'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Comma',
+  'Period', 'Slash', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete',
+  'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight'
+];
+
 const BIND_KEY = 'pa.binds';
+const SHIFT_GONE_KEY = 'pa.binds.noshift';
 const DESIGN_BIND_KEY = 'pa.designbinds';
 
 const LOOK_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -133,6 +149,8 @@ export class Input {
     // Going fullscreen is what lets keyboard.lock() swallow Ctrl+W and friends.
     this.wantFullscreenLock = localStorage.getItem('pa.kblock') !== '0';
     this.keyboardLocked = false;
+    this.altReleases = 0;      // F3: times Alt let go of the keyboard lock
+    this._altFreed = false;
     document.addEventListener('fullscreenchange', () => {
       if (document.fullscreenElement) {
         if (this.wantFullscreenLock && this.pointerLocked) this._grabKeyboard();
@@ -172,6 +190,12 @@ export class Input {
   // ---------------------------------------------------------------- keyboard
   _bindKeyboard() {
     addEventListener('keydown', e => {
+      // Alt+Tab is the desktop's. On Linux/Wayland Chrome's keyboard lock takes
+      // every desktop shortcut whatever keys it was given, so Alt lets go of the
+      // lock outright (keyup takes it back), and Tab with Alt held is never the
+      // scoreboard.
+      if (e.code === 'AltLeft' || e.code === 'AltRight') this._releaseForAlt();
+      if (e.altKey && e.code === 'Tab') return;
       if (this.textMode || isTyping(e)) return;
 
       // Suppress before the early returns, auto-repeat included: with the mouse
@@ -197,6 +221,7 @@ export class Input {
 
     // NEVER filter keyup: a discarded release leaves a key held for ever.
     addEventListener('keyup', e => {
+      if (e.code === 'AltLeft' || e.code === 'AltRight') this._regrabAfterAlt();
       const a = this.binds[e.code];
       if (a && !UI_ACTIONS.has(a)) this.release(a);
       if (e.code in LOOK_KEYS) this.held.delete('look' + e.code);
@@ -209,6 +234,7 @@ export class Input {
       this._mouseHeld.clear();
       this.dropTouches();
       for (const a of this.toggled) this.held.add(a);   // a toggle is a state, not a key
+      this._altFreed = false;       // Alt+Tab away: its keyup never arrives here
       this._recalcKeys();
     };
     addEventListener('blur', release);
@@ -240,7 +266,8 @@ export class Input {
       if (reallyLocked !== this.pointerLocked) this.pointerLocked = reallyLocked;
 
       // Every click, since fullscreen and keyboard.lock() need a live gesture.
-      if (!this.suspendLock && !this.shortcutsBlocked) this._grabKeyboard();
+      // Not with Alt held: that would take Alt+Tab straight back.
+      if (!this.suspendLock && !this.shortcutsBlocked && !this._altFreed) this._grabKeyboard();
 
       if (!reallyLocked && !this.lockRefused && !this.suspendLock) {
         if (this.canvas.requestPointerLock) {
@@ -336,17 +363,25 @@ export class Input {
   }
 
   /** Take Ctrl+W and friends from the browser: keyboard.lock() only works in
-   *  element fullscreen (F11 is not that), so go fullscreen first. Best effort. */
+   *  element fullscreen (F11 is not that), so go fullscreen first. Best effort.
+   *  Alt+Tab is left to the desktop (LOCK_CODES). */
   _grabKeyboard() {
     if (!this.wantFullscreenLock) return;
     const lock = () => {
       const k = navigator.keyboard;
       if (!k || !k.lock) { this.keyboardLocked = false; return; }
+      if (this._altFreed) return;        // Alt came down while we were getting here
       try {
-        const p = k.lock();
-        if (p && p.then) p.then(() => { this.keyboardLocked = true; })
-                          .catch(() => { this.keyboardLocked = false; });
-        else this.keyboardLocked = true;
+        const p = k.lock(LOCK_CODES);
+        // a lock that lands after Alt went down is given straight back
+        const landed = () => {
+          if (this._altFreed) { try { k.unlock(); } catch { /* unsupported */ } return; }
+          this.keyboardLocked = true;
+        };
+        // a rejection is usually this request being replaced by a newer one, which
+        // says nothing about whether the keyboard is locked: leave the flag alone
+        if (p && p.then) p.then(landed).catch(() => {});
+        else landed();
       } catch { this.keyboardLocked = false; }
     };
     if (document.fullscreenElement) { lock(); return; }
@@ -355,6 +390,25 @@ export class Input {
       if (p && p.then) p.then(lock).catch(() => { this.keyboardLocked = false; });
       else lock();
     } catch { this.keyboardLocked = false; }
+  }
+
+  /** Alt is down: give every shortcut back so Alt+Tab reaches the desktop.
+   *  Unlocked whatever `keyboardLocked` says: that flag is set by promises that
+   *  can settle out of order (two lock requests from one click), and believing
+   *  a stale `false` here left the lock on with Alt held. */
+  _releaseForAlt() {
+    this._altFreed = true;
+    this.keyboardLocked = false;
+    this.altReleases++;
+    try { navigator.keyboard?.unlock?.(); } catch { /* unsupported */ }
+  }
+
+  /** Alt is up again, still in the game: take the shortcuts back. keyboard.lock()
+   *  needs no gesture once the page is fullscreen. */
+  _regrabAfterAlt() {
+    if (!this._altFreed) return;
+    this._altFreed = false;
+    if (this.pointerLocked && document.fullscreenElement && document.hasFocus()) this._grabKeyboard();
   }
 
   /** Are the reserved combinations really ours right now? */
@@ -565,7 +619,16 @@ export class Input {
     try {
       const saved = JSON.parse(localStorage.getItem(key));
       if (saved && typeof saved === 'object') {
-        const actions = new Set(Object.values(defaults));
+        // every bindable action, not just the defaulted ones: sprint has no key
+        // by default and a key the player gave it must survive a reload
+        const rows = key === BIND_KEY ? BINDABLE : DESIGN_BINDABLE;
+        const actions = new Set([...Object.values(defaults), ...rows.map(r => r[0])]);
+        // Shift used to be sprint; a copy saved before that went must not bring it back
+        if (key === BIND_KEY && localStorage.getItem(SHIFT_GONE_KEY) !== '1') {
+          for (const c of ['ShiftLeft', 'ShiftRight']) if (saved[c] === 'sprint') delete saved[c];
+          localStorage.setItem(key, JSON.stringify(saved));
+          localStorage.setItem(SHIFT_GONE_KEY, '1');
+        }
         const out = {};
         for (const [code, action] of Object.entries(saved)) {
           if (typeof code === 'string' && actions.has(action)) out[code] = action;

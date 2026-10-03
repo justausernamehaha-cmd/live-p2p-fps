@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { buildGun, paintGun } from './gunmodel.js';
+import { WEAPONS } from './weapons.js';
 
 const TRACERS = 48;
 const IMPACTS = 32;
@@ -121,46 +123,21 @@ export class ViewModel {
     this.reloadT = 0;
     this.sway = { x: 0, y: 0 };
 
-    const mk = (w, h, d, color, x, y, z) => {
-      const m = new THREE.Mesh(
-        new THREE.BoxGeometry(w, h, d),
-        new THREE.MeshLambertMaterial({ color })
-      );
-      m.position.set(x, y, z);
-      this.group.add(m);
-      return m;
-    };
-    mk(0.09, 0.11, 0.5, 0x2f3644, 0, 0, -0.1);                 // body
-    this.barrel = mk(0.05, 0.05, 0.42, 0x1d2230, 0, 0.02, -0.42);
+    // the same model the body carries (gunmodel.js), so you see what others see
+    this.gun = new THREE.Group();
+    this.group.add(this.gun);
     // tracers leave from here; as a child it inherits every scale and sway
     this.muzzleTip = new THREE.Object3D();
-    this.muzzleTip.position.set(0, 0, -0.21);      // half the barrel length
-    this.barrel.add(this.muzzleTip);
-    mk(0.07, 0.16, 0.09, 0x232936, 0, -0.12, 0.05);   // grip
-    mk(0.07, 0.09, 0.2, 0x232936, 0, -0.03, 0.2);     // stock
-    // Two halves of one brick: one colour on normal guns, the portal pair on the
-    // portal gun, which is the only thing telling the two apart in the hand.
-    this.accentL = mk(0.03, 0.03, 0.14, 0xd9743b, -0.015, 0.07, -0.12);
-    this.accentR = mk(0.03, 0.03, 0.14, 0xd9743b, 0.015, 0.07, -0.12);
+    this.group.add(this.muzzleTip);
+    this.setWeapon(0);
   }
 
-  setAccents(left, right) {
-    this.accentL.material.color.setHex(left);
-    this.accentR.material.color.setHex(right);
-  }
+  /** The portal gun's accent wears your pair. */
+  setAccents(left, right) { paintGun(this.gun, left, right); }
 
   setWeapon(index) {
-    const shapes = [
-      { barrel: [0.05, 0.05, 0.42, -0.42], accent: 0xd9743b },
-      { barrel: [0.08, 0.08, 0.36, -0.38], accent: 0xe0a33a },
-      { barrel: [0.04, 0.04, 0.62, -0.52], accent: 0x3aa89c },
-      { barrel: [0.05, 0.05, 0.42, -0.42], accent: null },     // portal gun: painted by the game
-      { barrel: [0.11, 0.11, 0.22, -0.36], accent: 0xffffff }  // White Out
-    ];
-    const s = shapes[index] || shapes[0];
-    this.barrel.scale.set(s.barrel[0] / 0.05, s.barrel[1] / 0.05, s.barrel[2] / 0.42);
-    this.barrel.position.z = s.barrel[3];
-    if (s.accent !== null) this.setAccents(s.accent, s.accent);
+    const { muzzle } = buildGun(this.gun, WEAPONS[index] || WEAPONS[0]);
+    this.muzzleTip.position.copy(muzzle);
   }
 
   fire(scale = 1) { this.kick = Math.min(0.16, this.kick + 0.055 * scale); }

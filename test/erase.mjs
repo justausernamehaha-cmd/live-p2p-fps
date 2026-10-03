@@ -242,6 +242,116 @@ const toward = (o, p) => norm({ x: p.x - o.x, y: p.y - o.y, z: p.z - o.z });
   t('only its feet in the circle is still taken', E.touchesBody(c2, { x: 0, y: 0, z: -20 }, up, 1.8, 0.17));
 }
 
+// ------------------------------------------- a released stroke is simplified
+// Every stamp costs every pixel a shader pass, so on release stamps lying on one
+// arc merge. Checked against this file's own arc distance, not erase.js's.
+{
+  const dotv = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const crossv = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+  const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, dotv(a, b))));
+  // angle from w to the arc a..b, by brute force: 400 points along the arc
+  const toArc = (w, a, b) => {
+    let best = Infinity;
+    for (let i = 0; i <= 400; i++) {
+      const k = i / 400;
+      best = Math.min(best, ang(w, norm({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k })));
+    }
+    return best;
+  };
+  const toStroke = (w, stamps) => Math.min(...stamps.map(c => toArc(w, c.a, c.b)));
+  const o = { x: 0, y: 0, z: 0 };
+  const drag = (E, path, id) => { for (const d of path) E.paint(o, d, 'me', id); };
+  const TOL = ERASE_ANGLE * 0.2;
+
+  // a straight drag, 30 stamps, becomes one plain cone and one sweep
+  const straight = Array.from({ length: 30 }, (_, i) => norm({ x: Math.sin(i * STAMP_STEP), y: 0, z: -Math.cos(i * STAMP_STEP) }));
+  const E1 = new Erasures();
+  drag(E1, straight, 1);
+  const before1 = E1.list.map(c => ({ a: c.a, b: c.b }));
+  const opened1 = E1.open('me', 1, 0);
+  // 1.5 rad of arc: a plain cone and two sweeps, since one sweep stops at 1 rad
+  t('a straight stroke of 30 stamps becomes 3', opened1.length === 3 && E1.list.length === 3, `got ${opened1.length}`);
+
+  // a curling drag (a circle of radius 15 degrees), 36 stamps
+  const curl = Array.from({ length: 36 }, (_, i) => {
+    const q = i / 35 * Math.PI * 1.5, r = 0.26;
+    return norm({ x: Math.sin(r * Math.cos(q)), y: Math.sin(r * Math.sin(q)), z: -1 });
+  });
+  const E2 = new Erasures();
+  drag(E2, curl, 2);
+  const before2 = E2.list.map(c => ({ a: c.a, b: c.b }));
+  const opened2 = E2.open('me', 2, 0);
+  t('a curling stroke gets fewer stamps', opened2.length < before2.length / 2,
+    `${before2.length} -> ${opened2.length}`);
+
+  // shape: nowhere does the line move by more than the tolerance
+  for (const [name, before, after, path] of [['straight', before1, opened1, straight], ['curl', before2, opened2, curl]]) {
+    let worst = 0, missed = 0, extra = 0;
+    for (let i = 0; i < 1500; i++) {
+      const base = path[(rnd() * path.length) | 0];
+      const w = norm({ x: base.x + (rnd() - 0.5) * 0.25, y: base.y + (rnd() - 0.5) * 0.25, z: base.z + (rnd() - 0.5) * 0.25 });
+      const d0 = toStroke(w, before), d1 = toStroke(w, after);
+      worst = Math.max(worst, Math.abs(d0 - d1));
+      const p = at(o, w, 20);
+      const E = name === 'straight' ? E1 : E2;
+      if (d0 < ERASE_ANGLE - TOL - 0.003 && !E.contains(p)) missed++;
+      if (d0 > ERASE_ANGLE + TOL + 0.003 && E.contains(p)) extra++;
+    }
+    t(`${name}: the line moved by no more than the tolerance`, worst <= TOL + 0.003, `worst ${worst.toFixed(4)} rad`);
+    t(`${name}: everything well inside the old hole is still a hole`, missed === 0, `${missed} missed`);
+    t(`${name}: nothing well outside the old hole became one`, extra === 0, `${extra} extra`);
+  }
+
+  // two peers simplifying the same stroke end with the same holes
+  const E3 = new Erasures();
+  drag(E3, curl, 2);
+  const again = E3.open('me', 2, 0);
+  t('simplifying is deterministic', JSON.stringify(again.map(c => [c.a, c.b])) === JSON.stringify(opened2.map(c => [c.a, c.b])));
+}
+
+// ------------------------------------------------- a stroke takes a portal
+// The oval is 1.36 x 2 on the wall z = -10, seen from 6 m away, where the circle
+// is 0.31 m across.
+{
+  const o = { x: 0, y: 1, z: -4 }, c = { x: 0, y: 1, z: -10 };
+  const u = { x: 1, y: 0, z: 0 }, v = { x: 0, y: 1, z: 0 };
+  const stroke = (E, id, ...pts) => { for (const p of pts) E.paint(o, toward(o, p), 'me', id); };
+  const E = new Erasures();
+  stroke(E, 1, { x: 0.5, y: 1.7, z: -10 });                        // a dot near the top right of the oval
+  t('paint has not taken the portal yet', !E.holesOval('me', 1, c, u, v, 0.68, 1));
+  E.open('me', 1, 0);
+  t('one small hole anywhere in the oval takes it', E.holesOval('me', 1, c, u, v, 0.68, 1));
+  t('...but only for the stroke that made it', !E.holesOval('me', 2, c, u, v, 0.68, 1) && !E.holesOval('you', 1, c, u, v, 0.68, 1));
+  const F = new Erasures();
+  stroke(F, 1, { x: 1.0, y: 1, z: -10 });                          // rim of the circle 0.16 m outside the oval
+  F.open('me', 1, 0);
+  t('a hole beside the oval leaves it', !F.holesOval('me', 1, c, u, v, 0.68, 1));
+  const G = new Erasures();
+  stroke(G, 1, { x: 0.78, y: 1, z: -10 });                         // the circle's edge 5 cm into the oval
+  G.open('me', 1, 0);
+  t('a hole that only clips the rim takes it', G.holesOval('me', 1, c, u, v, 0.68, 1));
+}
+
+// --------------------------------------------- a platform's own frame (shift)
+// A platform keeps its Erasures measured from its own centre; `shift` is only
+// read by the shader and by World, so here the claim is just the arithmetic
+// World does: a stamp stored relative to the centre at paint time marks the same
+// spot OF THE PLATFORM wherever the platform has gone since.
+{
+  const E = new Erasures();
+  const centre = { x: 10, y: 0.65, z: 55 }, eye = { x: 10, y: 1.6, z: 45 };
+  const spot = { x: 10, y: 0.9, z: 53 };                           // on the platform's near face
+  const local = p => ({ x: p.x - centre.x, y: p.y - centre.y, z: p.z - centre.z });
+  E.paint(local(eye), toward(eye, spot), 'me', 1);
+  E.open('me', 1, 0);
+  t('the marked spot is erased in the platform frame', E.contains(local(spot)));
+  // the platform is now 20 m away; the same spot of it is asked for the same way
+  centre.x += 20;
+  const moved = { x: spot.x + 20, y: spot.y, z: spot.z };
+  t('...and still is once the platform has moved', E.contains(local(moved)));
+  t('...while the place it was marked AT is no longer', !E.contains(local(spot)));
+}
+
 console.log(ok.map(s => '  ok   ' + s).join('\n'));
 if (bad.length) console.log(bad.map(s => '  FAIL ' + s).join('\n'));
 console.log(bad.length ? `FAIL: ${bad.length} of ${ok.length + bad.length}` : `PASS: ${ok.length} checks`);

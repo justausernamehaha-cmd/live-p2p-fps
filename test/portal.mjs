@@ -10,7 +10,7 @@
 //   node test/portal.mjs
 import {
   HALF_W, HALF_H, faceOf, fitPortal, frameFor, portalMap, atMouth, mouthAround,
-  assignHues, overlapsMouth
+  assignHues, overlapsMouth, pierce
 } from '../src/portal.js';
 import { anglesIn, UP_Y } from '../src/frame.js';
 const lookAngles = d => anglesIn(UP_Y, d);
@@ -76,6 +76,23 @@ t('a surface exactly big enough takes a portal',
 const shy = { min: { x: -HALF_W + 0.01, y: 0, z: -0.5 }, max: { x: HALF_W, y: HALF_H * 2, z: 0.5 } };
 t('a hair too narrow explodes',
   fitPortal(faceOf({ box: shy, axis: 2, sign: -1 }), { x: 0, y: 1, z: -0.5 }, { x: 0, y: 0, z: 1 }) === null);
+
+// Too short for an upright oval but wide enough for one on its side: it turns.
+// 4 m wide, 1.5 m tall — an upright mouth needs 2 m of height, a lying one 1.36.
+const strip = { min: { x: -2, y: 0, z: -0.5 }, max: { x: 2, y: 1.5, z: 0.5 } };
+const lying = fitPortal(faceOf({ box: strip, axis: 2, sign: -1 }), { x: 0.3, y: 0.7, z: -0.5 }, { x: 0, y: 0, z: 1 });
+t('a strip too short for an upright portal takes one on its side', !!lying);
+t('...turned a quarter: its long axis is horizontal', lying && near(Math.abs(lying.v.x), 1) && near(lying.u.y * lying.u.y, 1),
+  lying && JSON.stringify([lying.u, lying.v]));
+t('...still facing out of the face', lying && near(lying.n.z, -1));
+t('...and still right-handed (u x v = n)', lying &&
+  near(lying.u.x * lying.v.y - lying.u.y * lying.v.x, lying.n.z));
+t('...the whole oval on the face', lying &&
+  lying.c.x - HALF_H >= -2 - SLACK && lying.c.x + HALF_H <= 2 + SLACK &&
+  lying.c.y - HALF_W >= -SLACK && lying.c.y + HALF_W <= 1.5 + SLACK,
+  lying && JSON.stringify([fx(lying.c.x), fx(lying.c.y)]));
+// and where upright fits, it stays upright
+t('a face that holds it upright is not turned', mid && near(Math.abs(mid.v.y), 1));
 
 // The property the fit exists for, checked over the whole face rather than at
 // one hand-picked spot: wherever the shot lands, no part of the oval that comes
@@ -302,6 +319,95 @@ function fnv(str) {
   t('an up along the normal falls back rather than collapsing',
     Math.abs(degenerate.u.x) < 1e-9 && Math.abs(degenerate.v.x) < 1e-9,
     JSON.stringify(degenerate));
+}
+
+// ------------------------------------------- turned to whatever angle fits
+// "the portal should try its best to self orientate to fit the surface". Every
+// claim is checked against this file's own arithmetic: the rim of the oval that
+// comes back, walked point by point, against the polygon it was given.
+{
+  const d = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const rim = (f, k = 1) => Array.from({ length: 72 }, (_, i) => {
+    const a = i / 72 * Math.PI * 2, cu = Math.cos(a) * HALF_W * k, sv = Math.sin(a) * HALF_H * k;
+    return { x: f.c.x + f.u.x * cu + f.v.x * sv, y: f.c.y + f.u.y * cu + f.v.y * sv, z: f.c.z + f.u.z * cu + f.v.z * sv };
+  });
+  // inside a convex polygon lying in the plane with normal n (either winding)
+  const inFace = (face, p, slack = 2e-3) => {
+    let pos = 0, neg = 0;
+    for (let i = 0; i < face.verts.length; i++) {
+      const a = face.verts[i], b = face.verts[(i + 1) % face.verts.length];
+      const e = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }, r = { x: p.x - a.x, y: p.y - a.y, z: p.z - a.z };
+      const s = d({ x: e.y * r.z - e.z * r.y, y: e.z * r.x - e.x * r.z, z: e.x * r.y - e.y * r.x }, face.n) / Math.hypot(e.x, e.y, e.z);
+      if (s > slack) pos++; else if (s < -slack) neg++;
+    }
+    return !(pos && neg);
+  };
+  const sound = f => Math.abs(d(f.u, f.v)) < 1e-9 && Math.abs(d(f.u, f.n)) < 1e-9 &&
+    Math.abs(Math.hypot(f.u.x, f.u.y, f.u.z) - 1) < 1e-9 && Math.abs(Math.hypot(f.v.x, f.v.y, f.v.z) - 1) < 1e-9 &&
+    Math.abs(d({ x: f.u.y * f.v.z - f.u.z * f.v.y, y: f.u.z * f.v.x - f.u.x * f.v.z, z: f.u.x * f.v.y - f.u.y * f.v.x }, f.n) - 1) < 1e-9;
+  const look = { x: 0, y: 0, z: 1 };
+
+  // 1.8 x 1.8: too short upright (needs 2), too narrow lying down (needs 2),
+  // but the oval fits on the diagonal
+  const sq = { min: { x: -0.9, y: 0, z: -0.5 }, max: { x: 0.9, y: 1.8, z: 0.5 } };
+  const sqFace = faceOf({ box: sq, axis: 2, sign: -1 });
+  const diag = fitPortal(sqFace, { x: 0.1, y: 0.8, z: -0.5 }, look);
+  t('a square face too small both ways takes a portal turned to fit', !!diag);
+  t('...turned, not upright and not on its side', diag && Math.abs(diag.v.y) < 0.95 && Math.abs(diag.v.x) < 0.95,
+    diag && JSON.stringify(diag.v));
+  t('...the whole oval on the face', diag && rim(diag).every(p => inFace(sqFace, p)));
+  t('...and still a right-handed unit frame', diag && sound(diag));
+  // 1.6 x 1.6 holds it at no angle at all (it needs 1.71 on the diagonal)
+  const small = { min: { x: -0.8, y: 0, z: -0.5 }, max: { x: 0.8, y: 1.6, z: 0.5 } };
+  t('a face that holds it at no angle still explodes',
+    fitPortal(faceOf({ box: small, axis: 2, sign: -1 }), { x: 0, y: 0.8, z: -0.5 }, look) === null);
+
+  // a strip 1.5 wide and 6 long lying on the floor at 30 degrees to the grid: a
+  // floor mouth is laid out along a world axis, which this strip is nowhere near
+  const c30 = Math.cos(Math.PI / 6), s30 = Math.sin(Math.PI / 6);
+  const corner = (a, b) => ({ x: a * c30 - b * s30, y: 0, z: a * s30 + b * c30 });
+  const strip = { n: { x: 0, y: 1, z: 0 }, verts: [corner(-3, -0.75), corner(-3, 0.75), corner(3, 0.75), corner(3, -0.75)] };
+  const onStrip = fitPortal(strip, { x: 0.2, y: 0, z: 0.1 }, { x: 0.3, y: -1, z: 0.2 });
+  t('a strip at an angle to the grid takes a portal turned along it', !!onStrip);
+  t('...the whole oval on the strip', onStrip && rim(onStrip).every(p => inFace(strip, p)));
+  t('...a sound frame', onStrip && sound(onStrip));
+  // a triangle: only along its long edge
+  const tri = { n: { x: 0, y: 0, z: -1 }, verts: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 2.4, z: 0 }, { x: 4.2, y: 0, z: 0 }] };
+  const onTri = fitPortal(tri, { x: 1, y: 0.6, z: 0 }, look);
+  t('a triangle takes one', !!onTri);
+  t('...the whole oval on it', onTri && rim(onTri).every(p => inFace(tri, p)));
+  // where it fits upright nothing changes: the wall at the top of this file
+  t('a face that holds it upright is still not turned', mid && near(Math.abs(mid.v.y), 1) && near(mid.u.y, 0));
+
+  // the hole collision cuts for a turned mouth: nothing left inside the oval,
+  // the wall still there well outside it
+  if (diag) {
+    const pieces = pierce(sq, diag, 0.2);
+    const inPiece = p => pieces.some(b => p.x > b.min.x && p.x < b.max.x && p.y > b.min.y && p.y < b.max.y);
+    let inside = 0, outside = 0, wallLeft = 0;
+    for (let x = -0.89; x < 0.9; x += 0.03) for (let y = 0.01; y < 1.8; y += 0.03) {
+      const r = { x: x - diag.c.x, y: y - diag.c.y, z: 0 };
+      const q = (d(r, diag.u) / HALF_W) ** 2 + (d(r, diag.v) / HALF_H) ** 2;
+      if (q < 1 && inPiece({ x, y })) inside++;                     // wall inside the mouth
+      const far = (d(r, diag.u) / (HALF_W + 0.5)) ** 2 + (d(r, diag.v) / (HALF_H + 0.5)) ** 2;
+      if (far > 1) { wallLeft++; if (!inPiece({ x, y })) outside++; }   // hole where the wall is
+    }
+    t('a turned mouth is cut out of its wall, not the wall taken away', pieces.length > 4, `${pieces.length} pieces`);
+    t('...no wall is left anywhere inside the oval', inside === 0, `${inside} points`);
+    t('...and the wall well outside it is all still there', outside === 0, `${outside} of ${wallLeft} points`);
+  }
+  // an upright mouth is cut exactly as it always was
+  const up = pierce(wall, mid, 0.2);
+  t('an upright mouth still leaves the same eighteen pieces', up.length === 18, `${up.length}`);
+
+  // two mouths on one face, turned differently, may not cross
+  const A = { c: { x: 0, y: 3, z: -0.5 }, n: mid.n, u: mid.u, v: mid.v };
+  const turn = (f, a) => ({ ...f, u: { x: f.u.x * Math.cos(a) + f.v.x * Math.sin(a), y: f.u.y * Math.cos(a) + f.v.y * Math.sin(a), z: 0 },
+                            v: { x: f.v.x * Math.cos(a) - f.u.x * Math.sin(a), y: f.v.y * Math.cos(a) - f.u.y * Math.sin(a), z: 0 } });
+  const B = turn({ ...A, c: { x: 1.5, y: 3, z: -0.5 } }, Math.PI / 2);     // lying on its side, 1.5 m along
+  t('a mouth on its side reaching into an upright one overlaps it', overlapsMouth(B, A) && overlapsMouth(A, B));
+  const C = turn({ ...A, c: { x: 1.8, y: 3, z: -0.5 } }, Math.PI / 2);     // tip at 0.8, the other ends at 0.68
+  t('...and clear of it by a hand does not', !overlapsMouth(C, A) && !overlapsMouth(A, C));
 }
 
 console.log(ok.length + ' ok');

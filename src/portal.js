@@ -81,15 +81,51 @@ export function frameFor(n, look, playerUp = null) {
   return { u, v: norm3(cross(n, u)), n };
 }
 
+const TURN_STEP = 5 * Math.PI / 180;    // how finely the other angles are tried
+
 /** Where a shot landing at `point` puts a portal: {c, u, v, n}, or null when the
- *  face cannot hold the whole oval (the shot explodes).
+ *  face cannot hold the whole oval at any angle (the shot explodes).
  *
- *  Legal centres = the face polygon eroded by the oval's bounding box (offset
- *  every original edge inward, clip). The nearest legal centre to the shot is
- *  where it goes, so a portal near an edge slides inward. */
+ *  Legal centres = the face polygon eroded by the oval (every original edge
+ *  offset inward by how far the oval reaches toward it, then clipped). The
+ *  nearest legal centre to the shot is where it goes, so a portal near an edge
+ *  slides inward. */
 export function fitPortal(face, point, look, playerUp = null) {
   if (!face || face.verts.length < 3) return null;
-  const { u, v, n } = frameFor(face.n, look, playerUp);
+  const f = frameFor(face.n, look, playerUp);
+  // Upright as aimed if it fits; otherwise turned a quarter, lying on its side.
+  const plain = fitFramed(face, point, f.u, f.v, f.n) ||
+                fitFramed(face, point, f.v, scale3(f.u, -1), f.n);
+  if (plain) return plain;
+
+  // Neither: turn it to whatever angle the surface does take, the least turn
+  // from upright first. Tried every TURN_STEP, and lined up with each edge of
+  // the face both ways, which is the angle a strip or a triangle takes it at.
+  const turned = a => {
+    const c = Math.cos(a), s = Math.sin(a);
+    return fitFramed(face, point,
+      add3(scale3(f.u, c), scale3(f.v, s)), add3(scale3(f.v, c), scale3(f.u, -s)), f.n);
+  };
+  const angles = [];
+  for (let a = TURN_STEP; a < Math.PI / 2 - 1e-6; a += TURN_STEP) angles.push(a);
+  for (let i = 0; i < face.verts.length; i++) {
+    const e = sub3(face.verts[(i + 1) % face.verts.length], face.verts[i]);
+    const along = Math.atan2(dot(e, f.v), dot(e, f.u));
+    for (const raw of [along, along + Math.PI / 2]) {
+      const a = Math.abs(raw - Math.PI * Math.round(raw / Math.PI));   // into [0, 90]
+      if (a > 1e-4 && a < Math.PI / 2 - 1e-4) angles.push(a);
+    }
+  }
+  angles.sort((p, q) => p - q);
+  const off = r => r ? Math.hypot(r.c.x - point.x, r.c.y - point.y, r.c.z - point.z) : Infinity;
+  for (const a of angles) {
+    const one = turned(a), other = turned(-a);
+    if (one || other) return off(one) <= off(other) ? one : other;
+  }
+  return null;
+}
+
+function fitFramed(face, point, u, v, n) {
   const origin = face.verts[0];
   const to2 = p => {
     const d = sub3(p, origin);
@@ -106,8 +142,10 @@ export function fitPortal(face, point, look, playerUp = null) {
     const len = Math.hypot(ex, ey);
     if (len < EPS) continue;
     const nx = -ey / len, ny = ex / len;          // inward for a CCW ring
+    // how far the oval itself reaches toward this edge (its bounding box would
+    // be the same on a square face and far too cautious on any other)
     planes.push([nx, ny,
-      nx * a[0] + ny * a[1] + HALF_W * Math.abs(nx) + HALF_H * Math.abs(ny) - FIT_EPS]);
+      nx * a[0] + ny * a[1] + Math.hypot(HALF_W * nx, HALF_H * ny) - FIT_EPS]);
   }
   for (const [nx, ny, d] of planes) {
     poly = clipHalfPlane(poly, nx, ny, d);
@@ -129,11 +167,26 @@ export function overlapsMouth(portal, other) {
   const sameFace = dot(portal.n, other.n) > 0.99 &&
                    Math.abs(dx * portal.n.x + dy * portal.n.y + dz * portal.n.z) < 0.02;
   if (sameFace) {
+    if (Math.abs(dot(portal.u, other.u)) < 0.999) {     // turned differently
+      return rimInside(portal, other) || rimInside(other, portal);
+    }
     const su = (dx * other.u.x + dy * other.u.y + dz * other.u.z) / (2 * HALF_W);
     const sv = (dx * other.v.x + dy * other.v.y + dz * other.v.z) / (2 * HALF_H);
     return su * su + sv * sv < 1;
   }
   return d < MIN_PAIR_SEP && dot(portal.n, other.n) > 0.7;
+}
+
+/** Is the centre or any of the rim of oval `a` inside oval `b`? */
+function rimInside(a, b) {
+  for (let i = -1; i < 32; i++) {
+    const t = (i / 32) * Math.PI * 2, k = i < 0 ? 0 : 1;
+    const p = add3(a.c, add3(scale3(a.u, Math.cos(t) * HALF_W * k), scale3(a.v, Math.sin(t) * HALF_H * k)));
+    const rel = sub3(p, b.c);
+    const su = dot(rel, b.u) / HALF_W, sv = dot(rel, b.v) / HALF_H;
+    if (su * su + sv * sv < 1) return true;
+  }
+  return false;
 }
 
 /** The rigid motion from `from` to `to`: change of frame plus a half turn about
@@ -189,11 +242,14 @@ function axisOf(d) {
  *  Collision must see a wall with a hole in it, not no wall: removing the whole
  *  box was four separate ways out of the map. The oval is cut in bands, each as
  *  wide as the oval gets within it, so the hole is never narrower than the mouth
- *  and not passable at the corners of its bounding square. */
+ *  and not passable at the corners of its bounding square. The oval may be
+ *  turned to any angle in the face; the bands always run along a world axis. */
 export function pierce(box, p, pad = 0) {
   const k = axisOf(p.n);
-  const ua = axisOf(p.u), va = axisOf(p.v);
-  if (!k || !ua || !va) return [];     // not an axis-aligned face: take it all out
+  if (!k) return [];                   // not an axis-aligned face: take it all out
+  let ua = axisOf(p.u), va = axisOf(p.v);
+  const square = !!ua && !!va;         // the oval's own axes are world axes
+  if (!square) [ua, va] = ['x', 'y', 'z'].filter(a => a !== k);
   const out = [];
   const piece = (uLo, uHi, vLo, vHi) => {
     if (uHi - uLo < 1e-4 || vHi - vLo < 1e-4) return;
@@ -201,22 +257,48 @@ export function pierce(box, p, pad = 0) {
     min[k] = box.min[k]; max[k] = box.max[k];
     min[ua] = uLo; max[ua] = uHi;
     min[va] = vLo; max[va] = vHi;
-    out.push({ min, max, color: box.color, src: box.src, pierced: true });
+    // `rides`: the platform the wall is, for White Out (not `mover`, which would
+    // make the pieces platforms in their own right)
+    out.push({ min, max, color: box.color, src: box.src, pierced: true, rides: box.mover });
   };
   const cu = p.c[ua], cv = p.c[va];
   const V = HALF_H + pad, U = HALF_W + pad;
-  const v0 = Math.max(box.min[va], cv - V), v1 = Math.min(box.max[va], cv + V);
+
+  // A turned oval, as the two world axes of its face see it: S is its shape
+  // matrix (U^2 uu' + V^2 vv'), so it reaches sqrt(Svv) along va, and at a height
+  // q above its centre it spans  q*Suv/Svv -+ wide*sqrt(1 - q^2/Svv)  along ua.
+  const Suu = U * U * p.u[ua] * p.u[ua] + V * V * p.v[ua] * p.v[ua];
+  const Svv = U * U * p.u[va] * p.u[va] + V * V * p.v[va] * p.v[va];
+  const Suv = U * U * p.u[ua] * p.u[va] + V * V * p.v[ua] * p.v[va];
+  const reach = square ? V : Math.sqrt(Svv);
+  const lean = Suv / Svv, wide = Math.sqrt(Math.max(0, Suu - Suv * Suv / Svv));
+  const far = Math.sqrt(Suu), farAt = Suv / far;     // its widest point each way, and how high
+  const span = q => {
+    const h = wide * Math.sqrt(Math.max(0, 1 - q * q / Svv));
+    return [q * lean - h, q * lean + h];
+  };
+
+  const v0 = Math.max(box.min[va], cv - reach), v1 = Math.min(box.max[va], cv + reach);
   piece(box.min[ua], box.max[ua], box.min[va], v0);     // below the oval
   piece(box.min[ua], box.max[ua], v1, box.max[va]);     // above it
   const step = (v1 - v0) / HOLE_BANDS;
   for (let i = 0; i < HOLE_BANDS; i++) {
     const bLo = v0 + step * i, bHi = bLo + step;
-    const near = Math.min(Math.abs(bLo - cv), Math.abs(bHi - cv),
-                          (bLo - cv) * (bHi - cv) <= 0 ? 0 : Infinity);
-    const t = Math.min(1, near / V);
-    const w = U * Math.sqrt(Math.max(0, 1 - t * t));
-    piece(box.min[ua], Math.max(box.min[ua], cu - w), bLo, bHi);
-    piece(Math.min(box.max[ua], cu + w), box.max[ua], bLo, bHi);
+    let lo, hi;                        // the widest the oval gets within this band
+    if (square) {
+      const near = Math.min(Math.abs(bLo - cv), Math.abs(bHi - cv),
+                            (bLo - cv) * (bHi - cv) <= 0 ? 0 : Infinity);
+      const t = Math.min(1, near / V);
+      const w = U * Math.sqrt(Math.max(0, 1 - t * t));
+      lo = -w; hi = w;
+    } else {
+      const a = span(bLo - cv), b = span(bHi - cv);
+      lo = Math.min(a[0], b[0]); hi = Math.max(a[1], b[1]);
+      if (-farAt >= bLo - cv && -farAt <= bHi - cv) lo = -far;
+      if (farAt >= bLo - cv && farAt <= bHi - cv) hi = far;
+    }
+    piece(box.min[ua], Math.max(box.min[ua], cu + lo), bLo, bHi);
+    piece(Math.min(box.max[ua], cu + hi), box.max[ua], bLo, bHi);
   }
   return out;
 }

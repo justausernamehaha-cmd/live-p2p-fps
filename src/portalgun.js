@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   HALF_W, HALF_H, faceOf, fitPortal, overlapsMouth, assignHues, SOLO_PAIR, rayPortal
 } from './portal.js';
+import { eraseMaterial } from './erase.js';
 
 // The visible half of portals (the arithmetic is in portal.js): the balls, the
 // mouths, the views through them, and who owns which pair.
@@ -21,30 +22,39 @@ const VIEW_RANGE = 90;
 
 // The virtual camera renders the same viewport and projection, so the disc
 // samples its view in screen space and needs no UVs.
+// The includes are the places eraseMaterial() patches, so White Out paints over
+// a mouth like any other surface.
 const VIEW_VERT = `
+  #include <common>
   varying vec4 vClip;
   void main() {
-    vClip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    gl_Position = vClip;
+    vec3 transformed = position;
+    #include <project_vertex>
+    vClip = gl_Position;
   }`;
 const VIEW_FRAG = `
+  #include <common>
   uniform sampler2D uView;
   uniform vec3 uFallback;
   uniform float uHasView;
   varying vec4 vClip;
   void main() {
-    if (uHasView < 0.5) { gl_FragColor = vec4(uFallback, 0.92); return; }
-    vec2 uv = (vClip.xy / vClip.w) * 0.5 + 0.5;
-    gl_FragColor = vec4(texture2D(uView, clamp(uv, 0.002, 0.998)).rgb, 1.0);
-    // a raw ShaderMaterial gets no colour-space conversion; without this the view
-    // comes out at a third of its brightness
-    #include <colorspace_fragment>
+    gl_FragColor = vec4(uFallback, 0.92);
+    if (uHasView > 0.5) {
+      vec2 uv = (vClip.xy / vClip.w) * 0.5 + 0.5;
+      gl_FragColor = vec4(texture2D(uView, clamp(uv, 0.002, 0.998)).rgb, 1.0);
+      // a raw ShaderMaterial gets no colour-space conversion; without this the view
+      // comes out at a third of its brightness
+      #include <colorspace_fragment>
+    }
+    #include <fog_fragment>
   }`;
 
 export class PortalField {
-  constructor(scene, effects) {
+  constructor(scene, effects, world = null) {
     this.scene = scene;
     this.effects = effects;
+    this.world = world;          // for the White Out a mouth is painted with
     this.pairs = new Map();      // ownerId -> {a, b}
     this.colors = new Map();     // ownerId -> {a, b} as 0xrrggbb
     this.balls = [];
@@ -171,12 +181,12 @@ export class PortalField {
     if (hit.erased) { explode(); return; }        // the curved inside of a hole
     const face = faceOf(hit);
     const fitted = face && fitPortal(face, hit.point, ball.dir, ball.up);
+    const mover = hit.solid ? (hit.solid.mover ?? -1) : (hit.box?.mover ?? -1);
     // no mouth over any other (except the one this replaces), and none on White Out
     const replacing = this.pairs.get(ball.owner)?.[ball.side] || null;
     const clash = fitted && (this._all().some(q => q !== replacing && overlapsMouth(fitted, q)) ||
-      world.erase.coversOval(fitted.c, fitted.u, fitted.v, HALF_W, HALF_H));
+      world.eraseCoversOval({ ...fitted, mover }, HALF_W, HALF_H));
     if (!fitted || clash) { explode(); return; }
-    const mover = hit.solid ? (hit.solid.mover ?? -1) : (hit.box?.mover ?? -1);
     const portal = this.place(ball.owner, ball.side, {
       c: fitted.c, n: fitted.n, u: fitted.u, v: fitted.v, mover
     });
@@ -231,6 +241,26 @@ export class PortalField {
       if (!best || t < best.t) best = { t, from: link.from, to: link.to };
     }
     return best;
+  }
+
+  /** Take one mouth away (White Out erased it). */
+  remove(owner, side) {
+    const p = this.pairs.get(owner)?.[side];
+    if (!p) return false;
+    this.effects?.burst?.(p.c, p.color);
+    this._dispose(p);
+    this.pairs.get(owner)[side] = null;
+    this._relink();
+    return true;
+  }
+
+  /** Remove every mouth `gone(portal)` says is erased; returns [owner, side] for
+   *  each, which is what the peers are told. */
+  erase(gone) {
+    const out = [];
+    for (const p of this._all()) if (gone(p)) out.push([p.owner, p.side]);
+    for (const [owner, side] of out) this.remove(owner, side);
+    return out;
   }
 
   forget(owner) {
@@ -292,6 +322,10 @@ export class PortalField {
       if (!p.target) p.target = this._makeTarget();
       this._aimVirtualCamera(camera, p, partner);
       partner.group.visible = false;
+      // Through the mouth you are standing in, the view is from your own eye
+      // moved through: your body out of the far mouth is first person there, and
+      // first person never draws itself (it was your own back and gun).
+      if (this.selfView) this.selfView.visible = p !== this.selfMouth;
       renderer.setRenderTarget(p.target);
       renderer.render(scene, this._vcam);
       partner.group.visible = true;
@@ -382,6 +416,16 @@ export class PortalField {
     p.ring.scale.set(HALF_W, HALF_H, 1);
     p.disc.position.z = 0.004;
     p.ring.position.z = 0.012;
+    // The ring is always drawn after the disc. Left to the depth sort it went
+    // first whenever the camera faced away from the wall with the mouth still at
+    // the edge of the view (the ring, 8 mm out from the wall, is then the farther
+    // of the two), and the disc painted over it.
+    p.ring.renderOrder = 1;
+    if (this.world) {
+      const er = this.world.eraseOf(p);
+      eraseMaterial(p.disc.material, er);
+      eraseMaterial(p.ring.material, er);
+    }
     p.group.add(p.disc);
     p.group.add(p.ring);
     p.group.renderOrder = 4;

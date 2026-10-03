@@ -917,7 +917,8 @@ const R = await page.evaluate(async () => {
         u: { x: 0, y: 0, z: -1 }, v: { x: 0, y: 1, z: 0 }, mover: -1 });
       park(-55, 0.05, -40, Math.PI / 2);           // yaw pi/2 walks along -x
       keys('fwd');
-      await sleep(1100);
+      // wait for the traversal, not for a clock: a slow machine is still walking
+      for (let i = 0; i < 250 && !exitVel; i++) await sleep(16);
       keys();
       return exitVel ? round(exitVel.y) : null;
     };

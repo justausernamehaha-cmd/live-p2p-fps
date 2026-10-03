@@ -19,17 +19,25 @@ const ERASE_MAX = 48;               // stamps in the world at once (shader array
 export const STROKE_MAX = 40;       // stamps in one stroke
 const SAMPLE = 0.3;                 // collision sampling step, metres
 const RAY_SUB = ERASE_ANGLE * 0.25; // ray masks approximate a sweep by cones this far apart
+// On release a stroke is simplified: stamps lying on nearly one arc merge into a
+// single sweep, since every stamp costs every pixel on screen a shader loop pass.
+const SIMPLIFY_TOL = ERASE_ANGLE * 0.2;   // how far the line may move, radians (~0.6 deg)
+const SWEEP_MAX = 1;                      // longest merged sweep, radians
 
 export class Erasures {
   constructor() {
     this.list = [];
     this.holes = 0;
     this.t = 0;
+    // Where this frame's origin is in the world. Zero for the level itself; a
+    // moving platform keeps its own Erasures in its own frame and moves this.
+    this.shift = { x: 0, y: 0, z: 0 };
     // shared by every patched material
     this.uniforms = {
+      uEraseShift: { value: this.shift },
       uEraseN: { value: 0 },
       uEraseO: { value: new Float32Array(ERASE_MAX * 4) },   // apex; w = 1 hole, 0 paint
-      uEraseA: { value: new Float32Array(ERASE_MAX * 4) },   // sweep start; w = tan(half-angle)
+      uEraseA: { value: new Float32Array(ERASE_MAX * 4) },   // sweep start; w = half-angle
       uEraseB: { value: new Float32Array(ERASE_MAX * 4) }    // sweep end
     };
   }
@@ -52,41 +60,28 @@ export class Erasures {
     }
     if (inStroke >= STROKE_MAX) return null;
     const a = unit(d);
-    const b = prev ? prev.a : a;
-    const tan = Math.tan(angle);
-    const cone = {
-      o: { x: o.x, y: o.y, z: o.z }, a, b, d: a,
-      tan, cos2: 1 / (1 + tan * tan), cosH: Math.cos(angle), sinH: Math.sin(angle),
-      owner, stroke, hole: false, born: 0
-    };
-    const n = cross(a, b), nl = Math.hypot(n.x, n.y, n.z);
-    cone.n = nl > 1e-9 ? { x: n.x / nl, y: n.y / nl, z: n.z / nl } : null;
-    // plain cones along the sweep, for ray masks and the body test
-    const arc = Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z)));
-    const steps = Math.max(1, Math.ceil(arc / RAY_SUB));
-    cone.cones = [];
-    for (let i = 0; i <= (cone.n ? steps : 0); i++) {
-      const k = i / steps;
-      cone.cones.push({ o: cone.o, d: unit({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k }),
-                        tan, cos2: cone.cos2 });
-    }
+    const cone = makeStamp(o, a, prev ? prev.a : a, angle, owner, stroke);
     this.list.push(cone);
     this._refresh();
     return cone;
   }
 
-  /** The stroke is let go: all its paint becomes holes, born at `t`. Returns them. */
+  /** The stroke is let go: all its paint becomes holes, born at `t`, simplified
+   *  first. Returns them. Deterministic, so every peer ends with the same holes. */
   open(owner, stroke, t = this.t) {
-    const opened = [];
-    for (const c of this.list) {
-      if (c.owner !== owner || c.stroke !== stroke || c.hole) continue;
-      c.hole = true;
-      c.born = t;
-      opened.push(c);
+    const mine = c => c.owner === owner && c.stroke === stroke && !c.hole;
+    const at = this.list.findIndex(mine);
+    if (at >= 0) {
+      const rest = this.list.filter(c => !mine(c));
+      const opened = simplify(this.list.filter(mine));
+      for (const c of opened) { c.hole = true; c.born = t; }
+      rest.splice(at, 0, ...opened);
+      this.list = rest;
+      this._dirty = true;
+      this.update(Math.max(this.t, t));
+      return opened;
     }
-    this._dirty = true;
-    this.update(Math.max(this.t, t));
-    return opened;
+    return [];
   }
 
   /** Drop somebody's unfinished paint (they left mid-stroke). */
@@ -117,7 +112,7 @@ export class Erasures {
     this.list.forEach((c, i) => {
       if (c.hole) this.holes++;
       O[i * 4] = c.o.x; O[i * 4 + 1] = c.o.y; O[i * 4 + 2] = c.o.z; O[i * 4 + 3] = c.hole ? 1 : 0;
-      A[i * 4] = c.a.x; A[i * 4 + 1] = c.a.y; A[i * 4 + 2] = c.a.z; A[i * 4 + 3] = c.tan;
+      A[i * 4] = c.a.x; A[i * 4 + 1] = c.a.y; A[i * 4 + 2] = c.a.z; A[i * 4 + 3] = c.angle;
       B[i * 4] = c.b.x; B[i * 4 + 1] = c.b.y; B[i * 4 + 2] = c.b.z;
     });
     u.uEraseN.value = this.list.length;
@@ -170,6 +165,22 @@ export class Erasures {
     return false;
   }
 
+  /** Did this stroke's holes take any of a portal's oval? Asked on a grid fine
+   *  enough that the thinnest stroke cannot slip between two points. */
+  holesOval(owner, stroke, c, u, v, halfW, halfH) {
+    const mine = this.list.filter(s => s.hole && s.owner === owner && s.stroke === stroke);
+    if (!mine.length) return false;
+    const STEP = 0.05;
+    for (let su = -halfW; su <= halfW + 1e-9; su += STEP) {
+      for (let sv = -halfH; sv <= halfH + 1e-9; sv += STEP) {
+        if ((su / halfW) ** 2 + (sv / halfH) ** 2 > 1) continue;
+        const x = c.x + u.x * su + v.x * sv, y = c.y + u.y * su + v.y * sv, z = c.z + u.z * su + v.z * sv;
+        for (const s of mine) if (inSweep(s, x, y, z)) return true;
+      }
+    }
+    return false;
+  }
+
   /** Is the overlap of two boxes erased? This is how collision sees a hole. */
   overlapErased(a, b) {
     const min = { x: Math.max(a.min.x, b.min.x), y: Math.max(a.min.y, b.min.y), z: Math.max(a.min.z, b.min.z) };
@@ -212,6 +223,84 @@ class RayMask {
   }
 }
 
+/** One stamp: a cone at `o` swept along the arc from aim `b` to aim `a`. */
+function makeStamp(o, a, b, angle, owner, stroke) {
+  const tan = Math.tan(angle);
+  const cone = {
+    o: { x: o.x, y: o.y, z: o.z }, a, b, d: a, angle,
+    tan, cos2: 1 / (1 + tan * tan), cosH: Math.cos(angle), sinH: Math.sin(angle),
+    owner, stroke, hole: false, born: 0
+  };
+  const n = cross(a, b), nl = Math.hypot(n.x, n.y, n.z);
+  cone.n = nl > 1e-9 ? { x: n.x / nl, y: n.y / nl, z: n.z / nl } : null;
+  // plain cones along the sweep, for ray masks and the body test
+  const arc = angleOf(a, b);
+  const steps = Math.max(1, Math.ceil(arc / RAY_SUB));
+  cone.cones = [];
+  for (let i = 0; i <= (cone.n ? steps : 0); i++) {
+    const k = i / steps;
+    cone.cones.push({ o: cone.o, d: unit({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k }),
+                      tan, cos2: cone.cos2 });
+  }
+  return cone;
+}
+
+/** A stroke's stamps with the aims that lie within SIMPLIFY_TOL of one arc
+ *  dropped (Douglas-Peucker on the sphere). The shooter is frozen for the whole
+ *  stroke, so one apex serves all of it; a stroke whose stamps disagree is left
+ *  as it is. */
+function simplify(stamps) {
+  if (stamps.length < 3) return stamps;
+  const f = stamps[0];
+  if (stamps.some(c => c.angle !== f.angle ||
+      Math.abs(c.o.x - f.o.x) + Math.abs(c.o.y - f.o.y) + Math.abs(c.o.z - f.o.z) > 1e-6)) return stamps;
+  const pts = [f.b, ...stamps.map(c => c.a)];     // the aim path, start to end
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const split = (i, j) => {
+    if (j - i < 2 && angleOf(pts[i], pts[j]) <= SWEEP_MAX) return;
+    let worst = -1, at = -1;
+    for (let k = i + 1; k < j; k++) {
+      const e = offArc(pts[k], pts[i], pts[j]);
+      if (e > worst) { worst = e; at = k; }
+    }
+    if (at < 0) return;
+    if (worst > SIMPLIFY_TOL || angleOf(pts[i], pts[j]) > SWEEP_MAX) {
+      if (worst <= SIMPLIFY_TOL) at = (i + j) >> 1;    // only too long: halve it
+      keep[at] = true;
+      split(i, at);
+      split(at, j);
+    }
+  };
+  split(0, pts.length - 1);
+  const out = [];
+  let prev = pts[0];
+  // the first stamp of a stroke is a plain cone at its start
+  if (angleOf(f.a, f.b) < 1e-9) out.push(makeStamp(f.o, pts[0], pts[0], f.angle, f.owner, f.stroke));
+  for (let k = 1; k < pts.length; k++) {
+    if (!keep[k]) continue;
+    out.push(makeStamp(f.o, pts[k], prev, f.angle, f.owner, f.stroke));
+    prev = pts[k];
+  }
+  return out;
+}
+
+const angleOf = (a, b) => Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z)));
+
+/** Angular distance of direction p from the great-circle arc a..b. */
+function offArc(p, a, b) {
+  const n = cross(a, b), nl = Math.hypot(n.x, n.y, n.z);
+  const ends = Math.min(angleOf(p, a), angleOf(p, b));
+  if (nl < 1e-9) return ends;
+  const nx = n.x / nl, ny = n.y / nl, nz = n.z / nl;
+  const sn = p.x * nx + p.y * ny + p.z * nz;
+  const q = { x: p.x - nx * sn, y: p.y - ny * sn, z: p.z - nz * sn };
+  const between = dot(cross(a, q), { x: nx, y: ny, z: nz }) >= 0 &&
+                  dot(cross(q, b), { x: nx, y: ny, z: nz }) >= 0;
+  return between ? Math.asin(Math.min(1, Math.abs(sn))) : ends;
+}
+
+const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 const unit = v => { const l = Math.hypot(v.x, v.y, v.z) || 1; return { x: v.x / l, y: v.y / l, z: v.z / l }; };
 const cross = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
 
@@ -315,25 +404,26 @@ function coneRay(c, o, dir, maxT, out) {
 }
 
 /** Patch a material: white where painted, discarded inside holes with a white
- *  rim round them. All patched materials share one uniforms object and program. */
+ *  rim round them. Materials patched with the same Erasures share its uniforms. */
 export function eraseMaterial(mat, erasures) {
   const U = erasures.uniforms;
   mat.onBeforeCompile = shader => {
+    shader.uniforms.uEraseShift = U.uEraseShift;
     shader.uniforms.uEraseN = U.uEraseN;
     shader.uniforms.uEraseO = U.uEraseO;
     shader.uniforms.uEraseA = U.uEraseA;
     shader.uniforms.uEraseB = U.uEraseB;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vEraseW;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uEraseShift;\nvarying vec3 vEraseW;')
       .replace('#include <project_vertex>',
-               '#include <project_vertex>\nvEraseW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+               '#include <project_vertex>\nvEraseW = (modelMatrix * vec4(transformed, 1.0)).xyz - uEraseShift;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\n' + ERASE_GLSL)
       .replace('void main() {', 'void main() {\n  float eraseK = eraseWhite();')
       .replace('#include <fog_fragment>',
                'gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), eraseK);\n#include <fog_fragment>');
   };
-  mat.customProgramCacheKey = () => 'whiteout2';
+  mat.customProgramCacheKey = () => 'whiteout4';
   mat.needsUpdate = true;
   return mat;
 }
@@ -365,7 +455,7 @@ float eraseWhite() {
       vec3 p = w - n * sn;
       if (dot(cross(a, p), n) >= 0.0 && dot(cross(p, b), n) >= 0.0) ang = min(ang, asin(clamp(abs(sn), 0.0, 1.0)));
     }
-    float H = atan(uEraseA[i].w);
+    float H = uEraseA[i].w;
     if (uEraseO[i].w < 0.5) {             // paint: solid white
       if (ang < H) white = 1.0;
       continue;

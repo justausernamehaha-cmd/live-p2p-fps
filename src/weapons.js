@@ -16,28 +16,30 @@ export function spreadFor(weapon, moving, adsT) {
   return weapon.spread + weapon.hipSpread * (1 - acc);
 }
 
-// `hold` is the gun a body carries, as seen by others (remote.js).
+// `gun` is the one gun model (gunmodel.js): the same in your hands and in others'.
+// barrel = [width, height, length, centre z]; the portal gun's accent is painted
+// in its owner's pair.
 export const WEAPONS = [
   {
     id: 0, name: 'Rifle', auto: true,
     damage: 27, pellets: 1, interval: 0.085, mag: 30, reserve: 150, killAward: 30,
     spread: 0, hipSpread: 0.09, recoil: 0.013, recoilYaw: 0.004,
     reloadTime: 2.0, range: 140, color: 0xffd08a, shakeScale: 1,
-    hold: { barrel: 0.42, bore: 0.05, body: 0.5, tint: 0x2f3644, accent: 0xd9743b }
+    gun: { barrel: [0.05, 0.05, 0.42, -0.42], accent: 0xd9743b }
   },
   {
     id: 1, name: 'Shotgun', auto: false,
     damage: 13, pellets: 9, interval: 0.62, mag: 6, reserve: 42, killAward: 6,
     spread: 0.055, hipSpread: 0.07, recoil: 0.055, recoilYaw: 0.012,
     reloadTime: 2.6, range: 45, color: 0xffb066, shakeScale: 2.2,
-    hold: { barrel: 0.3, bore: 0.085, body: 0.42, tint: 0x3a2a1e, accent: 0xffb066 }
+    gun: { barrel: [0.08, 0.08, 0.36, -0.38], accent: 0xe0a33a }
   },
   {
     id: 2, name: 'Marksman', auto: false,
     damage: 95, pellets: 1, interval: 0.95, mag: 5, reserve: 30, killAward: 5,
     spread: 0, hipSpread: 0.12, recoil: 0.09, recoilYaw: 0.01,
     reloadTime: 3.0, range: 250, color: 0x8fd8ff, shakeScale: 2.8,
-    hold: { barrel: 0.72, bore: 0.045, body: 0.5, tint: 0x1d2634, accent: 0x8fd8ff, scope: true }
+    gun: { barrel: [0.04, 0.04, 0.62, -0.52], accent: 0x3aa89c }
   },
   {
     // two triggers (left/right mouth), no damage, no ammo, no spread, no sights
@@ -46,7 +48,7 @@ export const WEAPONS = [
     spread: 0, hipSpread: 0, recoil: 0.006, recoilYaw: 0.001,
     reloadTime: 0, range: 220, color: 0x7fd4ff, shakeScale: 0.5,
     perfect: true, noAds: true, infinite: true, portal: true,
-    hold: { barrel: 0.4, bore: 0.075, body: 0.46, tint: 0x2a3d52, accent: 0x7fd4ff, prongs: true }
+    gun: { barrel: [0.05, 0.05, 0.42, -0.42], accent: 0x7fd4ff, portal: true }
   },
   {
     // hold to paint, release for a hole (main.js _whiteOut, erase.js); `recharge`
@@ -57,7 +59,7 @@ export const WEAPONS = [
     spread: 0, hipSpread: 0, recoil: 0.03, recoilYaw: 0.004,
     reloadTime: 0, range: ERASE_RANGE, color: 0xffffff, shakeScale: 1.6,
     perfect: true, infinite: true, erase: true,
-    hold: { barrel: 0.2, bore: 0.11, body: 0.46, tint: 0xe6eaf0, accent: 0xffffff }
+    gun: { barrel: [0.11, 0.11, 0.22, -0.36], accent: 0xffffff }
   }
 ];
 

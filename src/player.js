@@ -595,6 +595,16 @@ export class Player {
     if (!this._wasInside || this.outOfBounds) return;
     this.outOfBounds = true;
     this.escapes++;
+    this._oob('left the level');
+  }
+
+  /** Why the last out-of-bounds death happened, for the console and the tests. */
+  _oob(why) {
+    const r = v => v && { x: +v.x.toFixed(2), y: +v.y.toFixed(2), z: +v.z.toFixed(2) };
+    this.oobWhy = { why, pos: r(this.pos), vel: r(this.vel), up: r(this.up),
+                    crouch: +this.crouchT.toFixed(2), portals: this.portalCount,
+                    inMouth: !!this.straddling, bounds: this.world.bounds &&
+                      { min: r(this.world.bounds.min), max: r(this.world.bounds.max) } };
   }
 
   /** A movement step at 45 degrees: the body is a capsule against everything
@@ -831,13 +841,18 @@ export class Player {
         mid: this._localOf(p, this._back(p, at.mid, dt))
       };
       if (crossed) continue;
+      // A body standing in this mouth can only be in its hole, and the hole is
+      // cut wider than the oval (PORTAL_CONTACT) so a body can brush the rim — a
+      // centre can sit 3 cm outside the oval. Crossing there is still going
+      // through; asking the oval dropped a body drifting in the hole out of the map.
+      const inIt = this.straddling && this.straddling.link.from === p;
       for (const which of ['eye', 'mid']) {
         const a = was[which], b = cur[which];
         if (!a || a.d < 0 || b.d >= 0) continue;     // only going in
         const t = a.d - b.d > 1e-12 ? a.d / (a.d - b.d) : 0;
         const su = (a.u + (b.u - a.u) * t) / HALF_W;
         const sv = (a.v + (b.v - a.v) * t) / HALF_H;
-        if (su * su + sv * sv > 1) continue;         // crossed the wall, not the hole
+        if (!inIt && su * su + sv * sv > 1) continue; // crossed the wall, not the hole
         crossed = link;
         break;
       }
@@ -908,7 +923,10 @@ export class Player {
     this.spawnSeq++;              // peers must not smear the body across the map
 
     this._wasAt = new Map();
-    // we are in the exit's mouth now, so its wall gets the hole
+    // We are in the exit's mouth now, so its wall gets the hole. Said outright:
+    // the "entered from in front" test has gaps between its body samples, and a
+    // body that fell in one was not in the mouth and was thrown out of the floor.
+    this._inMouth = to;
     this.straddling = this._findStraddle(this.portals.links());
     // Something in front of the exit (a crate) is a real overlap: out the short
     // way, then along the exit normal, and failing that the body is out of bounds.
@@ -925,6 +943,7 @@ export class Player {
         this.pos = from;
         this.outOfBounds = true;
         this.escapes++;
+        this._oob('portal exit blocked');
       }
     }
   }
@@ -1060,20 +1079,18 @@ export class Player {
    *  bounding box, which errs toward solid near a hole. */
   _touches(a, b) {
     if (!aabbOverlap(a, b)) return false;
-    const er = this.world.erase;
-    return !(er && er.active && er.overlapErased(a, b));
+    return !this.world.erasedOverlap(a, b);
   }
 
   /** Has the patch of this face over the body's footprint been erased? */
   _faceErased(s, k, face) {
-    const er = this.world.erase;
-    if (!er || !er.active || !s.min) return false;
+    if (!s.min) return false;
     const [KA, KB] = this.flatK;
     const min = {}, max = {};
     min[KA] = Math.max(this.pos[KA] - RADIUS, s.min[KA]); max[KA] = Math.min(this.pos[KA] + RADIUS, s.max[KA]);
     min[KB] = Math.max(this.pos[KB] - RADIUS, s.min[KB]); max[KB] = Math.min(this.pos[KB] + RADIUS, s.max[KB]);
     min[k] = face - 0.005; max[k] = face + 0.005;
-    return er.clearsBox(min, max);
+    return this.world.erasedBox(min, max, s);
   }
 
   damage(amount) {

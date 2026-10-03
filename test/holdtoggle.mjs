@@ -71,9 +71,11 @@ R.aimAsToggle = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
   const press = buttons => document.dispatchEvent(new MouseEvent('mousedown', { button: 2, buttons, bubbles: true }));
   const lift = buttons => document.dispatchEvent(new MouseEvent('mouseup', { button: 2, buttons, bubbles: true }));
-  press(2); await sleep(60); lift(0); await sleep(500);
+  // wait for the aim to settle, not for a clock: a slow machine is still easing
+  const settle = async to => { for (let i = 0; i < 180 && g.adsT !== to; i++) await sleep(16); };
+  press(2); await sleep(60); lift(0); await settle(1);
   const afterOnePressAndRelease = g.adsT;
-  press(2); await sleep(60); lift(0); await sleep(500);
+  press(2); await sleep(60); lift(0); await settle(0);
   const afterSecond = g.adsT;
   return { afterOnePressAndRelease: +afterOnePressAndRelease.toFixed(2), afterSecond: +afterSecond.toFixed(2) };
 });

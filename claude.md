@@ -52,6 +52,11 @@ against the live site.
 | `rooms.mjs` | two real pages: an empty room is made, an existing one is joined behind a shield, and leaving works |
 | `erase.mjs` | White Out in node: paint is solid until opened, holes pop at exactly five seconds, ray masks against dense sampling, and a dragged slot lets a body through where no single circle would |
 | `whiteout.mjs` | hold paints white and freezes the shooter, release makes holes, the pop at five seconds, walking through a painted slot, out of bounds is instant death, and a release killing a second page through the centre block |
+| `rimfall.mjs` | falling back into the mouth you came out of, drifting toward its rim, goes back through and never out of the map |
+| `gunmodel.mjs` | every weapon's gun is the in-hand model, identical in first person and on a body |
+| `selfview.mjs` | your own body and gun never appear in the mouth you stand in; through the other mouth you still see yourself |
+| `whiteportal.mjs` | a mouth's border survives facing away from its wall (with a control that puts the bug back), a stroke takes the portal it crosses and tells the peers, and a White Out mark rides the north shuttle — in pixels and in bullets |
+| `turnedmouth.mjs` | a mouth turned 45° in its wall: through at its middle, stopped by the wall beside it inside its bounding square |
 
 ## Things worth not rediscovering
 
@@ -643,7 +648,8 @@ players, which will die. it recovers slowly and finishes after 10s."*
   killfeed says *erased* on every screen.
 * The `er` message carries the direction at four decimals: two would put the far
   end of the cone half a metre off at sixty metres.
-* **Deliberately not done**: portals are not erased (a mouth over a hole floats
+* **Deliberately not done** (portals: changed 2026-10-01, a stroke takes them
+  now): portals are not erased (a mouth over a hole floats
   in the air and still works); a hole is not sent to somebody who joins while one
   is open; and **falling out of the map through a hole is not a death** — the
   failsafe puts you on a spawn point, as it always has. That last one is the one
@@ -686,7 +692,7 @@ dead"*. Read as, and built as:
 * **No portal on White Out** (asked for next): `Erasures.coversOval` samples the
   mouth's centre, a half-size ring and its rim against paint and holes, and the
   ball explodes if any is covered. A portal already there when somebody paints
-  over it stays.
+  over it stays (until 2026-10-01: the stroke takes it at release).
 * **Instant out-of-bounds death exposed an old `_unstick` bug.** With no clear
   way out it takes the cheapest move anyway; a body left under the centre block
   (the settings suite does this) has ramps on all four sides and the block above,
@@ -758,6 +764,121 @@ and a peer walking in front of a mouth.
   SwiftShader), because a render target's output colour space differs from the
   canvas's. It is inside three.js and costs nothing visible on a real GPU.
 
+## Seven asks — 2026-09-28
+
+* **Alt+Tab is the desktop's again.** `keyboard.lock()` with no argument locks
+  *every* key, Alt+Tab included. It now takes `LOCK_CODES` (input.js): letters,
+  digits, F-keys and the rest, without Tab, Alt or Meta. Cost: Ctrl+Tab is the
+  browser's again. settings.mjs spies on the call and fails if Tab/Alt/Meta are in
+  it or W is not. **That was not enough on KDE Wayland**: Chrome's lock took every
+  desktop shortcut regardless, and Alt+Tab opened the scoreboard. Now Alt down
+  unlocks outright (`_releaseForAlt`), Tab with Alt held is ignored, Alt up
+  re-locks if still fullscreen + pointer-locked + focused; blur clears it.
+* **Shift does nothing.** Sprint has no default key (SPRINT touch button and a
+  bindable row remain). `_loadBinds` drops a saved Shift->sprint once
+  (`pa.binds.noshift`), and now accepts every BINDABLE action, not only defaulted
+  ones — otherwise a key the player gave sprint was thrown away on reload.
+* **White Out strokes are simplified on release** (`simplify()` in erase.js):
+  Douglas-Peucker on the aim path on the sphere, tolerance ERASE_ANGLE*0.2, merged
+  sweeps capped at 1 rad and halved (not split at the noisiest point) when only
+  too long. It runs inside `open()`, deterministic, so every peer ends with the
+  same holes. The shader gets the half-angle directly (no per-pixel `atan`).
+  erase.mjs checks the line moves by <= the tolerance against its own brute-force
+  arc distance; loosening the tolerance tenfold turns it red.
+* **One gun model** (`src/gunmodel.js`): the gun you see in your OWN hands, used
+  for the body others see too (first try went the other way — wrong). Per-weapon
+  barrel and accent live in `weapons.js` `gun`; the portal gun's accent wears the
+  owner's pair on everyone's screen. gunmodel.mjs compares the two mesh by mesh.
+* **You no longer see yourself in the mouth you stand in.** The picture in that
+  mouth is from your own eye carried through, so your body out of the far mouth
+  is first person there. `renderViews` hides `selfView` for `p === selfMouth`
+  (SelfAvatar's `mouth`, from the same `ghostOf` that places the ghost). Through
+  the *other* mouth you still see yourself. selfview.mjs reads the portal's render
+  target back and counts pixels of a body painted magenta.
+* **A portal that will not fit upright lies on its side** (`fitPortal` tries the
+  quarter turn). Only quarter turns: on an axis-aligned face u and v must stay
+  world axes or `pierce()` cannot cut the hole and takes the whole wall out.
+  (Any angle since 2026-10-01; `pierce()` learned to cut a turned oval.)
+* **"Out of bounds going through portals" — the hole is wider than the oval.**
+  `pierce()` pads the hole by PORTAL_CONTACT (0.20) and the body is 0.17 wide, so
+  a centre can sit 3 cm outside the oval while in the hole. Jump into a ceiling
+  mouth whose partner is in the floor, come out head first too slowly, drift
+  sideways and fall back: the eye crossed the surface at v = 1.03, the crossing
+  test said "wall, not hole", and the body sank out of the bottom of the map.
+  A body standing in a mouth now counts any crossing of its surface. Found by a
+  probe firing the real portal ball at random surfaces and throwing the player
+  through with random keys (9 deaths in 250, 0 after); `rimfall.mjs` fails on the
+  old code. Every out-of-bounds death now logs `oobWhy` (which check, position,
+  velocity, up, crouch) to the console — look there first if it is reported again.
+
+## Five asks — 2026-10-01
+
+* **The border of a portal vanished when you faced away from its wall.** The
+  ring sits 8 mm further out from the wall than the disc and both are
+  transparent, so three.js sorts them back to front by depth. Facing the wall
+  the ring is the nearer and is drawn last. Face *away* from the wall with the
+  mouth still at the edge of the view and "8 mm further out" is 8 mm further
+  from the camera: the ring went first and the opaque disc painted over it. The
+  ring has `renderOrder = 1` now. `whiteportal.mjs` counts ring pixels (9,691)
+  and then puts the ring back in the depth sort as a control (267). My first
+  guess — the mouth's centre behind the camera — was wrong, and the control
+  said so: three.js sorts on clip-space z without the divide, so nothing flips
+  there. Looking exactly along the wall is a tie, broken by creation order,
+  which is why it only showed past that angle.
+* **White Out erases portals.** At release the shooter asks every mouth whether
+  this stroke's holes took any of its oval (`Erasures.holesOval`, a 5 cm grid,
+  finer than the thinnest stroke) and removes those for good; the list rides on
+  the `eo` message as `kp: [[owner, side]]` so no two screens disagree. While it
+  is still paint the mouth is only whitened: the disc and ring materials are
+  patched with `eraseMaterial` like the walls (the disc's raw shader got the
+  `#include`s the patch looks for).
+* **A mark on a platform moves with it.** The level has one `Erasures`; now
+  every platform has its own too (`movers[i].erase`), holding the same stamps
+  measured **from that platform's centre at the moment each was painted**. The
+  level's meshes, collision and rays answer only to the level's; a platform's
+  only to its own (`World.eraseOf`, `erasedOverlap`, `erasedBox`, `_rayMasks`;
+  `uEraseShift` in the shader is the platform's centre now). So a mark is a
+  place on the platform, and a platform crossing a hole in the level is not cut
+  by it. Every stamp goes into every platform's list whether or not it touches
+  it — in the platform's frame a cone that misses it always will, and it keeps
+  the sweep from the previous stamp intact. A stroke painted while the platform
+  moves has a different apex per stamp in that frame, so `simplify()` leaves it
+  alone there.
+* **Platforms are not in step between peers** (each page runs its own from when
+  it loaded — true before today, and of portals on platforms too). So `er`
+  carries `mv`, the shooter's platform centres, and the receiver places the
+  platform's copy of the stamp from those: the mark is on the same part of the
+  platform on every screen, wherever that screen's platform happens to be.
+* **Not done:** holding the circle still on a moving platform paints one dot,
+  which rides off; it does not smear a line along the platform as it slides
+  under the circle. A stamp is only made when the aim turns.
+* **A portal turns to whatever angle fits** (`fitPortal`): upright, then a
+  quarter turn, then every 5° and every edge-aligned angle outward from upright,
+  least turn first, nearer centre on a tie. The erosion uses the oval's own
+  reach toward each edge (`hypot(HALF_W nx, HALF_H ny)`), not its bounding box —
+  identical on an axis-aligned face, and the only thing that lets a turned oval
+  fit at all. `pierce()` cuts a turned oval too: the bands still run along a
+  world axis, each as wide as the turned ellipse gets inside it (shape matrix,
+  chord centre `q Suv/Svv`, half-width `sqrt((Suu - Suv²/Svv)(1 - q²/Svv))`, and
+  the extreme points when a band contains them). The axis-aligned path is
+  untouched arithmetic. `overlapsMouth` compares differently-turned coplanar
+  mouths rim against rim. Portal axes go over the wire at four decimals now.
+  A mouth turned by an odd angle turns the body by it, and the new up is rounded
+  to one of the eighteen as it always was for a mouth on a ramp.
+* **Alt+Tab, third try — still unconfirmed on the real desktop.** Hardened, not
+  proven: Alt down now calls `keyboard.unlock()` *whatever* `keyboardLocked`
+  says (that flag is set by promises: two lock requests from one click reject
+  and resolve in either order, and a stale `false` meant Alt released nothing);
+  a rejected `lock()` no longer clears the flag; a lock landing while Alt is
+  held is handed straight back; a click with Alt held does not re-lock. F3 has
+  an `alt` line (`let go of the lock Nx`) — if this is reported again, read that
+  first: 0 means the page never saw Alt, a count means Chrome was told to let go
+  and did not. Headless cannot press a compositor shortcut.
+* `gunmodel.mjs` switched weapons past `_paintGun`; it goes through `_switch`
+  now, as a player does. `portals.mjs` "a platform shoves you before it crushes
+  you" failed once in three runs at exactly its threshold (0.05, polled on a
+  16 ms clock) — a sampling flake, not chased.
+
 ## Things that were reported and are not obvious
 
 * **A phone that goes to the home screen with a thumb down delivers no
@@ -811,3 +932,24 @@ and a peer walking in front of a mouth.
   half-space push-out would stop being the right tool.
 - **A level browser.** Seeds are pasteable but not discoverable; there is no
   server to list them on.
+
+## Thrown out of the floor — 2026-10-03
+
+* **Coming out of a floor mouth head first could throw you 1.6 m up onto the
+  floor.** After a hand-over `_findStraddle` asked whether the exit had been
+  "entered from in front" (`_nearFront`), which wants a body sample between
+  0.17 behind the surface and 0.20 in front. The samples are 0.41-0.45 m apart,
+  so an eye 6-20 cm past the surface left none in that window: not in the
+  mouth, no hole in the floor, and `_unstick` lifted the whole body out. Falling
+  back in from there went middle first and put the eye above the lid for a few
+  frames. How far the eye overshoots depends on the frame times, which is why
+  `rimfall.mjs` was "flaky on a busy machine". `_through` now sets `_inMouth`
+  to the exit itself. Same overshoot before and after: thrown out 5 of 8, then
+  0 of 8.
+* **Running the suites cool.** `taskset -c 8-10` (three efficiency cores) keeps
+  the package at 76-80 C where the full machine goes past 90. Freezing a suite
+  with SIGSTOP to cool it breaks every wall-clock check; do not. On three cores
+  the fixed stopwatches in `portals.mjs` (the walk onto the lift mouth) and
+  `holdtoggle.mjs` (the aim ease) were too short, and both wait for the event
+  now. `slopes.mjs` needs five cores (`8-12`, 81 C); `settings.mjs` and
+  `clipping.mjs` each failed once in three runs on three cores.

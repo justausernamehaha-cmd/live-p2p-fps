@@ -91,6 +91,25 @@ R.forwardKeys = await keysOf('Forward');
 R.sprintKeys = await keysOf('Sprint');
 R.settingsKeys = await keysOf('Open settings');
 R.menuKeys = await keysOf('Open menu');
+// Shift is no longer sprint, and does nothing at all
+R.shiftDoesNothing = await page.evaluate(async () => {
+  const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
+  dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
+  await sleep(60);
+  const any = [...g.input.held];
+  dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
+  return any.length === 0 && !g.input.down('sprint') ? true : any;
+});
+// and a Shift saved by an older build is dropped on load
+R.oldShiftDropped = await page.evaluate(() => {
+  const saved = localStorage.getItem('pa.binds'), flag = localStorage.getItem('pa.binds.noshift');
+  localStorage.setItem('pa.binds', JSON.stringify({ KeyW: 'fwd', ShiftLeft: 'sprint', KeyV: 'sprint' }));
+  localStorage.removeItem('pa.binds.noshift');
+  const b = window.game.input._loadBinds();
+  if (saved === null) localStorage.removeItem('pa.binds'); else localStorage.setItem('pa.binds', saved);
+  if (flag === null) localStorage.removeItem('pa.binds.noshift'); else localStorage.setItem('pa.binds.noshift', flag);
+  return !b.ShiftLeft && b.KeyV === 'sprint';
+});
 
 // ------------------------------------------------------- rebind forward to I
 await page.click('#keybinds .bindrow[data-action=fwd] .bindkey');
@@ -190,6 +209,7 @@ await page.waitForTimeout(120);
 await close();
 R.sprintLatches = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
+  g.input.bind('sprint', 'ShiftLeft', null);   // no key by default: give it one here
   dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
   dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
   await sleep(200);
@@ -197,7 +217,9 @@ R.sprintLatches = await page.evaluate(async () => {
   dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
   dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
   await sleep(200);
-  return { afterTap, afterSecondTap: g.input.down('sprint') };
+  const afterSecondTap = g.input.down('sprint');
+  g.input.unbind('sprint', 'ShiftLeft');
+  return { afterTap, afterSecondTap };
 });
 
 // jump as a toggle is the mobile bunny hop: one tap and the hops keep coming
@@ -432,6 +454,13 @@ R.keyboardLock = await page.evaluate(async () => {
   g.input.keyboardLocked = false;
   await sleep(150);
   const before = { fullscreen: !!document.fullscreenElement, blocked: g.input.shortcutsBlocked };
+  // record what is locked: Alt+Tab must stay the desktop's
+  const k = navigator.keyboard;
+  if (k?.lock) {
+    const real = k.lock.bind(k);
+    window.__lockArgs = [];
+    k.lock = codes => { window.__lockArgs.push(codes ?? 'EVERYTHING'); return real(codes); };
+  }
   return { before, api: !!navigator.keyboard?.lock };
 });
 await page.mouse.click(450, 300);          // a real click, with a real gesture
@@ -440,8 +469,35 @@ R.keyboardLock.after = await page.evaluate(() => ({
   fullscreen: !!document.fullscreenElement,
   keyboardLocked: window.game.input.keyboardLocked,
   blocked: window.game.input.shortcutsBlocked,
-  label: document.getElementById('kblockval').textContent
+  label: document.getElementById('kblockval').textContent,
+  lockArgs: window.__lockArgs
 }));
+// Alt lets go of the lock (Linux/Wayland Chrome's lock takes every desktop
+// shortcut whatever keys it names), Alt+Tab is never the scoreboard, and letting
+// go of Alt takes the lock back
+R.keyboardLock.alt = await page.evaluate(async () => {
+  const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
+  const k = navigator.keyboard;
+  let unlocks = 0;
+  if (k?.unlock) { const real = k.unlock.bind(k); k.unlock = () => { unlocks++; return real(); }; }
+  const locksBefore = (window.__lockArgs || []).length;
+  const wasLocked = g.input.keyboardLocked;
+  dispatchEvent(new KeyboardEvent('keydown', { code: 'AltLeft', key: 'Alt', altKey: true }));
+  const afterAlt = { locked: g.input.keyboardLocked, unlocks };
+  dispatchEvent(new KeyboardEvent('keydown', { code: 'Tab', key: 'Tab', altKey: true }));
+  await sleep(50);
+  const scoreOnAltTab = g.input.down('score');
+  dispatchEvent(new KeyboardEvent('keyup', { code: 'Tab', key: 'Tab', altKey: true }));
+  dispatchEvent(new KeyboardEvent('keyup', { code: 'AltLeft', key: 'Alt' }));
+  await sleep(150);
+  // plain Tab still opens the scoreboard
+  dispatchEvent(new KeyboardEvent('keydown', { code: 'Tab', key: 'Tab' }));
+  await sleep(50);
+  const scoreOnTab = g.input.down('score');
+  dispatchEvent(new KeyboardEvent('keyup', { code: 'Tab', key: 'Tab' }));
+  return { wasLocked, afterAlt, scoreOnAltTab, scoreOnTab,
+           relocked: g.input.keyboardLocked, relocks: (window.__lockArgs || []).length - locksBefore };
+});
 // and turning it off hands them back
 R.keyboardLock.off = await page.evaluate(() => {
   window.game.input.setFullscreenLock(false);
@@ -455,7 +511,9 @@ await page.waitForTimeout(200);
 // -------------------------------------------------------------------- verdict
 if (!R.equalsDoesNothing) fail.push('= still opens the settings panel, and it should not');
 if (String(R.forwardKeys) !== 'W') fail.push('Forward does not show W: ' + R.forwardKeys);
-if (String(R.sprintKeys) !== 'Shift L,Shift R') fail.push('Sprint does not show both shifts as two keys: ' + R.sprintKeys);
+if (String(R.sprintKeys) !== '') fail.push('Sprint should have no key by default (Shift does nothing): ' + R.sprintKeys);
+if (!R.oldShiftDropped) fail.push('a Shift->sprint saved by an older build came back, or a custom sprint key was lost');
+if (R.shiftDoesNothing !== true) fail.push('Shift still does something: ' + R.shiftDoesNothing);
 if (String(R.settingsKeys) !== '`') fail.push('Open settings is not bound to `: ' + R.settingsKeys);
 if (String(R.menuKeys) !== 'Esc') fail.push('Open menu is not bound to Esc: ' + R.menuKeys);
 if (R.arming !== 'fwd') fail.push('clicking a key did not arm its row');
@@ -530,6 +588,20 @@ if (R.keyboardLock.api) {
   if (!R.keyboardLock.after.keyboardLocked) fail.push('navigator.keyboard.lock() never took: ' + JSON.stringify(R.keyboardLock));
   if (!R.keyboardLock.after.blocked) fail.push('the browser still owns Ctrl+W: ' + JSON.stringify(R.keyboardLock));
   if (R.keyboardLock.after.label !== 'blocked') fail.push('the settings panel misreports the lock: ' + R.keyboardLock.after.label);
+  const la = R.keyboardLock.after.lockArgs || [];
+  if (!la.length) fail.push('keyboard.lock() was never called');
+  for (const c of la) {
+    if (!Array.isArray(c)) fail.push('keyboard.lock() locked every key, Alt+Tab included');
+    else if (['Tab', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'].some(x => c.includes(x)))
+      fail.push('keyboard.lock() takes Tab/Alt/Meta, so Alt+Tab is locked: ' + c.join(','));
+    else if (!c.includes('KeyW')) fail.push('keyboard.lock() no longer takes W, so Ctrl+W closes the tab');
+  }
+  const al = R.keyboardLock.alt;
+  if (!al.wasLocked) fail.push('the Alt check started without the lock, so it proves nothing: ' + JSON.stringify(al));
+  if (al.afterAlt.locked || !al.afterAlt.unlocks) fail.push('Alt did not let go of the keyboard lock, so Alt+Tab is still caught: ' + JSON.stringify(al));
+  if (al.scoreOnAltTab) fail.push('Alt+Tab opened the scoreboard');
+  if (!al.scoreOnTab) fail.push('plain Tab no longer opens the scoreboard');
+  if (!al.relocks || !al.relocked) fail.push('letting go of Alt did not take the lock back: ' + JSON.stringify(al));
   if (R.keyboardLock.off.blocked) fail.push('turning the setting off did not hand the shortcuts back');
 }
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));

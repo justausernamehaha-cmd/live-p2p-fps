@@ -31,6 +31,7 @@ export function initNet(strategy = 'nostr') {
   return loading;
 }
 
+const r4 = v => Math.round(v * 1e4) / 1e4;
 const xyz = (p, prefix = '') =>
   ({ [prefix + 'x']: round2(p.x), [prefix + 'y']: round2(p.y), [prefix + 'z']: round2(p.z) });
 
@@ -127,13 +128,18 @@ export class Net {
   }
 
   /** One White Out stamp. Direction at four decimals: two would put the cone half
-   *  a metre off at sixty metres. */
-  erasePaint(stroke, from, dir) {
-    const r4 = v => Math.round(v * 1e4) / 1e4;
-    this._send(this.aErasePaint, { sid: stroke, ...xyz(from), dx: r4(dir.x), dy: r4(dir.y), dz: r4(dir.z) });
+   *  a metre off at sixty metres. `mv` is where every platform was on this
+   *  screen, since platforms are not in step between peers and the mark belongs
+   *  to a place on the platform. */
+  erasePaint(stroke, from, dir, movers = []) {
+    this._send(this.aErasePaint, {
+      sid: stroke, ...xyz(from), dx: r4(dir.x), dy: r4(dir.y), dz: r4(dir.z),
+      mv: movers.flatMap(c => [round2(c.x), round2(c.y), round2(c.z)])
+    });
   }
 
-  eraseOpen(stroke) { this._send(this.aEraseOpen, { sid: stroke }); }
+  /** `kp` lists the mouths the stroke erased, as [owner, side]. */
+  eraseOpen(stroke, portals = []) { this._send(this.aEraseOpen, { sid: stroke, kp: portals }); }
 
   portalBall(from, dir, side, up) {
     this._send(this.aPortalBall, {
@@ -144,8 +150,10 @@ export class Net {
 
   /** `m` names the platform the portal is on by index (same on every peer). */
   portal(side, p) {
+    // the axes at four decimals: a mouth may be turned to any angle in its face
+    const axis = (v, k) => ({ [k + 'x']: r4(v.x), [k + 'y']: r4(v.y), [k + 'z']: r4(v.z) });
     this._send(this.aPortal, {
-      s: side, ...xyz(p.c), ...xyz(p.n, 'n'), ...xyz(p.u, 'u'), ...xyz(p.v, 'v'), m: p.mover
+      s: side, ...xyz(p.c), ...axis(p.n, 'n'), ...axis(p.u, 'u'), ...axis(p.v, 'v'), m: p.mover
     });
   }
 
