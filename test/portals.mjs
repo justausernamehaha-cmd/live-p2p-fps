@@ -32,6 +32,10 @@ await page.waitForTimeout(1500);
 const R = await page.evaluate(async () => {
   const g = window.game;
   const sleep = ms => new Promise(f => setTimeout(f, ms));
+  // Putting a platform somewhere takes a frame to show in its shape. Waiting
+  // 80 ms for that was sometimes no frame at all (against the live site, every
+  // time), and the body was then stood 10 m from where the platform was.
+  const moved = async () => { for (let i = 0; i < 3; i++) await new Promise(f => requestAnimationFrame(f)); };
   const out = {};
   const keys = (...on) => {
     g.input.held.clear();
@@ -667,7 +671,7 @@ const R = await page.evaluate(async () => {
     // it shoves you ahead of it, which is the whole reason a horizontal platform
     // is something to get out of the way of.
     ride.at = 0.25; ride.dir = 1;
-    await sleep(80);
+    await moved();
     const rb2 = ride.shape;
     park(rb2.max.x + 1.2, 0.05, (rb2.min.z + rb2.max.z) / 2, 0);
     keys();
@@ -687,7 +691,7 @@ const R = await page.evaluate(async () => {
     // the room — so the wall is put there, which is the rule under test rather
     // than the arena.
     ride.at = 0.3; ride.dir = 1;
-    await sleep(80);
+    await moved();
     const rb4 = ride.shape;
     const cz = (rb4.min.z + rb4.max.z) / 2;
     const wall = { min: { x: rb4.max.x + 1.6, y: 0, z: cz - 3 },
@@ -712,7 +716,7 @@ const R = await page.evaluate(async () => {
     // jump — JUMP_SPEED 8.2 against GRAVITY 24 is 1.40 m of rise — and well
     // outside a step, which is 0.55.
     ride.at = 0.6; ride.dir = -1;
-    await sleep(80);
+    await moved();
     const rb3 = ride.shape;
     park(rb3.min.x - 3.0, 0.05, (rb3.min.z + rb3.max.z) / 2, -Math.PI / 2);
     await sleep(120);
@@ -736,7 +740,7 @@ const R = await page.evaluate(async () => {
   const edgeLift = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
   if (edgeLift) {
     edgeLift.at = 0.2; edgeLift.dir = 1;
-    await sleep(80);
+    await moved();
     const es = edgeLift.shape;
     park(es.max.x - 0.3, es.max.y, (es.min.z + es.max.z) / 2, 0);
     await sleep(150);
@@ -777,7 +781,7 @@ const R = await page.evaluate(async () => {
   const liftForBottom = g.world.movers.find(m => Math.abs(m.p1.y - m.p0.y) > 2);
   if (liftForBottom) {
     liftForBottom.at = 0.8;
-    await sleep(80);
+    await moved();
     const ls = liftForBottom.shape;
     g.portals.clear();
     g.portals.fire('me', { x: (ls.min.x + ls.max.x) / 2, y: 0.3, z: (ls.min.z + ls.max.z) / 2 },
@@ -796,7 +800,7 @@ const R = await page.evaluate(async () => {
   if (lift2) {
     const sh = lift2.shape;
     lift2.at = 1; lift2.dir = -1;
-    await sleep(80);
+    await moved();
     park((sh.min.x + sh.max.x) / 2, 0.05, (sh.min.z + sh.max.z) / 2, 0);
     g.player.hp = 100; g.player.alive = true; g.player.squashed = false;
     g.player.crouchT = 0; g.player.height = 1.8; g.player.deaths = 0;
@@ -821,7 +825,7 @@ const R = await page.evaluate(async () => {
   if (lift3) {
     g.portals.clear();
     lift3.at = 1; lift3.dir = -1;                  // at the top, on its way down
-    await sleep(80);
+    await moved();
     const sh = lift3.shape;
     const cx = (sh.min.x + sh.max.x) / 2, cz = (sh.min.z + sh.max.z) / 2;
     g.portals.place('me', 'a', { c: { x: cx, y: sh.min.y, z: cz }, n: { x: 0, y: -1, z: 0 },
@@ -981,7 +985,7 @@ const R = await page.evaluate(async () => {
 
     // and it carries whoever is standing on it
     m.at = 0.1; m.dir = 1;
-    await sleep(80);
+    await moved();
     const top = m.shape.max.y;
     const cx = (m.shape.min.x + m.shape.max.x) / 2, cz = (m.shape.min.z + m.shape.max.z) / 2;
     park(cx, top + 0.05, cz, 0);

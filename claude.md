@@ -1110,3 +1110,18 @@ Supersedes the `_chain` paragraph above: there is no `_chain` and no `target2`.
   the same way ("the game stopped rendering while paused") served side by side,
   so it is the machine, not the change; five cores hit the 85 C kill. Its
   `walks` helper now counts frames instead of milliseconds. Rerun it cool.
+
+## Against the live site — 2026-10-05 (night)
+
+* Pushed as 17d0a3d after all 32 suites passed locally (six cores, 91 C kill,
+  peak 86 C). Then the 28 browser suites against the live URL: 27 passed first
+  try; `portals.mjs` failed "a platform arriving shoves you" three times running.
+* **A race in the test, not the game.** It set `ride.at`, slept 80 ms, read the
+  platform's shape and stood the body in front of it. Against the live site that
+  80 ms was reliably no frame at all, so the shape was still the old one and the
+  body was stood 10.8 m from where the platform then appeared (probe: body at
+  -11.86, platform edge at -22.62). All eight "move a platform, then read it"
+  waits in portals.mjs are three frames now (`moved()`). Green against live and
+  local after.
+* The runner's own retry was broken that night: the temperature loop used `t`,
+  the same name as the suite loop's variable, so a "retry" ran `test/76000.mjs`.
