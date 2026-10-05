@@ -200,14 +200,26 @@ const R = await page.evaluate(async () => {
   await sleep(250);
   park(-20, 0.05, -20, 0);
   const before = g.player.portalCount;
+  // Read at the hand-over, not at the end: a jump has too little in it to
+  // climb out of the wall mouth, so the body falls back through and goes round
+  // again, and where it is after 2.4 s is a matter of timing.
+  let upAfterFirst = null;
+  const through = g.player._through.bind(g.player);
+  g.player._through = function (...a) {
+    const r = through(...a);
+    if (!upAfterFirst) upAfterFirst = { ...this.up };
+    return r;
+  };
   keys('jump');
   out.turnedOver = await watch(2400);
   keys();
+  g.player._through = through;
   out.turnedOverCrossed = g.player.portalCount - before > 0;
-  out.turnedOverUp = { ...g.player.up };
+  out.turnedOverCrossings = g.player.portalCount - before;
+  out.turnedOverUp = upAfterFirst;
   // ...and gravity really did follow the feet: coming out of a mouth whose
   // normal is -x stands you on that face, so up is -x
-  out.gravityFollowsFeet = g.player.up.x === -1;
+  out.gravityFollowsFeet = !!upAfterFirst && upAfterFirst.x === -1;
 
   g.portals.clear();
   keys();

@@ -54,7 +54,11 @@ against the live site.
 | `whiteout.mjs` | hold paints white and freezes the shooter, release makes holes, the pop at five seconds, walking through a painted slot, out of bounds is instant death, and a release killing a second page through the centre block |
 | `rimfall.mjs` | falling back into the mouth you came out of, drifting toward its rim, goes back through and never out of the map |
 | `gunmodel.mjs` | every weapon's gun is the in-hand model, identical in first person and on a body |
-| `selfview.mjs` | your own body and gun never appear in the mouth you stand in; through the other mouth you still see yourself |
+| `selfview.mjs` | standing in a mouth you see your far half (on screen and in the mouth's picture) and never the half at your eye; through the other mouth you still see yourself |
+| `nearmouth.mjs` | the last few centimetres before a mouth still show what is through it: the screen is compared with the mouth's own picture down to 2 mm |
+| `recursion.mjs` | mouths in mouths: a block beside a corridor shows once per trip, each where perspective puts it, through someone else's pair too; each trip is drawn coarser; a mouth behind a slab is not drawn; a 60 m shot down a 6 m corridor is 11 joined legs, drawn, and sent to peers |
+| `pull.mjs` | the portal pull setting: off does nothing; inside the reach is drawn through once, outside is not, a body flying away at 40 m/s still is; at 0.5 the reach is the mouth's own size |
+| `latejoin.mjs` | two real pages: the second gets the portals placed before it joined and can go through them; the first's colours do not change and the second's are 30 degrees or more away |
 | `whiteportal.mjs` | a mouth's border survives facing away from its wall (with a control that puts the bug back), a stroke takes the portal it crosses and tells the peers, and a White Out mark rides the north shuttle — in pixels and in bullets |
 | `turnedmouth.mjs` | a mouth turned 45° in its wall: through at its middle, stopped by the wall beside it inside its bounding square |
 
@@ -962,3 +966,147 @@ and a peer walking in front of a mouth.
   asks a radius-sized box at each stretch of the capsule. The check in
   `whiteout.mjs` bores the hole from 8 m (0.4 m across at the feet): from 30 m
   the hole is wide enough to cover the box and the old code passed.
+
+## A wedge between each pair of walls — 2026-10-03
+
+* The default arena has four more fillets: the same 1.6 m wedge stood on end in
+  each vertical corner (`_fillets`: a quarter turn about x, then about y so the
+  square corner is the room's). `map.mjs` asks a ray from the middle of the room
+  toward each corner: 84.15 m to the bare corner, 83.01 m to the wedge.
+  Designer rooms still have only the eight floor and ceiling fillets.
+* **A side effect of the floor-mouth fix, seen in `clipping.mjs`:** jump into a
+  low ceiling mouth whose partner is on a wall and you no longer end up standing
+  on that wall. That only ever happened because the exit threw the body out of
+  its hole; now the body stays in the hole, a jump has too little in it to climb
+  out, and you fall back through and go round again (5 crossings in 2.4 s). The
+  check reads gravity at the hand-over now. Whether that loop is wanted is the
+  user's call.
+
+## Crouching takes 50 ms each way — 2026-10-05
+
+* `CROUCH_TIME` is 0.05 s, both ways (it was 0.3). `mechanics.mjs` times the
+  descent and the rise in frames and now asserts on them; the old crouch block
+  only printed.
+
+## You see your far half — 2026-10-05
+
+* Standing in a mouth, the half of you at the *eye* is never drawn and the half
+  far from it always is. Your own view used to draw no body at all, so your
+  legs hanging out of a far mouth you could plainly see were missing; and the
+  picture in your own mouth hid both halves, so looking back at yourself through
+  it showed nobody. `renderViews` now takes `selfBody` and `selfGhost`
+  separately: own view = ghost only, your own mouth's view = body only, every
+  other view = both. `selfview.mjs` paints the two halves different colours and
+  reads each view back.
+
+## The last 4 cm of a crossing showed the wall — 2026-10-05
+
+* **Reported as "I look stuck in the wall, then teleported".** The mouth's mesh
+  sits 2 cm proud of its wall and the disc 4 mm more; the camera's near plane is
+  1.5 cm. So an eye within about 4 cm of the surface had the disc clipped away
+  and saw bare wall until the hand-over at 0. At a run that is under a frame;
+  walking in slowly or stopping half way it is the whole screen. Old, not new:
+  the pushed build does it too. Found by pinning the body at 15, 6, 4 and 3 cm
+  and screenshotting, then a raycast from the lens (disc at 0.016, wall at 0.04).
+* `PortalField._fitNear(camera)`: for a mouth the eye is within 10 cm of (and
+  roughly in front of), disc and ring are drawn 6 cm *behind* the wall with no
+  depth test, grown about the eye's foot by `(d + 0.06) / d` so the outline on
+  screen is unchanged. Reset at the top of `renderViews` (portal views must see
+  every mouth on its wall), applied after it. It also covers the other side:
+  just after the hand-over the eye is between the exit's disc and its wall.
+* `nearmouth.mjs`: the mouth's render target has the screen's viewport and
+  projection, so where the mouth covers the screen the two must be the same
+  picture. 0 difference from 15 cm to 2 mm with the fix; 16-30 of 255 at 3 cm
+  and under without it.
+* **`ghostOf` gave a body to anyone standing behind a mouth's wall.** `atMouth`
+  is two-sided to a whole body height, so within 2 m behind the surface counted
+  as "in the mouth" — invisible on a thick wall, a second body out of the far
+  mouth on the 1 m cover walls (for peers too). `mouthAround` now asks
+  `throughMouth`: across the surface, or within reach of it.
+
+## A mouth seen in itself is drawn again — 2026-10-05
+
+* Asked for: "if I can see A through B it should loop". A mouth seen in its own
+  view used to sample last frame's picture at the same place on screen, which is
+  a feedback loop and not what is there. `_chain` now carries the camera through
+  the portal once per level (M, M², ...) and `_views` draws deepest first. Only
+  a mouth's *own* chain recurses (in the view through A the exit B is hidden, so
+  the mouth you can see in it is A again); any other pair's mouth in a view
+  still shows last frame's picture.
+* **Limits:** `MAX_DEPTH` 6 trips, `MAX_RENDERS` 10 views a frame over every
+  mouth (each later mouth keeps its one), and a chain stops when the next mouth
+  in is not in the frustum, not seen from the front, or under `MIN_NESTED` (4%)
+  of the screen's height. Mouths that do not face each other cost one view, as
+  before.
+* **Two targets per recursing mouth**, alternating by level, because a picture
+  cannot be sampled while it is drawn into. Level 1 always lands in `p.target`,
+  which is what the screen and the suites read.
+* **The deepest level shows its mouth dark, not stale.** A stale picture there is
+  a fixed point: whatever was once in the middle of it is sampled back at the
+  same pixels for ever. portals.mjs caught it (24 px of a body that had been
+  taken out of the views half a second before).
+* Measured on the Arc GPU at 1846x1223: 60 fps with no portals, 60 with a 3 m
+  corridor (6 views a frame), 60 at 8 m (4 views).
+
+## Views in views, for everyone's portals — 2026-10-05 (later the same day)
+
+Supersedes the `_chain` paragraph above: there is no `_chain` and no `target2`.
+
+* **`_view` is a tree, not a chain.** To draw what is through `p` it first asks
+  `_seen` which mouths that picture will show — `p` again, its owner's other
+  pairs, anyone's — and draws each from the camera carried on through it, into a
+  pooled target, before drawing itself. A mouth it has no view for shows dark
+  (a stale picture there is the fixed point described above).
+* **Only what shows is drawn.** `_rect` is the box round a mouth on screen;
+  a view in a view gets the box of its mouth cut to its parent's box, the target
+  is scissored to it, and under 2% of the screen it is not drawn. `_inSight`
+  tries nine lines from the mouth back to the eye (to the exit's surface for a
+  view in a view) against `World.raycast`; all blocked, not drawn. Not asked for
+  a mouth the eye is within 0.5 m of.
+* **Each trip in is 0.84 as sharp as the last** (`DEPTH_SCALE`; half resolution,
+  then 0.42, 0.35, ...). The pool is per depth.
+* **`selfview.mjs` lost its control.** It counted the body anywhere in the other
+  mouth's picture; with a scissor that is 0, correctly — two mouths side by side
+  on one wall never show you yourself (the line would have to cross the oval 3 m
+  outside it). The 307 px it used to find were in a part of the picture no mouth
+  showed. portals.mjs's facing pair covers "you are drawn through a mouth".
+* **The border is flat.** It was additive, so its colour was the wall's plus its
+  own: one colour on a wall, another in a view, another in a view of that.
+* **Shots.** `SHOT_PORTALS` 2 -> 16 (range ends it sooner), the mouth test gets
+  1 mm past the wall hit (same surface, two computations), `net.shot` carries
+  every leg in `p` (older clients ignore it) and `_remoteShot` draws them, and
+  the tracer pool is 192 so a shotgun's legs do not overwrite each other.
+* Arc GPU, 1846x1223: 60 fps with no portals, a 3 m corridor (6 views), and a
+  corridor through someone else's pair (9 views).
+* portals.mjs "but still does with the rifle" failed once (aim eased to exactly
+  0.5 after a fixed 400 ms on three cores) and passed on the rerun.
+
+## Portal pull, late joiners, and colours that stay — 2026-10-05 (evening)
+
+* **Portal pull** (settings slider `#pullslider`, 0 to 1, default 0 = off, saved
+  as `pa.pull`, lives on `player.suck`). Each mouth has an egg in front of it:
+  half-axes `HALF_W * 2x` across, `HALF_H * 2x` up, and `HALF_W * 2x` out (the
+  user's "the ellipse revolves about the centre", read as the oval turned about
+  its long axis). `Player._pullStep` runs before all other movement: the body's
+  middle coming INTO an egg is flown straight to the mouth's centre at
+  max(own speed, 14 m/s) with no collision, keys or gravity, then handed over by
+  `_through` and sent out at max(own speed, a walk). Edge-triggered
+  (`_pullIn`), and `_through` marks the exit as already-inside, or the exit's
+  own egg takes you straight back for ever.
+* **Late joiners never got existing portals** — `pt` is only sent when a mouth
+  is placed. `_peerJoin` now sends your pair to the newcomer alone. This is the
+  likely source of "players should be able to see other players' portals".
+* **Colours are announced, not dealt.** `assignHues` (every join re-dealt the
+  whole room) is gone. Each player owns `portals.myHue` and says it in the
+  hello (`ph`, with `pj` = Date.now() when they started PLAYING — a player on
+  the menu announces none). `_settleHue`: if my pair is within `hueRoom(n)`
+  (30 degrees, or 90/n in a crowd) of someone who started earlier, I pick the
+  middle of the widest gap and say so. Only ever my own. Seniority is by each
+  machine's own clock, so a badly wrong clock can make the wrong one give way.
+  Builds from before this ignore `ph` and will disagree on colours until
+  everyone has reloaded.
+* **settings.mjs could not be verified today.** On three cores it failed three
+  runs on three different timing checks, and the PUSHED build's own copy failed
+  the same way ("the game stopped rendering while paused") served side by side,
+  so it is the machine, not the change; five cores hit the 85 C kill. Its
+  `walks` helper now counts frames instead of milliseconds. Rerun it cool.

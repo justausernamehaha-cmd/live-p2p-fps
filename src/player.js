@@ -42,7 +42,8 @@ const STEP_SMOOTH_MAX = 1.0;
 // box, which is how walls became climbable.
 const SKIN = 1e-3;
 const MAX_PITCH = Math.PI / 2;  // the camera builds its own basis, so no lookAt limit
-const CROUCH_TIME = 0.3;
+const CROUCH_TIME = 0.05;
+const PULL_SPEED = 14;     // how fast a mouth's pull draws a body in, at least
 // A mouth is widened by the body radius, so the rim is an entrance.
 const PORTAL_EDGE = RADIUS;
 // How close to the surface a part of the body must be to count as in the mouth.
@@ -79,6 +80,9 @@ export class Player {
     this.straddling = null;   // {link, host}: the mouth the body is in, and its wall
     this._inMouth = null;
     this._wasAt = new Map();  // last step's position in each mouth's frame
+    this.suck = 0;            // the portal pull setting, 0 (off) to 1
+    this._pull = null;        // {from, speed}: the mouth drawing us in
+    this._pullIn = new Set(); // mouths whose pull we were already inside last frame
     this.portalCount = 0;
     this.upFrom = null;       // the up the camera is rolling out of
     this.upBlend = 0;         // 1 -> 0 across the roll
@@ -163,6 +167,8 @@ export class Player {
     this.straddling = null;
     this._inMouth = null;
     this._wasAt = new Map();
+    this._pull = null;
+    this._pullIn = new Set();
     this._wasInside = false;
     this.outOfBounds = false;
     this.height = HEIGHT;
@@ -208,6 +214,8 @@ export class Player {
       this.vel.z = this.up.z * u;
       return;
     }
+
+    if (this._pullStep(dt)) return;   // a mouth has us: nothing else moves the body
 
     const wish = input.moveVector();
     this._crouch(dt, input.down('crouch'));
@@ -863,6 +871,56 @@ export class Player {
     return true;
   }
 
+  /** The portal pull (a setting, `suck`, 0 to 1). Each mouth has an egg in front
+   *  of it, the oval grown 2 x suck and turned about its long axis, so as deep as
+   *  it is wide. A body whose middle comes INTO one is drawn straight to the
+   *  middle of the mouth and through, whatever it was doing and however fast:
+   *  no keys, no gravity, no walls on the way. Coming in is the trigger, so a
+   *  body that has just come out of a mouth is not taken back by it. True while
+   *  the pull has the body. */
+  _pullStep(dt) {
+    const links = this.portals && this.suck > 0 ? this.portals.links() : null;
+    if (!links || !links.length) { this._pull = null; this._pullIn.clear(); return false; }
+    const mid = this._middle();
+
+    let link = this._pull ? links.find(l => l.from === this._pull.from) : null;
+    if (!link) {
+      this._pull = null;
+      const a = HALF_W * 2 * this.suck, b = HALF_H * 2 * this.suck;
+      const inside = new Set();
+      for (const l of links) {
+        const at = this._localOf(l.from, mid);
+        if (at.d <= 0 || (at.u / a) ** 2 + (at.v / b) ** 2 + (at.d / a) ** 2 > 1) continue;
+        inside.add(l.from);
+        if (!link && !this._pullIn.has(l.from)) link = l;
+      }
+      this._pullIn = inside;
+      if (!link) return false;
+      this._pull = { from: link.from, speed: Math.hypot(this.vel.x, this.vel.y, this.vel.z) };
+    }
+
+    // straight at a point just through the middle of the mouth
+    const p = link.from;
+    const to = { x: p.c.x - p.n.x * 0.01 - mid.x, y: p.c.y - p.n.y * 0.01 - mid.y, z: p.c.z - p.n.z * 0.01 - mid.z };
+    const dist = Math.hypot(to.x, to.y, to.z);
+    const speed = Math.max(this._pull.speed, PULL_SPEED);
+    const step = Math.min(dist, speed * dt);
+    const k = dist > 1e-9 ? step / dist : 0;
+    this.pos = { x: this.pos.x + to.x * k, y: this.pos.y + to.y * k, z: this.pos.z + to.z * k };
+    this.onGround = false;
+    this.fellAt = 0;
+    if (dist > step + 1e-9) {
+      this.vel = { x: to.x / dist * speed, y: to.y / dist * speed, z: to.z / dist * speed };
+      return true;
+    }
+    // there: go in at the speed we came with, or a walk if that was less
+    const out = Math.max(this._pull.speed, WALK);
+    this.vel = { x: -p.n.x * out, y: -p.n.y * out, z: -p.n.z * out };
+    this._pull = null;
+    this._through(link, dt);
+    return true;
+  }
+
   /** Where a point was a step ago, relative to this mouth. */
   _back(p, at, dt) {
     const v = this._relativeTo(p);
@@ -923,6 +981,7 @@ export class Player {
     this.spawnSeq++;              // peers must not smear the body across the map
 
     this._wasAt = new Map();
+    this._pullIn.add(to);         // out of this one: its pull does not take us straight back
     // We are in the exit's mouth now, so its wall gets the hole. Said outright:
     // the "entered from in front" test has gaps between its body samples, and a
     // body that fell in one was not in the mouth and was thrown out of the floor.

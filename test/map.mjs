@@ -126,7 +126,24 @@ const R = await page.evaluate(() => {
     }
   }
 
+  // ------------------------------------- and a wedge stands between two walls
+  // Asked of a ray, not of the part list: from the middle of the room at half
+  // height (clear of the floor and ceiling fillets) toward each corner, the
+  // bare walls meet at 59.5 * root two = 84.15 m; a 1.6 m wedge across the
+  // corner is met where x + z = 59.5 + 57.9, at 83.01 m, square on.
+  const cornerHits = [];
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const d = { x: sx * Math.SQRT1_2, y: 0, z: sz * Math.SQRT1_2 };
+    const hit = g.world.raycast({ x: 0, y: 6, z: 0 }, d, 200);
+    const dist = typeof hit === 'number' ? hit : hit.dist !== undefined ? hit.dist : hit.t;
+    // just beside the diagonal the wedge is still there, 2 cm nearer or further
+    const off = g.world.raycast({ x: 0.5 * sx, y: 6, z: -0.5 * sz }, d, 200);
+    const offDist = typeof off === 'number' ? off : off.dist !== undefined ? off.dist : off.t;
+    cornerHits.push({ sx, sz, dist: +dist.toFixed(3), beside: +offDist.toFixed(3) });
+  }
+
   return {
+    cornerHits,
     filletCount: fillets.length,
     filletsBackwards: backwards,
     arenaSpan: +(span * 2).toFixed(0),
@@ -146,6 +163,10 @@ if (R.badSpawns) fail.push(`${R.badSpawns} spawn points are inside geometry`);
 if (R.filletCount !== 8) fail.push(`expected 8 corner fillets, found ${R.filletCount}`);
 if (R.filletsBackwards.length)
   fail.push(`${R.filletsBackwards.length} corner fillets are built backwards: ${JSON.stringify(R.filletsBackwards)}`);
+for (const c of R.cornerHits) {
+  if (Math.abs(c.dist - 83.014) > 0.02 || Math.abs(c.beside - 83.014) > 0.02)
+    fail.push(`no 45-degree wedge between the walls at corner ${c.sx},${c.sz}: ` + JSON.stringify(c));
+}
 if (!R.spawnsOnGround) fail.push('a spawn point has nothing under it');
 
 console.log(JSON.stringify(R, null, 2));

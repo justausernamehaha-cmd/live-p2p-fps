@@ -431,8 +431,9 @@ R.oldSeedStillLoads = await page.evaluate(() => {
 });
 
 // -------------------------------------------------------------------- verdict
-// eight stairs plus the eight corner fillets, floor and ceiling
-if (R.arena.ramps !== 16) fail.push('the arena does not have sixteen ramps: ' + JSON.stringify(R.arena));
+// eight stairs, the eight corner fillets of floor and ceiling, and the four
+// that stand between two walls
+if (R.arena.ramps !== 20) fail.push('the arena does not have twenty ramps: ' + JSON.stringify(R.arena));
 if (!R.every45) fail.push('a slope in the default map is not 45 degrees: ' + JSON.stringify(R.pitches));
 if (!R.fillet.keptTheirWall) fail.push('a corner fillet turned a wall-walker over — only a portal may do that: ' + JSON.stringify(R.fillet));
 if (!R.fillet.walkedOnTheFillet) fail.push('a wall-walker could not stand on the corner fillet at all: ' + JSON.stringify(R.fillet));

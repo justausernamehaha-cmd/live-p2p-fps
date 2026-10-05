@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { buildGun, paintGun } from './gunmodel.js';
 import { WEAPONS } from './weapons.js';
 
-const TRACERS = 48;
+const TRACERS = 192;     // a shotgun through a corridor of portals is a leg per pellet per trip
 const IMPACTS = 32;
 
 export class Effects {

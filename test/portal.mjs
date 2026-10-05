@@ -10,7 +10,7 @@
 //   node test/portal.mjs
 import {
   HALF_W, HALF_H, faceOf, fitPortal, frameFor, portalMap, atMouth, mouthAround,
-  assignHues, overlapsMouth, pierce
+  pickHue, hueGap, hueRoom, huePair, SOLO_HUE, overlapsMouth, pierce
 } from '../src/portal.js';
 import { anglesIn, UP_Y } from '../src/frame.js';
 const lookAngles = d => anglesIn(UP_Y, d);
@@ -222,40 +222,27 @@ t('a portal refuses to swallow its own partner', overlapsMouth(A, { ...A }));
 t('...but two a room apart are fine', !overlapsMouth(A, B));
 
 // ------------------------------------------------------------------ colours
-const solo = assignHues([{ id: 'me', r: 0.7 }]);
 t('alone, the pair is blue and orange',
-  solo.get('me').a === 0x37a2f2 || Math.abs(solo.get('me').hue - 210) < 1e-9,
-  '#' + solo.get('me').a.toString(16));
+  Math.abs(SOLO_HUE - 210) < 1e-9 && huePair(SOLO_HUE).a === huePair(210).a,
+  '#' + huePair(SOLO_HUE).a.toString(16));
+t('a pair is the same pair either way round', hueGap(30, 210) === 0 && hueGap(10, 170) === 20);
+t('a newcomer keeps the hue they have when nobody is near it', pickHue([210], 100) === 100);
+t('...and gives it up when somebody is', hueGap(pickHue([210], 215), 210) >= 30, fx(pickHue([210], 215)));
 
-// every peer folds the same set together, whatever order it arrives in
-const people = [{ id: 'ddd', r: 0.11 }, { id: 'aaa', r: 0.93 }, { id: 'ccc', r: 0.4 },
-                { id: 'bbb', r: 0.62 }];
-const one = assignHues(people);
-const two = assignHues([...people].reverse());
-t('everybody reaches the same colours regardless of order',
-  [...one].every(([id, p]) => two.get(id).a === p.a && two.get(id).b === p.b));
-
-// no two mouths anywhere in the room may look alike
-for (let n = 2; n <= 8; n++) {
-  const room = Array.from({ length: n }, (_, i) => ({ id: 'p' + i, r: (i * 0.37) % 1 }));
-  const hues = [];
-  for (const p of assignHues(room).values()) hues.push(p.hue % 360, (p.hue + 180) % 360);
-  let worst = 360;
-  for (let i = 0; i < hues.length; i++) {
-    for (let j = i + 1; j < hues.length; j++) {
-      let d = Math.abs(hues[i] - hues[j]) % 360;
-      worst = Math.min(worst, Math.min(d, 360 - d));
-    }
-  }
-  t(`${n} players: no two mouths share a hue`, worst > 360 / (2 * n) * 0.5,
-    'closest ' + fx(worst) + ' degrees');
+// One by one into a room, every newcomer wanting the very pair the first has.
+// Nobody already there is ever asked to change (pickHue only answers for the
+// newcomer), and no two pairs end up alike: 30 degrees apart, or as far as a
+// full room allows.
+for (let n = 2; n <= 12; n++) {
+  const room = [SOLO_HUE];
+  while (room.length < n) room.push(pickHue(room, SOLO_HUE));
+  let worst = 180;
+  for (let i = 0; i < n; i++) for (let k = i + 1; k < n; k++) worst = Math.min(worst, hueGap(room[i], room[k]));
+  t(`${n} players: no two pairs are alike`, worst >= hueRoom(n) - 1e-9,
+    'closest ' + fx(worst) + ' degrees, need ' + fx(hueRoom(n)));
 }
-
-// the shared random really does move when somebody refreshes
-const before = assignHues([{ id: 'a', r: 0.1 }, { id: 'b', r: 0.2 }]).get('a').hue;
-const after = assignHues([{ id: 'a', r: 0.1 }, { id: 'b', r: 0.85 }]).get('a').hue;
-t('one player refreshing re-rolls the room', Math.abs(before - after) > 1e-6,
-  fx(before) + ' -> ' + fx(after));
+t('up to three players it is the full 30 degrees', hueRoom(2) === 30 && hueRoom(3) === 30);
+t('...and a crowd is allowed closer', hueRoom(9) === 10);
 
 // ------------------------------------------------------ platforms in a seed
 const lvl = new Level(40, 40, 12);

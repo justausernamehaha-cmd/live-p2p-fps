@@ -74,7 +74,7 @@ export class Net {
 
     this.room.onPeerJoin = id => {
       this.h.onJoin?.(id);
-      this.aHello.send({ name: this.profile.name, pr: this.profile.pr }, { target: id });
+      this.aHello.send(this._hello(), { target: id });
     };
     this.room.onPeerLeave = id => {
       this.pings.delete(id);
@@ -118,8 +118,11 @@ export class Net {
     });
   }
 
-  shot(from, to, weaponId) {
-    this._send(this.aShot, { ...xyz(from), ...xyz(to, 't'), w: weaponId });
+  /** `rest` is the path past the first portal: a start and an end per leg. */
+  shot(from, to, weaponId, rest = []) {
+    const m = { ...xyz(from), ...xyz(to, 't'), w: weaponId };
+    if (rest.length) m.p = rest.flatMap(v => [round2(v.x), round2(v.y), round2(v.z)]);
+    this._send(this.aShot, m);
   }
 
   hit(peerId, damage, head, erased = false) {
@@ -149,12 +152,13 @@ export class Net {
   }
 
   /** `m` names the platform the portal is on by index (same on every peer). */
-  portal(side, p) {
+  /** To everyone, or to `target` alone (someone who joined after it was placed). */
+  portal(side, p, target) {
     // the axes at four decimals: a mouth may be turned to any angle in its face
     const axis = (v, k) => ({ [k + 'x']: r4(v.x), [k + 'y']: r4(v.y), [k + 'z']: r4(v.z) });
     this._send(this.aPortal, {
       s: side, ...xyz(p.c), ...axis(p.n, 'n'), ...axis(p.u, 'u'), ...axis(p.v, 'v'), m: p.mover
-    });
+    }, target ? { target } : undefined);
   }
 
   askSeed() { this._send(this.aSeedAsk, { }); }
@@ -162,7 +166,13 @@ export class Net {
 
   died(killerId, how = '') { this._send(this.aDied, { by: killerId || '', how }); }
   chat(text) { this._send(this.aChat, { t: String(text).slice(0, 120) }); }
-  hello() { this._send(this.aHello, { name: this.profile.name, pr: this.profile.pr }); }
+  hello() { this._send(this.aHello, this._hello()); }
+  /** Name, and once playing the portal hue (`ph`) and when play began (`pj`). */
+  _hello() {
+    const m = { name: this.profile.name };
+    if (Number.isFinite(this.profile.ph)) { m.ph = this.profile.ph; m.pj = this.profile.pj; }
+    return m;
+  }
 
   leave() {
     clearInterval(this._pingTimer);

@@ -383,7 +383,7 @@ brake. Bumping into something is the one way to lose it: any surface that actual
 stops you, head-on or glancing, collapses a hop chain back to running speed.
 
 Sprint latches: tap `Shift` once and you keep sprinting until you release
-forward. Crouching takes 0.3 s each way so it cannot be flickered, and stairs are
+forward. Crouching takes 50 ms each way, and stairs are
 climbed as a straight line — the body steps up instantly for collision, the view
 follows at a constant rate.
 

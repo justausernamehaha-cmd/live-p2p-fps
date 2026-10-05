@@ -58,12 +58,15 @@ const walks = code => page.evaluate(async code => {
   g.player.pos = { x: 0, y: 0.2, z: 0 };
   g.player.vel = { x: 0, y: 0, z: 0 };
   g.player.yaw = 0; g.player.pitch = 0;
-  await sleep(180);
+  // held for a dozen frames, not for a time: on a few slow cores 320 ms was
+  // sometimes not one frame, and a working key "did not move the player"
+  const frames = async n => { for (let i = 0; i < n; i++) await new Promise(f => requestAnimationFrame(f)); };
+  await frames(6);
   const z0 = g.player.pos.z;
   dispatchEvent(new KeyboardEvent('keydown', { code }));
-  await sleep(320);
+  await frames(12);
   dispatchEvent(new KeyboardEvent('keyup', { code }));
-  await sleep(60);
+  await frames(3);
   g.world.boxes = real;
   return +(g.player.pos.z - z0).toFixed(2);
 }, code);

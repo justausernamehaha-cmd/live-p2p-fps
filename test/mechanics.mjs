@@ -67,22 +67,32 @@ const R = await page.evaluate(async () => {
   g.world.boxes = sprintBoxes;
   await sleep(100);
 
-  // ---- crouch is a 0.3s animation, not a snap ----
+  // ---- crouching takes 50 ms each way ----
   park(0, 0.3, -20);
   await sleep(300);
   const h0 = g.player.height;
+  const frame = () => new Promise(f => requestAnimationFrame(f));
   keys('crouch');
-  await sleep(80);
-  const hMid = g.player.height;
-  await sleep(400);
+  const tDown = performance.now();
+  let downMs = null;
+  for (let i = 0; i < 60 && downMs === null; i++) {
+    await frame();
+    if (g.player.crouchT >= 1) downMs = performance.now() - tDown;
+  }
   const hEnd = g.player.height;
   keys();
-  await sleep(500);
+  const tUp = performance.now();
+  let upMs = null;
+  for (let i = 0; i < 60 && upMs === null; i++) {
+    await frame();
+    if (g.player.crouchT <= 0) upMs = performance.now() - tUp;
+  }
+  await sleep(200);
   out.crouch = {
     standing: +h0.toFixed(2),
-    partwayAt80ms: +hMid.toFixed(2),
+    downMs: downMs === null ? null : Math.round(downMs),
     crouched: +hEnd.toFixed(2),
-    animated: hMid < h0 - 0.05 && hMid > hEnd + 0.05,
+    upMs: upMs === null ? null : Math.round(upMs),
     stoodBackUp: +g.player.height.toFixed(2)
   };
 
@@ -325,6 +335,11 @@ if (out.edit && out.edit.hpAfter !== out.edit.hpBefore) fail.push('damage got th
 if (!(out.onExit && Math.abs(out.onExit.protectedFor - 3) < 0.4)) fail.push('protection is not 3s: ' + out.onExit?.protectedFor);
 if (!(out.after3s && out.after3s.protectionExpired)) fail.push('protection outlasted 3s');
 if (!(out.after3s && out.after3s.timerPassed)) fail.push('the protection timer outlasted 3s');
+const c = out.crouch;
+if (!(c && c.downMs !== null && c.downMs <= 120)) fail.push('crouching down is not about 50 ms: ' + c?.downMs);
+if (!(c && Math.abs(c.crouched - 1.15) < 0.01)) fail.push('a full crouch is not 1.15 m: ' + c?.crouched);
+if (!(c && c.upMs !== null && c.upMs <= 120)) fail.push('standing up is not about 50 ms: ' + c?.upMs);
+if (!(c && Math.abs(c.stoodBackUp - 1.8) < 0.01)) fail.push('did not stand back up: ' + c?.stoodBackUp);
 if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 if (fail.length) { console.log('FAIL: ' + fail.join('\n      ')); await browser.close(); process.exit(1); }
 console.log('PASS');

@@ -11,7 +11,7 @@ import { Level, MIN_W, MAX_W, MIN_H, MAX_H } from './level.js';
 import { Designer } from './designer.js';
 import { Audio } from './audio.js';
 import { PortalField } from './portalgun.js';
-import { portalMap, HALF_W, HALF_H } from './portal.js';
+import { portalMap, HALF_W, HALF_H, hueGap, hueRoom, pickHue } from './portal.js';
 import { lookFrom, anglesIn, basisFor, upFromIndex, UPS } from './frame.js';
 import { Net, initNet, getSelfId } from './net.js';
 import { ERASE_ANGLE, HOLE_TIME, STAMP_STEP } from './erase.js';
@@ -29,7 +29,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const DESIGN_CODE = /^level[\s_-]*design(er)?$/i;
 const CRUSHED_BY = '#platform';  // killer ids that are not players
 const OUT_OF_BOUNDS = '#bounds';
-const SHOT_PORTALS = 2;          // how many mouths one shot may pass
+const SHOT_PORTALS = 16;         // how many mouths one shot may pass; its range usually ends it first
 const BODY_RADIUS = 0.17;        // a peer's drawn body, for White Out hits
 const WHITE_OUT_ID = WEAPONS.findIndex(w => w.erase);
 const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
@@ -124,6 +124,8 @@ class Game {
     // your own body, seen only through portals
     this.selfAvatar = new SelfAvatar(this.scene);
     this.portals.selfView = this.selfAvatar.root;
+    this.portals.selfBody = this.selfAvatar.group;
+    this.portals.selfGhost = this.selfAvatar.ghost;
 
     addEventListener('resize', () => this._resize());
     addEventListener('orientationchange', () => setTimeout(() => this._resize(), 120));
@@ -218,6 +220,22 @@ class Game {
     sens.addEventListener('input', () => {
       this.input.setSensitivity(Number(sens.value) / 100);
       showSens();
+    });
+
+    // how far a portal reaches for you: 0 is off, 1 is twice its own size
+    const pull = document.getElementById('pullslider');
+    const pullVal = document.getElementById('pullval');
+    const setPull = v => {
+      this.player.suck = clamp(Number(v) || 0, 0, 1);
+      pullVal.textContent = this.player.suck > 0 ? this.player.suck.toFixed(2) : 'off';
+    };
+    let savedPull = 0;
+    try { savedPull = Number(localStorage.getItem('pa.pull')) || 0; } catch { /* private mode */ }
+    setPull(savedPull);
+    pull.value = this.player.suck;
+    pull.addEventListener('input', () => {
+      setPull(pull.value);
+      try { localStorage.setItem('pa.pull', String(this.player.suck)); } catch { /* private mode */ }
     });
 
     // Swallowing Ctrl+W needs fullscreen, so it is a checkbox, and its label says
@@ -354,8 +372,8 @@ class Game {
   /** Open a room (initNet must have finished). */
   _openRoom(room) {
     this._dropNet();
-    this.net = new Net(room, { name: this.name || 'player', pr: this.portals.myRandom },
-                       this._netHandlers());
+    // no portal hue yet: a player still on the menu has no say in the colours
+    this.net = new Net(room, { name: this.name || 'player' }, this._netHandlers());
     this._roomOpenedAt = now();
   }
 
@@ -452,6 +470,7 @@ class Game {
 
   leaveRoom() {
     this._dropNet();
+    this.portals.joinedAt = 0;
     this._stroke = null;
     this.portals.clear();
     this.world.eraseClear();
@@ -483,7 +502,8 @@ class Game {
       onHello: (id, m) => {
         const r = this._remote(id);
         r.setName(String(m.name || '').slice(0, 14));
-        r.portalRandom = num(m.pr, 0);
+        r.portalHue = num(m.ph, NaN);
+        r.portalJoined = num(m.pj, 0);
         this._recolour();
       },
       onState: (id, s) => this._remote(id).onState(s),
@@ -529,6 +549,7 @@ class Game {
     this.player.spawn(this.world.randomSpawn());
     this.loadout.refill();
     this.running = true;
+    this._announceHue();
     this.menuOpen = false;
     this.hud.showGame(this.input.hasTouch);
     this.hud.status('');
@@ -541,6 +562,9 @@ class Game {
 
   _peerJoin(id) {
     this._remote(id);
+    // they were not here when these were placed, and nothing else will tell them
+    const mine = this.portals.pairs.get(this.portals.selfId);
+    for (const side of ['a', 'b']) if (mine && mine[side]) this.net?.portal(side, mine[side], id);
     this.audio.join();
     this.hud.feed('a player connected', 'chat');
   }
@@ -573,11 +597,36 @@ class Game {
     for (const [id, r] of this.remotes) r.setColor(PLAYER_COLORS[colorIndexFor(id, ids)]);
 
     this.portals.setSelfId(getSelfId());
-    this.portals.recolour([
-      { id: this.portals.selfId, r: this.portals.myRandom },
-      ...[...this.remotes].map(([id, r]) => ({ id, r: r.portalRandom || 0 }))
-    ]);
+    this._settleHue();
+    this.portals.recolour([...this.remotes].map(([id, r]) => ({ id, hue: r.portalHue })));
     this._paintGun();
+  }
+
+  /** Portal colours. Each player keeps the pair they have; when two pairs are
+   *  too alike, the one who started playing later picks another and says so.
+   *  That is only ever decided about your own pair, so nobody who was already
+   *  here sees theirs change. */
+  _settleHue() {
+    const me = getSelfId(), mine = this.portals.joinedAt;
+    if (!this.net || !mine) return;
+    const playing = [...this.remotes].filter(([, r]) => Number.isFinite(r.portalHue));
+    const need = hueRoom(playing.length + 1);
+    const gaveWay = playing.some(([id, r]) => hueGap(r.portalHue, this.portals.myHue) < need &&
+      (r.portalJoined < mine || (r.portalJoined === mine && id < me)));
+    if (!gaveWay) return;
+    this.portals.myHue = pickHue(playing.map(([, r]) => r.portalHue), this.portals.myHue);
+    this.net.profile.ph = this.portals.myHue;
+    this.net.hello();
+  }
+
+  /** Now playing in a room: take a place in the colours, and say so. */
+  _announceHue() {
+    if (!this.net) return;
+    this.portals.joinedAt = Date.now();
+    this.net.profile.ph = this.portals.myHue;
+    this.net.profile.pj = this.portals.joinedAt;
+    this._recolour();
+    this.net.hello();
   }
 
   _remotePortal(id, m) {
@@ -595,7 +644,15 @@ class Game {
     const to = { x: num(m.tx), y: num(m.ty), z: num(m.tz) };
     const w = WEAPONS[m.w] || WEAPONS[0];
     this.effects.tracer(from, to, w.color);
-    this.effects.impact(to, { x: 0, y: 0, z: 0 });
+    // the legs past each portal, as start and end points
+    const rest = Array.isArray(m.p) ? m.p.slice(0, SHOT_PORTALS * 6) : [];
+    let last = to;
+    for (let i = 0; i + 5 < rest.length; i += 6) {
+      const a = { x: num(rest[i]), y: num(rest[i + 1]), z: num(rest[i + 2]) };
+      last = { x: num(rest[i + 3]), y: num(rest[i + 4]), z: num(rest[i + 5]) };
+      this.effects.tracer(a, last, w.color);
+    }
+    this.effects.impact(last, { x: 0, y: 0, z: 0 });
     const d = Math.hypot(from.x - this.player.pos.x, from.y - this.player.pos.y, from.z - this.player.pos.z);
     this.audio.shot(m.w, d);
   }
@@ -848,8 +905,8 @@ class Game {
     this.viewmodel.fire(w.shakeScale);
     this.audio.shot(w.id, 0);
     p.addRecoil(w.recoil, (Math.random() - 0.5) * w.recoilYaw * 2);
-    // peers get only the first leg: past a portal the line would cross a wall
-    this.net?.shot(muzzle, (tracerPath && tracerPath[1]) || endPoint, w.id);
+    // peers get every leg: one straight line past a portal would cross a wall
+    this.net?.shot(muzzle, (tracerPath && tracerPath[1]) || endPoint, w.id, tracerPath ? tracerPath.slice(2) : []);
 
     let killed = false;
     for (const [id, e] of damageByPeer) {
@@ -998,7 +1055,9 @@ class Game {
         if (h && h.dist < seg.dist) seg = { dist: h.dist, player: r, head: h.head };
       }
 
-      const gate = hop < SHOT_PORTALS ? this.portals.rayHit(o, d, seg.dist) : null;
+      // a hair past the wall: the mouth is on that wall's own surface, and the
+      // two distances are the same number worked out two ways
+      const gate = hop < SHOT_PORTALS ? this.portals.rayHit(o, d, seg.dist + 1e-3) : null;
       if (gate) {
         const at = o.clone().addScaledVector(d, gate.t);
         const map = portalMap(gate.from, gate.to);

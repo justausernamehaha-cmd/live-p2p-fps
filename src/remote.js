@@ -197,7 +197,8 @@ export class RemotePlayer extends Avatar {
     this.lastSeen = now();
     this.flash = 0;
     this.spawnSeq = -1;
-    this.portalRandom = 0;  // their share of everybody's portal colours
+    this.portalHue = NaN;   // the portal pair they announced; NaN until they are playing
+    this.portalJoined = 0;  // and when they began: the later of two alike gives way
     this.settling = true;   // hidden until there are snapshots at the current spawn
     this.shielded = false;
     this.pos = new THREE.Vector3();

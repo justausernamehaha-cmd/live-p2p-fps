@@ -329,7 +329,7 @@ export class World {
                     [flip ? Math.PI : 0, ry, 0]);
   }
 
-  /** A fillet in every inside corner, floor and ceiling. */
+  /** A fillet in every inside corner: floor, ceiling, and wall to wall. */
   _fillets(inner, color) {
     const F = FILLET, top = WALL_H - FILLET;
     const runs = [
@@ -339,6 +339,13 @@ export class World {
     for (const [cx, cz, width, axis, dir] of runs) {
       this.slope(cx, cz, width, F, axis, dir, color);
       this.slope(cx, cz, width, F, axis, dir, color, top, true);
+    }
+    // ...and between each pair of walls: the same wedge stood on end (a quarter
+    // turn about x), then turned so its square corner is the room's.
+    const turn = { '1,-1': 0, '-1,-1': Math.PI / 2, '-1,1': Math.PI, '1,1': -Math.PI / 2 };
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      this.add(sx * (inner - F / 2), (WALL_H - F) / 2, sz * (inner - F / 2), F, F, WALL_H, color,
+               SHAPE_SLOPE, [Math.PI / 2, turn[sx + ',' + sz], 0]);
     }
   }
 

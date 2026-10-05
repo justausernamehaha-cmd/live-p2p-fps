@@ -306,38 +306,73 @@ export function pierce(box, p, pad = 0) {
 /** The link whose mouth a body is standing in, if any. */
 export function mouthAround(links, pos, up, height, reach, edge) {
   for (const link of links) {
-    if (atMouth(link.from, pos, up, height, reach, edge)) return link;
+    if (throughMouth(link.from, pos, up, height, reach, edge)) return link;
   }
   return null;
 }
 
-// ------------------------------------------------------------------ colours
-// No authority hands colours out. Each player announces one random number and
-// everyone folds the same sorted set into the same hues. A pair is (h, h+180), so
-// every first hue lives in one half of the circle and pairs never collide.
-const BLUE = 210;
-
-export function assignHues(players) {
-  const list = [...players].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const out = new Map();
-  if (list.length === 0) return out;
-  if (list.length === 1) {
-    out.set(list[0].id, pair(BLUE, 0));
-    return out;
+/** Is a body part way through this mouth: across its surface, or within `reach`
+ *  of it? Unlike atMouth() a body wholly behind the wall is not, or standing
+ *  behind a thin wall with a mouth on its far side grew a second body. */
+function throughMouth(p, pos, up, height, reach, edge) {
+  const at = h => {
+    const dx = pos.x + up.x * h - p.c.x, dy = pos.y + up.y * h - p.c.y, dz = pos.z + up.z * h - p.c.z;
+    return {
+      d: dx * p.n.x + dy * p.n.y + dz * p.n.z,
+      su: (dx * p.u.x + dy * p.u.y + dz * p.u.z) / (HALF_W + edge),
+      sv: (dx * p.v.x + dy * p.v.y + dz * p.v.z) / (HALF_H + edge)
+    };
+  };
+  const feet = at(0), head = at(height);
+  if (Math.min(feet.d, head.d) > reach || Math.max(feet.d, head.d) < -reach) return false;
+  if (feet.d * head.d < 0) {               // across it: judge where it crosses
+    const t = feet.d / (feet.d - head.d);
+    const su = feet.su + (head.su - feet.su) * t, sv = feet.sv + (head.sv - feet.sv) * t;
+    return su * su + sv * sv <= 1;
   }
-  let sum = 0;
-  for (const p of list) sum += (Number.isFinite(p.r) ? p.r : 0);
-  const rot = sum - Math.floor(sum);
-  const n = list.length;
-  const slot = 180 / n;
-  list.forEach((p, i) => {
-    const r = Number.isFinite(p.r) ? p.r : 0;
-    const jitter = (r - 0.5) * slot * 0.4;
-    const h = (BLUE + slot * (i + rot) + jitter + 360) % 360;
-    out.set(p.id, pair(h, i));
-  });
-  return out;
+  for (const frac of BODY_SAMPLES) {
+    const s = at(height * frac);
+    if (Math.abs(s.d) <= reach && s.su * s.su + s.sv * s.sv <= 1) return true;
+  }
+  return false;
 }
+
+// ------------------------------------------------------------------ colours
+// No authority hands colours out, and nobody's colours are changed for them:
+// each player picks their own hue and says so. A pair is (h, h+180), so a pair
+// is one point on a half circle and two pairs are as alike as those points are
+// close. Whoever joined later is the one who moves when two are too close.
+const BLUE = 210;
+export const SOLO_HUE = BLUE;
+const HUE_SEP = 30;
+
+/** How far apart two pairs are, in degrees of the half circle (0 to 90). */
+export function hueGap(a, b) {
+  const d = (((a - b) % 180) + 180) % 180;
+  return Math.min(d, 180 - d);
+}
+
+/** How close two pairs may be with `n` players: 30 degrees, and less only when
+ *  the room is too full for that (the middle of the widest gap is always at
+ *  least this far from everyone). */
+export function hueRoom(n) { return Math.min(HUE_SEP, 90 / Math.max(1, n)); }
+
+/** A hue for someone joining a room with `taken` in it: the one they `want` if
+ *  it is clear of everybody, else the middle of the widest gap. */
+export function pickHue(taken, want) {
+  const need = hueRoom(taken.length + 1);
+  if (taken.every(t => hueGap(t, want) >= need)) return want;
+  const s = taken.map(t => ((t % 180) + 180) % 180).sort((a, b) => a - b);
+  let widest = -1, at = 0;
+  for (let i = 0; i < s.length; i++) {
+    const next = i + 1 < s.length ? s[i + 1] : s[0] + 180;
+    if (next - s[i] > widest) { widest = next - s[i]; at = s[i] + widest / 2; }
+  }
+  return at % 180;
+}
+
+/** The two colours of a hue. */
+export function huePair(h) { return pair(h, 0); }
 
 function pair(h, i) {
   const sat = i % 2 ? 0.72 : 0.92;

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  HALF_W, HALF_H, faceOf, fitPortal, overlapsMouth, assignHues, SOLO_PAIR, rayPortal
+  HALF_W, HALF_H, faceOf, fitPortal, overlapsMouth, huePair, SOLO_HUE, SOLO_PAIR, rayPortal
 } from './portal.js';
 import { eraseMaterial } from './erase.js';
 
@@ -17,8 +17,26 @@ const BALL_STEP = 1.2;        // metres per collision query along its flight
 // Seeing through a portal re-renders the scene, so it is rationed: on-screen
 // mouths only, nearest first, at most MAX_VIEWS, at half resolution.
 const MAX_VIEWS = 4;
+// A mouth seen in a view (itself again, or anyone's) is drawn from one more trip
+// through, and so on in: at most MAX_DEPTH trips and MAX_RENDERS views a frame
+// in all. Each trip in is drawn DEPTH_SCALE coarser than the one before, and
+// only the part of it the mouth it is seen through leaves on screen. A mouth
+// with under MIN_SEEN of the screen showing, or with level in the way of every
+// line to it, is not drawn at all.
+const MAX_DEPTH = 6;
+const MAX_RENDERS = 10;
+const DEPTH_SCALE = 0.84;
+const MIN_SEEN = 0.02;        // of the screen's width or height
+const FULL = { x0: -1, y0: -1, x1: 1, y1: 1 };
+// where on a mouth a line of sight is tried: the middle and eight round the rim
+const SIGHT = [[0, 0], ...Array.from({ length: 8 }, (_, i) =>
+  [0.85 * Math.cos(i * Math.PI / 4), 0.85 * Math.sin(i * Math.PI / 4)])];
 const VIEW_SCALE = 0.5;
 const VIEW_RANGE = 90;
+const SEAT = 0.02;            // the mesh sits this far proud of its wall
+const DISC_Z = 0.004, RING_Z = 0.012;
+const NEAR_ZONE = 0.1;        // an eye closer to the wall than this would clip the picture
+const NEAR_BACK = 0.06;       // so it is drawn this far behind the wall instead
 
 // The virtual camera renders the same viewport and projection, so the disc
 // samples its view in screen space and needs no UVs.
@@ -63,24 +81,25 @@ export class PortalField {
     this.selfId = 'me';          // until there is a network id
     this._links = [];            // rebuilt only when a portal changes
     // this page's contribution to everybody's colours, new on every refresh
-    this.myRandom = Math.random();
+    this.myHue = SOLO_HUE;       // this player's own pair; only they ever change it
+    this.joinedAt = 0;           // when they started playing: later comers give way
     this.colors.set(this.selfId, { ...SOLO_PAIR });
     this.onPlaced = null;        // the game broadcasts from here
-    this.selfView = null;        // drawn only into portal views: your own body
+    this.selfView = null;        // your own body: both halves in portal views,
+    this.selfBody = null;        // only the half out of a far mouth in your own
+    this.selfGhost = null;
     this._vcam = new THREE.PerspectiveCamera();
     this._vcam.matrixAutoUpdate = false;
     this._plane = new THREE.Plane();
-    this._m = new THREE.Matrix4();
     this._viewSize = { w: 0, h: 0 };
   }
 
   // ------------------------------------------------------------------ colours
-  /** Every peer runs this over the same announcements and gets the same colours. */
+  /** Everyone wears the hue they announced; `entries` is [{id, hue}]. */
   recolour(entries) {
-    const hues = assignHues(entries);
     this.colors = new Map();
-    for (const [id, pair] of hues) this.colors.set(id, pair);
-    if (!this.colors.has(this.selfId)) this.colors.set(this.selfId, { ...SOLO_PAIR });
+    for (const e of entries) if (Number.isFinite(e.hue)) this.colors.set(e.id, huePair(e.hue));
+    this.colors.set(this.selfId, huePair(this.myHue));
     for (const [owner, pair] of this.pairs) {
       for (const side of ['a', 'b']) {
         if (pair[side]) this._paint(pair[side], this.colorFor(owner, side));
@@ -289,53 +308,213 @@ export class PortalField {
   /** Render what is behind every mouth worth drawing, from the player's camera
    *  moved through the portal. The near plane is bent onto the exit's plane, and
    *  the EXIT is hidden (the virtual camera stands right behind it). Mouths seen
-   *  inside a view keep last frame's texture, which gives the corridor effect. */
+   *  inside a view are drawn from further through again (_view). */
   renderViews(renderer, scene, camera) {
-    const all = this._all().filter(p => p.group);
-    if (!all.length) return;
+    this._fitNear(null);       // views are drawn with every mouth on its wall
+    // Your own camera is inside the body, so it draws only the other half, out
+    // of the far mouth — the one you can see from where you stand.
+    const self = this.selfView && this.selfBody && this.selfGhost ? this.selfView : null;
+    const ghost = !!self && this.selfGhost.visible;
+    this._views(renderer, scene, camera, self, ghost);
+    this._fitNear(camera);
+    if (!self) return;
+    this.selfGhost.visible = ghost;
+    this.selfBody.visible = false;
+    self.visible = ghost;
+  }
+
+  /** A mouth's picture stands 2.4 cm proud of its wall, so an eye in the last
+   *  4 cm before the surface has it inside the near plane and sees bare wall
+   *  until the hand-over. For a mouth the eye is that close to, the picture is
+   *  drawn from behind the wall instead, without a depth test, and grown about
+   *  the eye so its outline on screen is still the oval's. Null puts all back. */
+  _fitNear(camera) {
+    const eye = camera ? camera.getWorldPosition(this._eye = this._eye || new THREE.Vector3()) : null;
+    for (const p of this._all()) {
+      if (!p.group) continue;
+      let k = 1, lu = 0, lv = 0;
+      if (eye) {
+        const dx = eye.x - p.c.x, dy = eye.y - p.c.y, dz = eye.z - p.c.z;
+        const d = dx * p.n.x + dy * p.n.y + dz * p.n.z;
+        lu = dx * p.u.x + dy * p.u.y + dz * p.u.z;
+        lv = dx * p.v.x + dy * p.v.y + dz * p.v.z;
+        const su = lu / (HALF_W + 0.3), sv = lv / (HALF_H + 0.3);
+        if (d > 0 && d < NEAR_ZONE && su * su + sv * sv <= 1) k = (Math.max(d, 1e-4) + NEAR_BACK) / Math.max(d, 1e-4);
+      }
+      const near = k !== 1;
+      if (!near && !p._near) continue;
+      p._near = near;
+      for (const [mesh, z] of [[p.disc, DISC_Z], [p.ring, RING_Z]]) {
+        mesh.position.set(near ? lu * (1 - k) : 0, near ? lv * (1 - k) : 0, near ? -(SEAT + NEAR_BACK) : z);
+        mesh.scale.set(HALF_W * k, HALF_H * k, 1);
+        mesh.material.depthTest = !near;
+      }
+    }
+  }
+
+  _views(renderer, scene, camera, self, ghost) {
+    const linked = this._all().filter(p => p.group && this._partnerOf(p));
+    if (!linked.length) return;
     this._sizeTargets(renderer);
 
     camera.updateMatrixWorld();
-    this._frustum = this._frustum || new THREE.Frustum();
-    this._frustum.setFromProjectionMatrix(
-      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-    const eye = camera.getWorldPosition(new THREE.Vector3());
-    const wanted = [];
-    for (const p of all) {
-      const partner = this._partnerOf(p);
-      if (!partner) continue;
-      const c = new THREE.Vector3(p.c.x, p.c.y, p.c.z);
-      const d = c.distanceTo(eye);
-      if (d > VIEW_RANGE) continue;
-      if (!this._frustum.intersectsSphere(new THREE.Sphere(c, HALF_H + 0.2))) continue;
-      wanted.push({ p, partner, d });
-    }
-    if (!wanted.length) return;
-    wanted.sort((a, b) => a.d - b.d);
+    const top = this._seen(linked, camera.matrixWorld, camera, null, FULL).slice(0, MAX_VIEWS);
+    if (!top.length) return;
 
     const prevTarget = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
-    renderer.autoClear = true;
-    if (this.selfView) this.selfView.visible = true;
+    renderer.autoClear = false;        // each view clears itself, then draws its part
+    if (self) self.visible = this.selfBody.visible = true;
 
-    for (const { p, partner } of wanted.slice(0, MAX_VIEWS)) {
+    // every mouth on screen is owed one view; what is left goes to views in views
+    this._spare = MAX_RENDERS - top.length;
+    this._pooled = [];
+    this.renders = 0;
+    const draw = { renderer, scene, camera, linked, self, ghost };
+    for (const { p, rect } of top) {
       if (!p.target) p.target = this._makeTarget();
-      this._aimVirtualCamera(camera, p, partner);
-      partner.group.visible = false;
-      // Through the mouth you are standing in, the view is from your own eye
-      // moved through: your body out of the far mouth is first person there, and
-      // first person never draws itself (it was your own back and gun).
-      if (this.selfView) this.selfView.visible = p !== this.selfMouth;
-      renderer.setRenderTarget(p.target);
-      renderer.render(scene, this._vcam);
-      partner.group.visible = true;
-      p.disc.material.uniforms.uView.value = p.target.texture;
-      p.disc.material.uniforms.uHasView.value = 1;
+      this._view(draw, p, camera.matrixWorld, 1, p.target, rect);
+    }
+    // on screen each mouth shows its own picture; one not drawn this frame
+    // (too many on screen) keeps the last it had
+    for (const p of linked) {
+      const u = p.disc.material.uniforms;
+      u.uView.value = p.target ? p.target.texture : null;
+      u.uHasView.value = p.target ? 1 : 0;
     }
 
-    if (this.selfView) this.selfView.visible = false;
     renderer.setRenderTarget(prevTarget);
     renderer.autoClear = prevAutoClear;
+  }
+
+  /** Draw what is through `p` for a camera at `world` into `into`. Every mouth
+   *  that can be seen in that picture — this one again, its owner's or anyone
+   *  else's — is first drawn from the camera carried on through it, while there
+   *  is depth and budget left; one that is not shows dark. An old picture there
+   *  would feed itself for ever, and whatever was once in the middle of it would
+   *  never leave. */
+  _view(draw, p, world, depth, into, rect) {
+    const { renderer, scene, camera, linked, self, ghost } = draw;
+    const partner = this._partnerOf(p);
+    const mine = new THREE.Matrix4().multiplyMatrices(this._through(p, partner), world);
+    const inner = new Map();
+    if (depth < MAX_DEPTH) {
+      for (const { p: q, rect: part } of this._seen(linked, mine, camera, partner, rect)) {
+        if (this._spare <= 0) break;
+        this._spare--;
+        inner.set(q, this._view(draw, q, mine, depth + 1, this._pooledTarget(depth + 1), part));
+      }
+    }
+    for (const q of linked) {
+      const t = inner.get(q), u = q.disc.material.uniforms;
+      u.uView.value = t ? t.texture : null;
+      u.uHasView.value = t ? 1 : 0;
+    }
+    this._aimVirtualCamera(camera, mine, partner);
+    // Through the mouth you are standing in, the first view is from your own eye
+    // moved through: the half of you out of the far mouth is first person there,
+    // and first person never draws itself (it was your own back and gun). The
+    // half still on this side is far from that eye and is drawn, and so is
+    // everything of you from one trip further in.
+    if (self) this.selfGhost.visible = ghost && !(depth === 1 && p === this.selfMouth);
+    partner.group.visible = false;      // the camera stands right behind the exit
+    // cleared whole, then drawn only where `p` shows on the screen it is seen on
+    into.scissorTest = false;
+    renderer.setRenderTarget(into);
+    renderer.clear();
+    const x0 = Math.floor((rect.x0 + 1) / 2 * into.width), x1 = Math.ceil((rect.x1 + 1) / 2 * into.width);
+    const y0 = Math.floor((rect.y0 + 1) / 2 * into.height), y1 = Math.ceil((rect.y1 + 1) / 2 * into.height);
+    into.scissor.set(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+    into.scissorTest = true;
+    renderer.setRenderTarget(into);
+    renderer.render(scene, this._vcam);
+    partner.group.visible = true;
+    this.renders++;
+    return into;
+  }
+
+  /** The mouths a camera at `world` can see, nearest first, each with the part
+   *  of the screen (`clip` or less) it shows in. Looking out of `exit` (a view
+   *  in a view) they must also be in front of that mouth and seen from their
+   *  own front. */
+  _seen(linked, world, camera, exit, clip) {
+    const eye = new THREE.Vector3().setFromMatrixPosition(world);
+    const viewProj = new THREE.Matrix4().copy(world).invert().premultiply(camera.projectionMatrix);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(viewProj);
+    const c = new THREE.Vector3(), ball = new THREE.Sphere(c, HALF_H + 0.2);
+    const out = [];
+    for (const p of linked) {
+      if (p === exit) continue;
+      c.set(p.c.x, p.c.y, p.c.z);
+      const d = c.distanceTo(eye);
+      if (d > VIEW_RANGE || !frustum.intersectsSphere(ball)) continue;
+      const front = (eye.x - c.x) * p.n.x + (eye.y - c.y) * p.n.y + (eye.z - c.z) * p.n.z;
+      if (exit) {
+        const past = (c.x - exit.c.x) * exit.n.x + (c.y - exit.c.y) * exit.n.y + (c.z - exit.c.z) * exit.n.z;
+        if (front < 0.01 || past < -HALF_H) continue;
+      }
+      const rect = this._rect(p, viewProj, clip);
+      if (!rect) continue;
+      if (exit && (rect.x1 - rect.x0 < MIN_SEEN * 2 || rect.y1 - rect.y0 < MIN_SEEN * 2)) continue;
+      // an eye at the mouth itself (standing in it) is never asked about walls
+      if ((exit || front > 0.5) && !this._inSight(p, eye, exit)) continue;
+      out.push({ p, d, rect });
+    }
+    return out.sort((a, b) => a.d - b.d);
+  }
+
+  /** The box round a mouth on screen, in -1..1, cut to `clip`; null if nothing
+   *  of it is left. Any of it behind the lens and the whole of `clip` is kept. */
+  _rect(p, viewProj, clip) {
+    const v = new THREE.Vector4();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < 16; i++) {
+      const a = i * Math.PI / 8, su = Math.cos(a) * HALF_W * 1.05, sv = Math.sin(a) * HALF_H * 1.05;
+      v.set(p.c.x + p.u.x * su + p.v.x * sv, p.c.y + p.u.y * su + p.v.y * sv,
+            p.c.z + p.u.z * su + p.v.z * sv, 1).applyMatrix4(viewProj);
+      if (v.w < 0.05) return { ...clip };
+      x0 = Math.min(x0, v.x / v.w); x1 = Math.max(x1, v.x / v.w);
+      y0 = Math.min(y0, v.y / v.w); y1 = Math.max(y1, v.y / v.w);
+    }
+    const r = { x0: Math.max(clip.x0, x0 - 0.01), y0: Math.max(clip.y0, y0 - 0.01),
+                x1: Math.min(clip.x1, x1 + 0.01), y1: Math.min(clip.y1, y1 + 0.01) };
+    return r.x1 > r.x0 && r.y1 > r.y0 ? r : null;
+  }
+
+  /** Is there a clear line from the eye to any of nine points on the mouth?
+   *  Looking out of `exit` the line starts where it leaves that mouth's wall. */
+  _inSight(p, eye, exit) {
+    if (!this.world || !this.world.raycast) return true;
+    for (const [a, b] of SIGHT) {
+      const su = a * HALF_W, sv = b * HALF_H;
+      const from = {
+        x: p.c.x + p.u.x * su + p.v.x * sv + p.n.x * 0.05,
+        y: p.c.y + p.u.y * su + p.v.y * sv + p.n.y * 0.05,
+        z: p.c.z + p.u.z * su + p.v.z * sv + p.n.z * 0.05
+      };
+      const dir = { x: eye.x - from.x, y: eye.y - from.y, z: eye.z - from.z };
+      let len = Math.hypot(dir.x, dir.y, dir.z);
+      if (len < 1e-6) return true;
+      dir.x /= len; dir.y /= len; dir.z /= len;
+      if (exit) {
+        // stop at the exit's surface: the eye stands behind it, inside its wall
+        const along = dir.x * exit.n.x + dir.y * exit.n.y + dir.z * exit.n.z;
+        const off = (from.x - exit.c.x) * exit.n.x + (from.y - exit.c.y) * exit.n.y + (from.z - exit.c.z) * exit.n.z;
+        if (along < -1e-6 && off > 0) len = Math.min(len, off / -along);
+      }
+      len -= 0.05;
+      if (len <= 0 || this.world.raycast(from, dir, len) >= len) return true;
+    }
+    return false;
+  }
+
+  /** A target for a view `depth` trips in: each trip a little coarser. */
+  _pooledTarget(depth) {
+    this._pool = this._pool || [];
+    const mine = this._pool[depth] = this._pool[depth] || [];
+    const used = this._pooled[depth] = (this._pooled[depth] || 0) + 1;
+    if (!mine[used - 1]) mine[used - 1] = this._makeTarget(DEPTH_SCALE ** (depth - 1));
+    return mine[used - 1];
   }
 
   _partnerOf(p) {
@@ -344,7 +523,8 @@ export class PortalField {
     return p.side === 'a' ? pair.b : pair.a;
   }
 
-  _aimVirtualCamera(camera, from, to) {
+  /** Mt * flip(u, n) * Mf^-1: the same transform portalMap() applies to the player. */
+  _through(from, to) {
     const basis = (q, flip) => {
       const m = new THREE.Matrix4().makeBasis(
         new THREE.Vector3(q.u.x, q.u.y, q.u.z).multiplyScalar(flip ? -1 : 1),
@@ -354,11 +534,13 @@ export class PortalField {
       m.setPosition(q.c.x, q.c.y, q.c.z);
       return m;
     };
-    // Mt * flip(u, n) * Mf^-1: the same transform portalMap() applies to the player
-    this._m.copy(basis(to, true)).multiply(basis(from, false).invert());
+    return basis(to, true).multiply(basis(from, false).invert());
+  }
 
+  /** Stand the virtual camera at `world`, its near plane bent onto `to`. */
+  _aimVirtualCamera(camera, world, to) {
     const v = this._vcam;
-    v.matrixWorld.multiplyMatrices(this._m, camera.matrixWorld);
+    v.matrixWorld.copy(world);
     v.matrixWorldInverse.copy(v.matrixWorld).invert();
     v.projectionMatrix.copy(camera.projectionMatrix);
     v.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
@@ -371,12 +553,13 @@ export class PortalField {
     obliqueNear(v.projectionMatrix, this._plane);
   }
 
-  _makeTarget() {
+  _makeTarget(scale = 1) {
     const t = new THREE.WebGLRenderTarget(
-      Math.max(2, this._viewSize.w), Math.max(2, this._viewSize.h),
+      Math.max(2, Math.round(this._viewSize.w * scale)), Math.max(2, Math.round(this._viewSize.h * scale)),
       { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true }
     );
     t.texture.colorSpace = THREE.SRGBColorSpace;
+    t.scale = scale;
     return t;
   }
 
@@ -387,6 +570,9 @@ export class PortalField {
     if (w === this._viewSize.w && h === this._viewSize.h) return;
     this._viewSize = { w, h };
     for (const p of this._all()) if (p.target) p.target.setSize(w, h);
+    for (const t of (this._pool || []).flat()) {
+      t.setSize(Math.max(2, Math.round(w * t.scale)), Math.max(2, Math.round(h * t.scale)));
+    }
   }
 
   // ------------------------------------------------------------------ meshes
@@ -404,18 +590,19 @@ export class PortalField {
         side: THREE.DoubleSide, depthWrite: false, transparent: true
       })
     );
-    // additive ring glows on its own; no light, which would spotlight the wall
+    // A flat border in the mouth's own colour: no glow and no light. Additive,
+    // it took its brightness from whatever was behind it, so the same border was
+    // a different colour on a wall, in a view, and in a view of that.
     p.ring = new THREE.Mesh(
       new THREE.RingGeometry(0.82, 1, 48),
       new THREE.MeshBasicMaterial({
-        color: p.color, transparent: true, opacity: 0.95,
-        side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending
+        color: p.color, transparent: true, side: THREE.DoubleSide, depthWrite: false
       })
     );
     p.disc.scale.set(HALF_W, HALF_H, 1);
     p.ring.scale.set(HALF_W, HALF_H, 1);
-    p.disc.position.z = 0.004;
-    p.ring.position.z = 0.012;
+    p.disc.position.z = DISC_Z;
+    p.ring.position.z = RING_Z;
     // The ring is always drawn after the disc. Left to the depth sort it went
     // first whenever the camera faced away from the wall with the mouth still at
     // the edge of the view (the ring, 8 mm out from the wall, is then the farther
@@ -442,7 +629,7 @@ export class PortalField {
       new THREE.Vector3(p.v.x, p.v.y, p.v.z),
       new THREE.Vector3(p.n.x, p.n.y, p.n.z)
     );
-    m.setPosition(p.c.x + p.n.x * 0.02, p.c.y + p.n.y * 0.02, p.c.z + p.n.z * 0.02);
+    m.setPosition(p.c.x + p.n.x * SEAT, p.c.y + p.n.y * SEAT, p.c.z + p.n.z * SEAT);
     p.group.matrixAutoUpdate = false;
     p.group.matrix.copy(m);
     p.group.matrixWorldNeedsUpdate = true;
