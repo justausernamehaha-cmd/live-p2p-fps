@@ -48,7 +48,6 @@ same one. All three are public infrastructure that only carries the handshake.
 | Left / right portal | left / right click | `LEFT PORTAL` / `RIGHT PORTAL` |
 | Jump | `Space` | `JUMP` |
 | Crouch | `Ctrl` or `C` | `CROUCH` |
-| Sprint | no key (bind one in settings) | `SPRINT` |
 | Reload | `R` | `RELOAD` |
 | Weapons | `1` `2` `3` `4` `5`, wheel, `Q` | `WEAPON` |
 | Scores | hold `Tab` | `SCORE` |
@@ -71,8 +70,8 @@ cannot be.
 `Esc` also opens the menu whatever `Open menu` is bound to: the browser gives up
 the pointer lock on `Esc` no matter what the page wants, and the menu follows.
 
-Crouch, aim, **sprint and jump** can each be set to **hold** or **toggle** in the
-same panel. On a keyboard all four rows are simply there; on a touch layout the
+Crouch, aim **and jump** can each be set to **hold** or **toggle** in the
+same panel. On a keyboard all three rows are simply there; on a touch layout the
 row appears for whichever button you select, so you can set it while you are
 moving the button around. The choice is remembered per device and applies to
 every input for that action — the touch button, the key and the mouse alike.
@@ -382,8 +381,8 @@ scrubbing it off — air control can only ever turn or add to your speed, never
 brake. Bumping into something is the one way to lose it: any surface that actually
 stops you, head-on or glancing, collapses a hop chain back to running speed.
 
-Sprint latches: tap `Shift` once and you keep sprinting until you release
-forward. Crouching takes 50 ms each way, and stairs are
+There is no sprint: one walking speed, and hops for anything faster.
+Crouching takes 50 ms each way, and stairs are
 climbed as a straight line — the body steps up instantly for collision, the view
 follows at a constant rate.
 
@@ -558,7 +557,7 @@ time: a rooftop with walkable ground underneath and 0.7m of headroom traps a
 
 `test/movement.mjs` checks that W/A/S/D actually move you in the direction the
 camera is looking, at nine different yaws. `test/mechanics.mjs` measures the
-movement feel and the protection rule — ground control, latched sprint, the
+movement feel and the protection rule — ground control, the
 crouch animation, stair smoothing, bunny-hop speed gain, aiming, and the layout
 editor's shield. It exists because the movement basis
 was once mirrored in z: W and S inverted when facing along z, A and D inverted

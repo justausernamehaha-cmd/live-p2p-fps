@@ -8,7 +8,7 @@ import { clamp, now } from './util.js';
 // Defaults only; the settings panel saves a copy that `binds` is read from.
 export const DEFAULT_BINDS = {
   KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
-  Space: 'jump',                      // Shift does nothing: sprint has no key by default
+  Space: 'jump',
   KeyC: 'crouch', ControlLeft: 'crouch', ControlRight: 'crouch',
   KeyF: 'fire',                       // for keyboards with no mouse
   KeyR: 'reload', KeyQ: 'lastweapon', Tab: 'score',
@@ -22,7 +22,7 @@ const UI_ACTIONS = new Set(['settings', 'menu']);
 // rows in the settings panel, in order
 export const BINDABLE = [
   ['fwd', 'Forward'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right'],
-  ['jump', 'Jump'], ['sprint', 'Sprint'], ['crouch', 'Crouch'],
+  ['jump', 'Jump'], ['crouch', 'Crouch'],
   ['fire', 'Fire'], ['reload', 'Reload'], ['lastweapon', 'Last weapon'],
   ['weapon1', 'Weapon 1'], ['weapon2', 'Weapon 2'], ['weapon3', 'Weapon 3'],
   ['weapon4', 'Weapon 4 (portal gun)'], ['weapon5', 'Weapon 5 (White Out)'],
@@ -31,7 +31,7 @@ export const BINDABLE = [
 
 // actions that can be held or latched (a latched jump is the mobile bunny hop)
 export const TOGGLEABLE = [
-  ['crouch', 'Crouch'], ['ads', 'Aim'], ['sprint', 'Sprint'], ['jump', 'Jump']
+  ['crouch', 'Crouch'], ['ads', 'Aim'], ['jump', 'Jump']
 ];
 
 // The level designer has its own separate key map.
@@ -71,7 +71,6 @@ const LOCK_CODES = [
 ];
 
 const BIND_KEY = 'pa.binds';
-const SHIFT_GONE_KEY = 'pa.binds.noshift';
 const DESIGN_BIND_KEY = 'pa.designbinds';
 
 const LOOK_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -126,13 +125,10 @@ export class Input {
     this._prevButtons = 0;
     this._mouseHeld = new Set();
     this.toggled = new Set();
-    this.toggleMode = new Set();
+    this.toggleMode = this._loadModes();
     // Actions forced to hold mode for now (the portal gun's right trigger: a
     // latched AIM would make every second tap place nothing).
     this.holdOverride = new Set();
-    try {
-      for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) this.toggleMode.add(a);
-    } catch { /* nothing saved */ }
     this.binds = this._loadBinds();
     this.designBinds = this._loadBinds(DESIGN_BIND_KEY, DEFAULT_DESIGN_BINDS);
     // set while another mode owns the pointer on purpose (designer's Alt, menus)
@@ -612,6 +608,16 @@ export class Input {
 
   isToggle(action) { return this.toggleMode.has(action); }
 
+  /** The saved toggle modes, keeping only actions that still exist. */
+  _loadModes() {
+    const out = new Set();
+    try {
+      const known = new Set(TOGGLEABLE.map(r => r[0]));
+      for (const a of JSON.parse(localStorage.getItem('pa.modes')) || []) if (known.has(a)) out.add(a);
+    } catch { /* nothing saved */ }
+    return out;
+  }
+
   // ---------------------------------------------------------------- bindings
   /** A saved map, keeping only pairs that still name real actions, with any
    *  action the save has never heard of given its default key if that key is free. */
@@ -619,16 +625,10 @@ export class Input {
     try {
       const saved = JSON.parse(localStorage.getItem(key));
       if (saved && typeof saved === 'object') {
-        // every bindable action, not just the defaulted ones: sprint has no key
-        // by default and a key the player gave it must survive a reload
+        // every bindable action, not just the defaulted ones: a key given to an
+        // action that has no default must survive a reload
         const rows = key === BIND_KEY ? BINDABLE : DESIGN_BINDABLE;
         const actions = new Set([...Object.values(defaults), ...rows.map(r => r[0])]);
-        // Shift used to be sprint; a copy saved before that went must not bring it back
-        if (key === BIND_KEY && localStorage.getItem(SHIFT_GONE_KEY) !== '1') {
-          for (const c of ['ShiftLeft', 'ShiftRight']) if (saved[c] === 'sprint') delete saved[c];
-          localStorage.setItem(key, JSON.stringify(saved));
-          localStorage.setItem(SHIFT_GONE_KEY, '1');
-        }
         const out = {};
         for (const [code, action] of Object.entries(saved)) {
           if (typeof code === 'string' && actions.has(action)) out[code] = action;

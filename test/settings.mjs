@@ -1,5 +1,5 @@
 // The settings panel: rebinding keys, several keys per action, hold-or-toggle
-// for the four actions that support it, the sprint button a phone needs, and the
+// for the three actions that support it, and the
 // pause that draws over the game instead of replacing it.
 //
 // The assertions are against consequences, not appearances: a rebound key is
@@ -85,33 +85,38 @@ await open();
 
 // -------------------------------------------------------------- the key rows
 R.rows = await rows();
-// 18 rows since White Out arrived and brought a Weapon 5 with it (17 before, with
-// the portal gun's Weapon 4)
-await must(R.rows.length === 18, 'expected 18 key rows, got ' + R.rows.length);
+// 17 rows: White Out brought a Weapon 5 with it, and Sprint has since gone
+await must(R.rows.length === 17, 'expected 17 key rows, got ' + R.rows.length);
+await must(!R.rows.some(r => /sprint/i.test(JSON.stringify(r))), 'there is still a Sprint key row');
 R.weapon4Keys = await keysOf('Weapon 4 (portal gun)');
 await must(R.weapon4Keys.length >= 1, 'the portal gun has no key: ' + JSON.stringify(R.weapon4Keys));
 R.forwardKeys = await keysOf('Forward');
-R.sprintKeys = await keysOf('Sprint');
 R.settingsKeys = await keysOf('Open settings');
 R.menuKeys = await keysOf('Open menu');
-// Shift is no longer sprint, and does nothing at all
+// Shift does nothing at all
 R.shiftDoesNothing = await page.evaluate(async () => {
   const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
   dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
   await sleep(60);
   const any = [...g.input.held];
   dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
-  return any.length === 0 && !g.input.down('sprint') ? true : any;
+  return any.length === 0 ? true : any;
 });
-// and a Shift saved by an older build is dropped on load
-R.oldShiftDropped = await page.evaluate(() => {
-  const saved = localStorage.getItem('pa.binds'), flag = localStorage.getItem('pa.binds.noshift');
-  localStorage.setItem('pa.binds', JSON.stringify({ KeyW: 'fwd', ShiftLeft: 'sprint', KeyV: 'sprint' }));
-  localStorage.removeItem('pa.binds.noshift');
+// and sprint keys saved by an older build are dropped on load, the rest kept
+R.oldSprintDropped = await page.evaluate(() => {
+  const saved = localStorage.getItem('pa.binds');
+  localStorage.setItem('pa.binds', JSON.stringify({ KeyI: 'fwd', ShiftLeft: 'sprint', KeyV: 'sprint' }));
   const b = window.game.input._loadBinds();
   if (saved === null) localStorage.removeItem('pa.binds'); else localStorage.setItem('pa.binds', saved);
-  if (flag === null) localStorage.removeItem('pa.binds.noshift'); else localStorage.setItem('pa.binds.noshift', flag);
-  return !b.ShiftLeft && b.KeyV === 'sprint';
+  return !b.ShiftLeft && !b.KeyV && b.KeyI === 'fwd' && !Object.values(b).includes('sprint');
+});
+// the same for a saved sprint toggle
+R.oldSprintModeDropped = await page.evaluate(() => {
+  const saved = localStorage.getItem('pa.modes');
+  localStorage.setItem('pa.modes', JSON.stringify(['sprint', 'crouch']));
+  const known = window.game.input._loadModes();
+  if (saved === null) localStorage.removeItem('pa.modes'); else localStorage.setItem('pa.modes', saved);
+  return !known.has('sprint') && known.has('crouch');
 });
 
 // ------------------------------------------------------- rebind forward to I
@@ -200,33 +205,13 @@ R.designDefaults = await page.evaluate(() => ({
   matchQ: window.game.input.binds.KeyQ
 }));
 
-// -------------------------------------------- hold/toggle now covers four actions
+// ------------------------------------------- hold/toggle covers three actions
 R.modeRows = await page.evaluate(() =>
   [...document.querySelectorAll('.moderow')].map(r => r.dataset.action));
-await must(String(R.modeRows) === 'crouch,ads,sprint,jump',
+await must(String(R.modeRows) === 'crouch,ads,jump',
            'hold/toggle rows are wrong: ' + R.modeRows);
 
-// sprint as a toggle: one tap and it stays on with nothing held
-await page.click('.modes button[data-action=sprint][data-mode=toggle]');
-await page.waitForTimeout(120);
-await close();
-R.sprintLatches = await page.evaluate(async () => {
-  const g = window.game, sleep = ms => new Promise(f => setTimeout(f, ms));
-  g.input.bind('sprint', 'ShiftLeft', null);   // no key by default: give it one here
-  dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
-  dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
-  await sleep(200);
-  const afterTap = g.input.down('sprint');
-  dispatchEvent(new KeyboardEvent('keydown', { code: 'ShiftLeft' }));
-  dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft' }));
-  await sleep(200);
-  const afterSecondTap = g.input.down('sprint');
-  g.input.unbind('sprint', 'ShiftLeft');
-  return { afterTap, afterSecondTap };
-});
-
 // jump as a toggle is the mobile bunny hop: one tap and the hops keep coming
-await open();
 await page.click('.modes button[data-action=jump][data-mode=toggle]');
 await page.waitForTimeout(120);
 await close();
@@ -250,19 +235,10 @@ R.jumpLatches = await page.evaluate(async () => {
   return { held, hops, releasedOnSecondTap: !g.input.down('jump') };
 });
 
-// -------------------------------------------------------- the sprint touch button
-R.sprintButton = await page.evaluate(async () => {
-  const el = document.querySelector('.tbtn[data-btn=sprint]');
-  if (!el) return { exists: false };
-  const g = window.game;
-  g.input.setToggleMode('sprint', false);
-  el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
-  const whileDown = g.input.down('sprint');
-  el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
-  await new Promise(f => setTimeout(f, 60));
-  return { exists: true, whileDown, afterUp: g.input.down('sprint'),
-           inTouchPad: !!el.closest('#tbuttons') };
-});
+// ------------------------------------------------ sprint is gone from the touch pad
+R.sprintButtonGone = await page.evaluate(() =>
+  !document.querySelector('[data-btn=sprint]') &&
+  ![...document.querySelectorAll('.tbtn')].some(b => /sprint/i.test(b.textContent)));
 
 // ------------------------------------ the portal gun's two triggers, on a phone
 // The portal gun has no fire and no aim: it has a left mouth and a right one. On
@@ -514,8 +490,8 @@ await page.waitForTimeout(200);
 // -------------------------------------------------------------------- verdict
 if (!R.equalsDoesNothing) fail.push('= still opens the settings panel, and it should not');
 if (String(R.forwardKeys) !== 'W') fail.push('Forward does not show W: ' + R.forwardKeys);
-if (String(R.sprintKeys) !== '') fail.push('Sprint should have no key by default (Shift does nothing): ' + R.sprintKeys);
-if (!R.oldShiftDropped) fail.push('a Shift->sprint saved by an older build came back, or a custom sprint key was lost');
+if (!R.oldSprintDropped) fail.push('a sprint key saved by an older build came back, or took another saved key with it');
+if (!R.oldSprintModeDropped) fail.push('a sprint toggle saved by an older build came back, or took the crouch toggle with it');
 if (R.shiftDoesNothing !== true) fail.push('Shift still does something: ' + R.shiftDoesNothing);
 if (String(R.settingsKeys) !== '`') fail.push('Open settings is not bound to `: ' + R.settingsKeys);
 if (String(R.menuKeys) !== 'Esc') fail.push('Open menu is not bound to Esc: ' + R.menuKeys);
@@ -535,8 +511,6 @@ if (!R.oldSettingsKeyDead) fail.push('` still opens the panel after Open setting
 if (R.afterReset.w !== 'fwd' || !R.afterReset.oGone || !R.afterReset.uGone) fail.push('RESET KEYS did not restore the defaults: ' + JSON.stringify(R.afterReset));
 if (R.afterReset.settings !== 'settings' || R.afterReset.menu !== 'menu') fail.push('RESET KEYS lost the settings/menu bindings');
 if (String(R.forwardAfterReset) !== 'W') fail.push('RESET KEYS did not repaint the rows');
-if (!R.sprintLatches.afterTap) fail.push('sprint did not latch on');
-if (R.sprintLatches.afterSecondTap) fail.push('sprint did not latch off');
 if (!R.jumpLatches.held) fail.push('jump did not latch on');
 if (R.jumpLatches.hops < 2) fail.push('a latched jump did not keep hopping: ' + JSON.stringify(R.jumpLatches));
 if (!R.jumpLatches.releasedOnSecondTap) fail.push('jump did not latch off');
@@ -556,10 +530,7 @@ if (PB.stuckOn) fail.push('tapping AIM with the portal gun left the sights latch
 if (PB.restored.fire !== 'FIRE' || PB.restored.aim !== 'AIM' || PB.restored.marked)
   fail.push('the buttons did not go back to FIRE and AIM: ' + JSON.stringify(PB.restored));
 if (!PB.restored.latchesAgain) fail.push('AIM did not get its latch back with an ordinary gun');
-if (!R.sprintButton.exists) fail.push('there is no sprint button');
-if (!R.sprintButton.inTouchPad) fail.push('the sprint button is not on the touch pad');
-if (!R.sprintButton.whileDown) fail.push('the sprint button does not press sprint');
-if (R.sprintButton.afterUp) fail.push('the sprint button stayed down after release');
+if (!R.sprintButtonGone) fail.push('there is still a sprint button');
 if (!R.protection.shieldedWhileEditing || !R.protection.damageIgnored) fail.push('the editing shield does not block damage');
 if (Math.abs(R.protection.protectedFor - 3) > 0.3) fail.push('protection is not 3s: ' + R.protection.protectedFor);
 if (!R.protection.stillShielded || !R.protection.damageStillIgnored) fail.push('damage got through the tail of the shield');
@@ -612,5 +583,5 @@ if (errs.length) fail.push('page errors: ' + errs.join(' | '));
 console.log(JSON.stringify(R, null, 2));
 console.log('page errors:', errs.length ? errs : 'none');
 if (fail.length) { console.log('FAIL: ' + fail.join('\n      ')); await browser.close(); process.exit(1); }
-console.log('PASS — keys rebind, stack and clear; four actions latch; one 3s protection window; pause floats over the game');
+console.log('PASS — keys rebind, stack and clear; three actions latch; one 3s protection window; pause floats over the game');
 await browser.close();

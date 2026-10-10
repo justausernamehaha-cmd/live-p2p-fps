@@ -46,7 +46,7 @@ const R = await page.evaluate(async () => {
     g.player.pos = { x, y, z };
     g.player.vel = { x: 0, y: 0, z: 0 };
     g.player.yaw = yaw; g.player.pitch = 0;
-    g.player.crouchT = 0; g.player.sprintLatch = false; g.player.stepSmooth = 0;
+    g.player.crouchT = 0; g.player.stepSmooth = 0;
     // Which way is up is state now, and a portal can turn it over. Parking
     // somewhere means parking there the right way up, or every check after the
     // first traversal would quietly be measuring a player standing on a wall.
@@ -319,7 +319,7 @@ const R = await page.evaluate(async () => {
   out.loopNeverReset = fallSpeeds.slice(3).every(v => v > 15);
 
   // ...and turning that fall sideways keeps it, rather than clamping it to a
-  // sprint the instant it leaves the mouth
+  // walk the instant it leaves the mouth
   g.portals.clear();
   g.portals.place('me', 'a', { c: { x: LX, y: 0, z: 0 }, n: { x: 0, y: 1, z: 0 },
     u: { x: 1, y: 0, z: 0 }, v: { x: 0, y: 0, z: 1 }, mover: -1 });

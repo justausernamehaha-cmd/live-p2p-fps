@@ -58,7 +58,7 @@ const R = await page.evaluate(async () => {
     g.player.pos = { x, y, z };
     g.player.vel = { x: 0, y: 0, z: 0 };
     g.player.yaw = yaw; g.player.pitch = 0;
-    g.player.crouchT = 0; g.player.sprintLatch = false; g.player.stepSmooth = 0;
+    g.player.crouchT = 0; g.player.stepSmooth = 0;
     g.player.up = up;
     g.player.upFrom = null; g.player.upBlend = 0;
     g.player.straddling = null;

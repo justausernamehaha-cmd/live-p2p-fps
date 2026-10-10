@@ -31,7 +31,7 @@ const R = await page.evaluate(async () => {
     g.player.pos = { x, y, z };
     g.player.vel = { x: 0, y: 0, z: 0 };
     g.player.yaw = yaw; g.player.pitch = 0;
-    g.player.crouchT = 0; g.player.sprintLatch = false; g.player.stepSmooth = 0;
+    g.player.crouchT = 0; g.player.stepSmooth = 0;
   };
   const out = {};
 
@@ -44,28 +44,6 @@ const R = await page.evaluate(async () => {
   keys();
   await sleep(80);
   out.stopSpeedAfter80ms = +speed().toFixed(2);
-
-  // ---- sprint latches until forward is released ----
-  // on a bare floor: at 9 m/s the arena's cover walls are only a third of a
-  // second away, and running into one legitimately costs all your speed
-  const sprintBoxes = g.world.boxes;
-  g.world.boxes = sprintBoxes.filter(b => b.max.y === 0 && b.max.x - b.min.x > 50);
-  park(0, 0.3, 0);
-  await sleep(300);
-  keys('fwd', 'sprint');
-  await sleep(120);
-  keys('fwd');                           // shift released, W still held
-  await sleep(200);
-  out.sprintingAfterShiftReleased = g.player.sprintLatch && speed() > 7.5;
-  out.speedWithShiftReleased = +speed().toFixed(2);
-  keys();                                // release W
-  await sleep(120);
-  keys('fwd');
-  await sleep(200);
-  out.sprintEndedAfterForwardReleased = !g.player.sprintLatch;
-  keys();
-  g.world.boxes = sprintBoxes;
-  await sleep(100);
 
   // ---- crouching takes 50 ms each way ----
   park(0, 0.3, -20);

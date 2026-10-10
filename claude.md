@@ -30,7 +30,7 @@ against the live site.
 | suite | covers |
 |---|---|
 | `movement.mjs` | W/A/S/D go where the camera looks, at nine yaws |
-| `mechanics.mjs` | ground control, sprint latch, crouch, stairs, bunny hop, momentum, accuracy, shield |
+| `mechanics.mjs` | ground control, crouch, stairs, bunny hop, momentum, accuracy, shield |
 | `mouselook.mjs` | no single mouse event can swing the view; aiming untouched |
 | `mousebuttons.mjs` | every press/release order; stray `buttons` masks |
 | `pointerlock.mjs` | no spurious re-locks, no settling spikes |
@@ -1125,3 +1125,17 @@ Supersedes the `_chain` paragraph above: there is no `_chain` and no `target2`.
   local after.
 * The runner's own retry was broken that night: the temperature loop used `t`,
   the same name as the suite loop's variable, so a "retry" ran `test/76000.mjs`.
+
+## Sprint removed — 2026-10-10
+
+* **Sprint is gone entirely**: the `sprint` action, its Sprint key row and
+  hold/toggle row, the SPRINT touch button and its CSS, `SPRINT`/`sprintLatch`
+  in player.js. Ground speed is `WALK` (6.2) lerped to `CROUCH_SPEED`; hops are
+  the only way to go faster. Older notes above that mention sprint are history.
+* **Old saves clean themselves.** `_loadBinds` already drops pairs naming an
+  unknown action, so a saved `sprint` key goes with no migration (the one-off
+  `pa.binds.noshift` flag is no longer read). `_loadModes` (new, pulled out of
+  the constructor) does the same for a saved sprint toggle in `pa.modes`.
+  settings.mjs checks both, and that neither takes a neighbouring entry with it.
+* Key rows are 17, hold/toggle rows are `crouch,ads,jump`; mechanics.mjs lost
+  its sprint-latch section.

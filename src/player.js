@@ -16,7 +16,6 @@ const STEP_HEIGHT = 0.55;
 const GRAVITY = 24;
 const JUMP_SPEED = 8.2;
 const WALK = 6.2;
-const SPRINT = 9.0;
 const CROUCH_SPEED = 3.0;
 // Air control is Quake-style: only speed along the pushed direction counts
 // against `cap`, so strafing while turning gains speed (bunny hopping). Exposed
@@ -62,7 +61,6 @@ export class Player {
     this.height = HEIGHT;
     this.crouching = false;
     this.crouchT = 0;          // 0 standing, 1 crouched
-    this.sprintLatch = false;
     this.onGround = false;
     this.fellAt = 0;           // impact speed of this frame's landing
     this.hp = 100;
@@ -174,7 +172,6 @@ export class Player {
     this.height = HEIGHT;
     this.crouching = false;
     this.crouchT = 0;
-    this.sprintLatch = false;
     this.stepSmooth = 0;
     for (let i = 0; i < 12 && this._overlaps(this.world.boxes); i++) this.pos.y += 0.5;
     this.vel = { x: 0, y: 0, z: 0 };
@@ -221,13 +218,7 @@ export class Player {
     this._crouch(dt, input.down('crouch'));
     this._crush();                    // before moving, or _axis() stands us on the platform
 
-    // tap sprint and it holds until you stop going forward
-    if (input.down('sprint')) this.sprintLatch = true;
-    if (wish.y < 0.1 || this.crouching) this.sprintLatch = false;
-    const sprinting = this.sprintLatch && !this.crouching && wish.y > 0.1;
-
-    const upright = sprinting ? SPRINT : WALK;
-    const maxSpeed = lerp(upright, CROUCH_SPEED, this.crouchT);
+    const maxSpeed = lerp(WALK, CROUCH_SPEED, this.crouchT);
 
     // Movement is written against two flat directions; for an axis up they are
     // exactly two world axes, so tilted and upright share the same arithmetic.

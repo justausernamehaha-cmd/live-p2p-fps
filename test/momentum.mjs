@@ -273,7 +273,7 @@ if (R.hopChain.hops < 6) fail.push('hops were dropped from the chain: ' + JSON.s
 if (R.hopChain.missed > 2) fail.push('the player stood on the floor with jump held: ' + JSON.stringify(R.hopChain));
 if (R.hopChain.peak < 8.5) fail.push('the chain never built speed, so it was not a chain: ' + JSON.stringify(R.hopChain));
 if (!R.slowsDown.falling) fail.push('speed did not keep falling after the hops stopped: ' + JSON.stringify(R.slowsDown));
-if (R.slowsDown.settled > 10) fail.push('two seconds after stopping, still faster than a sprint: ' + JSON.stringify(R.slowsDown));
+if (R.slowsDown.settled > 10) fail.push('two seconds after stopping, still far above walking speed: ' + JSON.stringify(R.slowsDown));
 if (R.stopsDead > 0.5) fail.push('letting go of everything did not stop the player: ' + R.stopsDead);
 if (!R.gravity.heavier) fail.push('falling is not heavier than rising: ' + JSON.stringify(R.gravity));
 if (!R.fallPaysOut.bothLanded) fail.push('a drop never reached the ground: ' + JSON.stringify(R.fallPaysOut));
